@@ -213,6 +213,16 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	if err != nil {
 		return fmt.Errorf("DeleteObject fetch ETag: %w", err)
 	}
+	// Check the HTTP status before reading the ETag header. doRead only
+	// surfaces transport-level errors; an HTTP 4xx response (e.g. S/4 returning
+	// 400 ExceptionResourceWrongData for a CLAS bare-URI GET) flows through as
+	// a "successful" response with no ETag header, and the old code surfaced
+	// the misleading "no ETag returned" instead of the real SAP error.
+	// See adtler#19 / mcp-server-abap#299.
+	if err := checkResponse(etagResp); err != nil {
+		_ = etagResp.Body.Close()
+		return fmt.Errorf("DeleteObject fetch ETag: %w", err)
+	}
 	etag := etagResp.Header.Get("ETag")
 	_ = etagResp.Body.Close()
 	if etag == "" {

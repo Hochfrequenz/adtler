@@ -167,3 +167,52 @@ func TestDeleteObject(t *testing.T) {
 		t.Errorf("corrNr: got %q, want %q", gotCorrNr, "DEVK900001")
 	}
 }
+
+// TestDeleteObject_ETagFetchHTTPError regression-tests adtler#19:
+// If the ETag-fetch GET returns a 4xx (e.g. S/4 returning 400
+// ExceptionResourceWrongData for a CLAS bare-URI GET), the old code
+// proceeded past the response, found no ETag header, and surfaced
+// the cryptic "no ETag returned" message instead of the real SAP
+// error. The fix adds a checkResponse() call between doRead() and
+// the ETag header read, so the SAP error message reaches the caller.
+func TestDeleteObject_ETagFetchHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodGet {
+			// Mimic S/4's HTTP 400 ExceptionResourceWrongData reply
+			// for a bare CLAS URI GET (cluster with adtler#9).
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <namespace id="com.sap.adt"/>
+  <type id="ExceptionResourceWrongData"/>
+  <message lang="EN">Resource ZCL_TEST: wrong input data for processing</message>
+</exc:exception>`))
+			return
+		}
+		// DELETE should never be reached because the ETag fetch fails.
+		t.Errorf("unexpected DELETE call after ETag fetch failure")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	err := client.DeleteObject(context.Background(), "/sap/bc/adt/oo/classes/zcl_test", "", "")
+	if err == nil {
+		t.Fatal("expected error from ETag fetch HTTP 400")
+	}
+	if strings.Contains(err.Error(), "no ETag returned") {
+		t.Errorf("error should NOT be the cryptic 'no ETag returned' message; "+
+			"the SAP error should be propagated instead. got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "wrong input data for processing") {
+		t.Errorf("error should contain the SAP message body, got: %v", err)
+	}
+}
