@@ -122,7 +122,13 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 		return fmt.Errorf("CreateObject: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == 404 {
+	// R/3 systems either return 404 (endpoint missing entirely) or 415
+	// (endpoint exists but the v2 content type is rejected) for DDIC create
+	// requests. Treat both as "DDIC create not available on this system" so
+	// the user gets the same friendly hint regardless of which way the older
+	// release fails. See adtler#16 / mcp-server-abap#295 (DTEL on R/3 returned
+	// the raw 415 because the original guard only matched 404).
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnsupportedMediaType {
 		ot := strings.ToUpper(objectType)
 		if ot == objTypeDTEL || ot == objTypeDOMA || ot == objTypeTABL || ot == objTypeDDLS {
 			return fmt.Errorf("CreateObject: the /sap/bc/adt/ddic/ endpoint for %s is not available on this SAP system — "+
