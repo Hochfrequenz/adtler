@@ -1,10 +1,10 @@
-# adtler
+# adtler 🦅
 
 [![Unittests](https://github.com/Hochfrequenz/adtler/actions/workflows/test.yml/badge.svg)](https://github.com/Hochfrequenz/adtler/actions/workflows/test.yml)
 [![coverage](https://github.com/Hochfrequenz/adtler/actions/workflows/coverage.yml/badge.svg)](https://github.com/Hochfrequenz/adtler/actions/workflows/coverage.yml)
 [![golangci-lint](https://github.com/Hochfrequenz/adtler/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/Hochfrequenz/adtler/actions/workflows/golangci-lint.yml)
 
-Go client library for SAP **A**BAP **D**evelopment **T**ools (ADT) — `ADT` + `Adler` (eagle).
+Go client library for SAP **A**BAP **D**evelopment **T**ools (ADT).
 
 `adtler` provides a typed Go interface to the SAP ADT REST API: read and write
 ABAP source, manage transports, run syntax checks and ATC, lock and activate
