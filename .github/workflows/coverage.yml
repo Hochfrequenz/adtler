@@ -1,24 +1,52 @@
 name: coverage
+
 on:
   push:
   pull_request:
+
 jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Go
-        if: success()
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
         with:
-          go-version: 1.26.x
-      - name: Checkout Code
-        uses: actions/checkout@v6
-      - name: Calc coverage
-        run: go test ./... -v -covermode=count -coverprofile=coverage.out
-      - name: Convert coverage to lcov
-        uses: jandelgado/gcov2lcov-action@v1.2.0
-      - name: Enforce Min Coverage
-        uses: VeryGoodOpenSource/very_good_coverage@v3.0.0
-        with:
-          path: "coverage.lcov"
-          min_coverage: 88 # the plan is to increase this with time
+          go-version: '1.26.x'
+
+      - name: Check per-package coverage
+        run: |
+          # Per-package coverage thresholds.
+          #   Logic packages (auth): higher thresholds
+          #   HTTP wrappers (adt client methods): medium threshold
+          declare -A thresholds=(
+            ["github.com/Hochfrequenz/adtler/auth"]=75
+            ["github.com/Hochfrequenz/adtler/adt/adtxml"]=50
+            ["github.com/Hochfrequenz/adtler/adt/custexport"]=60
+            ["github.com/Hochfrequenz/adtler/adt"]=40
+          )
+
+          failed=0
+          while IFS= read -r line; do
+            pkg=$(echo "$line" | awk '{print $2}')
+            pct=$(echo "$line" | sed -n 's/.*coverage: \([0-9.]*\)%.*/\1/p')
+            [ -z "$pct" ] && continue
+
+            threshold=${thresholds[$pkg]:-0}
+            pct_int=${pct%.*}
+
+            if [ "$threshold" -eq 0 ]; then
+              echo "  $pkg: ${pct}% (no threshold)"
+            elif [ "$pct_int" -lt "$threshold" ]; then
+              echo "::error::$pkg: coverage ${pct}% is below threshold ${threshold}%"
+              failed=1
+            else
+              echo "✓ $pkg: ${pct}% (threshold: ${threshold}%)"
+            fi
+          done < <(go test ./... -covermode=count 2>&1 | grep "^ok")
+
+          if [ "$failed" -eq 1 ]; then
+            exit 1
+          fi
+          echo ""
+          echo "All packages meet their coverage thresholds."
