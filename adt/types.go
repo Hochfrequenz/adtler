@@ -148,3 +148,15 @@ func isInvalidLockHandle(err error) bool {
 	}
 	return false
 }
+
+// isPreconditionFailed returns true if the error is a 412
+// ExceptionPreconditionFailed from SAP. Used by SetSource to retry
+// with a re-fetched ETag when the original ETag doesn't match what
+// the server expects (e.g. TABL charset mismatch). See adtler#15.
+func isPreconditionFailed(err error) bool {
+	var adtErr *ADTError
+	if errors.As(err, &adtErr) {
+		return adtErr.StatusCode == 412
+	}
+	return false
+}
