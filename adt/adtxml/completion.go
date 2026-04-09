@@ -2,8 +2,6 @@ package adtxml
 
 import "encoding/xml"
 
-const nsCodeCompletion = "http://www.sap.com/adt/codecompletion"
-
 // Completions is the XML response from the code completion endpoint.
 // SAP uses the codecompletion namespace for both elements and attributes:
 //
