@@ -51,6 +51,56 @@ func TestCreateObjectUnsupportedType(t *testing.T) {
 	}
 }
 
+// TestCreateObject_DDICUnavailableOnR3 regression-tests adtler#16:
+// R/3 ADT replies HTTP 415 ExceptionUnsupportedMediaType for DTEL create
+// even though the URL path /sap/bc/adt/ddic/dataelements exists. The
+// CreateObject guard must convert that into the same "DDIC unavailable on
+// this system" hint that 404 already produces for TABL/DOMA, otherwise
+// the user gets a confusing media-type error instead of the actionable
+// "use SE11 on ECC" suggestion. Each row drives the same code path with
+// a different status code so the parametrized assertion catches both.
+func TestCreateObject_DDICUnavailableOnR3(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		objType    string
+	}{
+		{"DTEL_415", http.StatusUnsupportedMediaType, "DTEL"},
+		{"DOMA_415", http.StatusUnsupportedMediaType, "DOMA"},
+		{"TABL_415", http.StatusUnsupportedMediaType, "TABL"},
+		{"DDLS_415", http.StatusUnsupportedMediaType, "DDLS"},
+		{"DTEL_404", http.StatusNotFound, "DTEL"},
+		{"TABL_404", http.StatusNotFound, "TABL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == csrfEndpoint {
+					w.Header().Set("X-CSRF-Token", "token")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.WriteHeader(tc.statusCode)
+			}))
+			defer srv.Close()
+
+			cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+			client := adt.NewClient(cfg)
+
+			err := client.CreateObject(context.Background(), tc.objType, "Z_DDIC_TEST", "$TMP", "test", "")
+			if err == nil {
+				t.Fatalf("expected error for %s on a system that returns %d", tc.objType, tc.statusCode)
+			}
+			if !strings.Contains(err.Error(), "not available on this SAP system") {
+				t.Errorf("error should contain 'not available on this SAP system', got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.objType) {
+				t.Errorf("error should mention object type %s, got: %v", tc.objType, err)
+			}
+		})
+	}
+}
+
 func TestCreatePackage(t *testing.T) {
 	var gotPath, gotMethod, gotContentType, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
