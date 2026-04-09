@@ -41,7 +41,7 @@ func TestParseADTError_HTMLBody_MultiSystem_Integration(t *testing.T) {
 		"<style>",
 		"<style ",
 		"font-family",
-		"iVBORw0",      // base64 PNG signature SAP embeds in the error page
+		"iVBORw0",         // base64 PNG signature SAP embeds in the error page
 		"errorTextHeader", // raw class name leaking through means parsing failed
 	}
 
