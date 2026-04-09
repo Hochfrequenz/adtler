@@ -165,7 +165,7 @@ func allEndpointsHandler() http.Handler {
 		case path == "/sap/bc/adt/programs/programs/ZTEST":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<program:abapProgram adtcore:name="ZTEST" adtcore:type="PROG/P" adtcore:description="" xmlns:program="http://www.sap.com/adt/programs/programs" xmlns:adtcore="http://www.sap.com/adt/core"><adtcore:packageRef adtcore:name=""/></program:abapProgram>`))
-		case path == "/sap/bc/adt/checkruns":
+		case path == checkrunsPath:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyCheckReports))
 		case path == "/sap/bc/adt/abapunit/testruns":

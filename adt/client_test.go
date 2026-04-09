@@ -14,6 +14,10 @@ import (
 
 const csrfEndpoint = "/sap/bc/adt/discovery"
 
+// checkrunsPath is the ADT syntax-check / ATC endpoint used across
+// multiple test files. Hoisted to a constant to satisfy goconst.
+const checkrunsPath = "/sap/bc/adt/checkruns"
+
 func newTestConfig(host string) sapmcpconfig.SAPSystem {
 	return sapmcpconfig.SAPSystem{
 		Host:     host,
