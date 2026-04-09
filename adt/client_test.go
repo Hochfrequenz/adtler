@@ -18,6 +18,10 @@ const csrfEndpoint = "/sap/bc/adt/discovery"
 // multiple test files. Hoisted to a constant to satisfy goconst.
 const checkrunsPath = "/sap/bc/adt/checkruns"
 
+// logoffPath is the ICF logoff endpoint used by Logout and by
+// CreateObject's post-create session cleanup. Hoisted for goconst.
+const logoffPath = "/sap/public/bc/icf/logoff"
+
 func newTestConfig(host string) sapmcpconfig.SAPSystem {
 	return sapmcpconfig.SAPSystem{
 		Host:     host,

@@ -136,7 +136,38 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 				"On older ECC systems, create DDIC objects via transaction SE11", ot)
 		}
 	}
-	return checkResponse(resp)
+	if err := checkResponse(resp); err != nil {
+		return err
+	}
+
+	// WORKAROUND for adtler#4 (mcp-server-abap#282):
+	//
+	// On S/4, CreateObject leaves a session-bound exclusive enqueue on
+	// TRDIR/<name> (lock object ESRDIRE, Session-Schlüssel = T67_...) that
+	// the SAP server refuses to release for any subsequent call from the
+	// same logical client. The next LockObject or SetSource lands in a
+	// DIFFERENT SAP session and is rejected with 423 InvalidLockHandle —
+	// even though it's the same user, same cookies, same TCP connection.
+	// The entire create → write → activate chain is broken on S/4.
+	// ECC/R/3 is unaffected (clean release at request end).
+	//
+	// The SM12 evidence (issue #4) proved the enqueue is anchored to a
+	// specific SAP work-process session. Logging out terminates that
+	// session and releases all its enqueues. The next call re-authenticates
+	// via fetchCSRFToken (the same path used on first-ever call).
+	//
+	// This is a deliberate DIRTY FIX for fast value delivery. The proper
+	// solution is stateful session support (X-sap-adt-sessiontype: stateful)
+	// where CreateObject and the subsequent LockObject/SetSource share the
+	// same SAP session. That requires architectural changes to the HTTP
+	// client's session management and is tracked in adtler#4.
+	//
+	// Cost: ~1 extra HTTP round-trip per CreateObject (logoff + re-auth
+	// on next call). CreateObject is called once per new ABAP object, so
+	// the latency impact is negligible.
+	_ = c.Logout(ctx)
+
+	return nil
 }
 
 func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error {
