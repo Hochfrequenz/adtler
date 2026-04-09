@@ -11,6 +11,8 @@ ABAP source, manage transports, run syntax checks and ATC, lock and activate
 objects, browse the repository, and more. It is the runtime that powers
 [`mcp-server-abap`](https://github.com/Hochfrequenz/mcp-server-abap) and is
 designed to be reusable in CLI tools, CI pipelines, and other Go integrations.
+Unlike many ADT clients, `adtler` includes proper integration tests against both
+SAP ECC R/3 and SAP S/4HANA.
 
 ## Install
 
