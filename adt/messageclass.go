@@ -25,10 +25,15 @@ type Message struct {
 	SelfExpl bool   `json:"self_explanatory"`
 }
 
+// messageClassContentType is the vendor MIME type S/4 requires for the
+// /sap/bc/adt/messageclass/<name> endpoint. R/3 accepts this type as well,
+// so it can be sent unconditionally. See adtler#5 / mcp-server-abap#285.
+const messageClassContentType = "application/vnd.sap.adt.mc.messageclass+xml"
+
 // GetMessageClass reads all messages of a message class (e.g. "00", "ZFOO").
 func (c *httpClient) GetMessageClass(ctx context.Context, messageClassName string) (*MessageClassInfo, error) {
 	path := "/sap/bc/adt/messageclass/" + strings.ToLower(messageClassName)
-	resp, err := c.doRead(ctx, path, map[string]string{"Accept": "application/xml"})
+	resp, err := c.doRead(ctx, path, map[string]string{"Accept": messageClassContentType})
 	if err != nil {
 		return nil, fmt.Errorf("GetMessageClass: %w", err)
 	}
@@ -115,7 +120,8 @@ func (c *httpClient) SetMessages(ctx context.Context, messageClassName, etag str
 	resp, err := c.doMutate(ctx, http.MethodPut, path,
 		strings.NewReader(body),
 		map[string]string{
-			"Content-Type": "application/vnd.sap.adt.mc.messageclass+xml",
+			"Content-Type": messageClassContentType,
+			"Accept":       messageClassContentType,
 			"If-Match":     etag,
 		},
 	)
