@@ -130,7 +130,20 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 				"On older ECC systems, create DDIC objects via transaction SE11", ot)
 		}
 	}
-	return checkResponse(resp)
+	if err := checkResponse(resp); err != nil {
+		return err
+	}
+
+	// SAP leaves a TRDIR ENQUEUE lock after creating an object.  This lock
+	// is invisible to the MCP lock map and blocks the next set_source /
+	// patch_source call with a 423.  Clear it by cycling through lock+unlock
+	// on the newly created object URI.  See mcp-server-abap#282.
+	objectURI := info.endpoint + "/" + strings.ToLower(name)
+	if handle, lockErr := c.LockObject(ctx, objectURI); lockErr == nil {
+		_ = c.UnlockObject(ctx, objectURI, handle)
+	}
+
+	return nil
 }
 
 func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error {

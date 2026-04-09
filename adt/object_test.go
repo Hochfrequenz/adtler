@@ -20,6 +20,16 @@ func TestCreateObjectProgram(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		// Lock/unlock calls after create — return a dummy handle.
+		if strings.Contains(r.URL.RawQuery, "_action=LOCK") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("DUMMYHANDLE"))
+			return
+		}
+		if strings.Contains(r.URL.RawQuery, "_action=UNLOCK") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		gotPath = r.URL.Path
 		gotMethod = r.Method
 		w.WriteHeader(http.StatusCreated)
