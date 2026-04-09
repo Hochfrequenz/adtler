@@ -4,8 +4,10 @@ package adt_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestCreateObject_DDICUnavailable_MultiSystem_Integration regression-tests
@@ -32,7 +34,13 @@ func TestCreateObject_DDICUnavailable_MultiSystem_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
-			const dtelName = "Z_ADT_MCP_415_GUARD"
+			// Suffix the test object name with a per-run timestamp to avoid
+			// the stale-state flake the round-2 review flagged: a fixed name
+			// would collide with leftover objects from a previous run whose
+			// cleanup failed (e.g. lock contention), and the next run would
+			// see "object already exists" instead of the expected 404/415 —
+			// the guard wouldn't fire and the test would falsely fail.
+			dtelName := fmt.Sprintf("Z_ADT_MCP_415_%d", time.Now().Unix()%100000)
 			objectURI := "/sap/bc/adt/ddic/dataelements/" + strings.ToLower(dtelName)
 
 			err := sys.Client.CreateObject(ctx, "DTEL", dtelName, "$TMP",
