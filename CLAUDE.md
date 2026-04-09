@@ -1,6 +1,4 @@
-# CLAUDE.md
-
-## Project Overview
+# adtler
 
 Go client library for SAP ABAP Development Tools (ADT). Provides a typed Go interface to the SAP ADT REST API. Consumed by [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap).
 
@@ -17,7 +15,7 @@ One PR per issue. Feature branches from `main` (`fix/`, `feat/`, `test/`, `refac
 
 ### The established fix/review/test/merge cycle
 
-Every fix or feature follows this cycle. It was proven across 13 bug fixes in one session and works reliably.
+Every fix or feature follows this cycle.
 
 #### 1. Build the fix on a feature branch
 
@@ -25,7 +23,7 @@ Every fix or feature follows this cycle. It was proven across 13 bug fixes in on
 - Implement the fix with unit tests (httptest mocks for ADT endpoints)
 - Add a multi-system integration test using `eachSystem(t)` — the test must exercise the bug's exact failure path against both R/3 and S/4
 - Run `go test ./...`, `go build -tags integration ./adt/...`, `go vet -tags integration ./adt/...`
-- Commit, push, open PR linking the adtler issue AND the mcp-server-abap consumer issue
+- Commit, push, open PR linking the adtler issue AND the mcp-server-abap consumer issue, add the `needs:integration-test` label
 
 #### 2. Independent reviewer agent confirms the code
 
@@ -50,6 +48,7 @@ A separate Claude instance with access to real SAP systems (R/3 and S/4 via `~/.
 
 - Checks out the fix branch
 - Runs: `SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" go test -tags=integration -v -run <TestName> ./adt/...`
+- For transport-relevant changes, also runs: `go test -tags='integration transport' ./adt/...` (these create and release real transports — protected by the separate `transport` build tag)
 - Posts a structured result comment on the PR with:
   - Per-system PASS/FAIL status
   - Relevant test output (no credentials or hostnames)
@@ -65,23 +64,16 @@ If the integration test passes and CI is green:
 - Enable auto-merge squash: `gh pr merge <N> --auto --squash`
 - The PR squash-merges when all required checks complete
 
-### Labels
+### Labels (workflow-relevant)
 
 | Label | Meaning |
 |---|---|
 | `needs:integration-test` | PR awaits real-SAP integration test before merge |
-| `blocked:eclipse-capture` | Issue needs Eclipse ADT HTTP traffic capture (mitmproxy/Fiddler) |
+| `blocked:eclipse-capture` | Issue needs Eclipse ADT HTTP traffic capture |
 | `blocked:design-needed` | Issue needs architectural design discussion |
-| `blocked:sap-investigation` | Issue needs SAP-side investigation or system configuration check |
-| `reproduces-on-s4` | Bug reproduces on S/4HANA on-prem |
-| `reproduces-on-r3` | Bug reproduces on ECC / R/3 |
-| `area:http` | HTTP transport, sessions, error parsing |
-| `area:source` | Source code read/write, locks, ETags |
-| `area:metadata` | DDIC, message classes, text elements |
-| `area:diagnostics` | Syntax check, ATC, short dumps, unit tests |
-| `area:intelligence` | Code completion, navigation, refactoring |
-| `needs-design` | Architectural change, needs design discussion |
-| `needs-investigation` | Root cause uncertain |
+| `blocked:sap-investigation` | Issue needs SAP-side investigation |
+
+For the full label list, run `gh label list --repo Hochfrequenz/adtler`.
 
 ## Project Structure
 
