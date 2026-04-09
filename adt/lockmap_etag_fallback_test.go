@@ -16,16 +16,16 @@ import (
 // FetchETag which GETs the bare object URI with the type-appropriate Accept.
 func TestResolveETag_FallsBackToFetchETag(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == csrfEndpoint:
+		switch r.URL.Path {
+		case csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
 		// /source/main returns 400 (mimics CLAS on S/4)
-		case r.URL.Path == "/sap/bc/adt/oo/classes/zcl_test/source/main":
+		case "/sap/bc/adt/oo/classes/zcl_test/source/main":
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`<?xml version="1.0"?><exc:ExceptionText xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><message>Resource ZCL_TEST: wrong input data</message></exc:ExceptionText>`))
 		// Bare class URI returns the object metadata WITH an ETag header
-		case r.URL.Path == "/sap/bc/adt/oo/classes/zcl_test":
+		case "/sap/bc/adt/oo/classes/zcl_test":
 			w.Header().Set("ETag", `"etag-from-bare-uri"`)
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
