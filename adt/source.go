@@ -237,6 +237,11 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 		"Content-Type": "text/plain; charset=utf-8",
 		"Accept":       "text/plain",
 		"If-Match":     etag,
+		// Stateful session: pins this request to the same SAP work process
+		// that holds the lock from LockObject. Without this, S/4 may route
+		// the write to a different work process where the lock handle is
+		// invisible → 423 ExceptionResourceInvalidLockHandle. See adtler#4.
+		"X-sap-adt-sessiontype": "stateful",
 	}
 	if lockHandle != "" {
 		headers["X-SAP-Lock-Handle"] = lockHandle
