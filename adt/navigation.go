@@ -26,11 +26,22 @@ func (c *httpClient) NavigateToDefinition(ctx context.Context, sourceURI string)
 		return "", fmt.Errorf("NavigateToDefinition reading body: %w", err)
 	}
 
+	// SAP returns an objectReference with adtcore:uri attribute:
+	// <objectReference xmlns:adtcore="http://www.sap.com/adt/core"
+	//   adtcore:uri="/sap/bc/adt/oo/classes/zcl_target" adtcore:name="ZCL_TARGET"/>
 	var ref struct {
-		URI string `xml:"uri,attr"`
+		URI string `xml:"http://www.sap.com/adt/core uri,attr"`
 	}
 	if err := xml.Unmarshal(data, &ref); err != nil {
 		return "", fmt.Errorf("NavigateToDefinition parsing: %w", err)
+	}
+	if ref.URI == "" {
+		// Fallback: try without namespace (older systems may not use namespaced attributes)
+		var plain struct {
+			URI string `xml:"uri,attr"`
+		}
+		_ = xml.Unmarshal(data, &plain)
+		ref.URI = plain.URI
 	}
 	return ref.URI, nil
 }
