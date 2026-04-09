@@ -12,6 +12,35 @@ import (
 	"sync"
 )
 
+// FetchETag reads the ETag for any object URI by GETting the bare URI with
+// the type-appropriate Accept header (via acceptHeaderForURI / discovery).
+// This is the same pattern DeleteObject uses for optimistic locking.
+//
+// Unlike GetSource (which hardcodes /source/main and text/plain), this works
+// for ALL object types including CLAS, DTEL, DOMA, and TABL — because it
+// delegates content negotiation to acceptHeaderForURI which already knows
+// the correct vendor MIME type per URI prefix.
+//
+// Used as a fallback by LockMap.ResolveETag when GetSource fails (e.g. 400
+// for CLAS on S/4, 404 for DTEL/DOMA). See adtler#9, adtler#14.
+func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, error) {
+	accept := c.acceptHeaderForURI(objectURI)
+	resp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
+	if err != nil {
+		return "", fmt.Errorf("FetchETag: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := checkResponse(resp); err != nil {
+		return "", fmt.Errorf("FetchETag: %w", err)
+	}
+	_, _ = io.ReadAll(resp.Body) // drain body to allow connection reuse
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		return "", fmt.Errorf("FetchETag: no ETag returned for %s", objectURI)
+	}
+	return etag, nil
+}
+
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
 	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": "text/plain"})
 	if err != nil {
@@ -249,6 +278,33 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 	//   v3 (query only):  R/3 ❌ 423, S/4 ✅
 	//   v4 (both):        R/3 ❌ (query poisons), S/4 ✅
 	//   v5 (header-first + retry): R/3 ✅, S/4 ✅  ← this version
+	newETag, err := c.trySetSource(ctx, objectURI, source, lockHandle, transport, etag)
+	if err == nil {
+		return newETag, nil
+	}
+
+	// ETag charset fix (adtler#15 / mcp-server-abap#294):
+	//
+	// SAP embeds the Content-Type INTO the ETag value. GetSource sends
+	// Accept: text/plain and gets an ETag like "...text/plain2". But
+	// PUT /source/main validates against "...text/plain; charset=utf-82"
+	// — the full Content-Type with charset qualifier. The GET endpoint
+	// ignores charset in Accept and always returns the short form.
+	//
+	// Fix: on 412, patch the ETag by inserting "; charset=utf-8" after
+	// "text/plain" and retry. This is SAP-specific string manipulation
+	// driven by the observation that the timestamp + version portions of
+	// the ETag are identical — only the MIME suffix differs.
+	if isPreconditionFailed(err) && strings.Contains(etag, "text/plain") && !strings.Contains(etag, "charset") {
+		fixedETag := strings.Replace(etag, "text/plain", "text/plain; charset=utf-8", 1)
+		return c.trySetSource(ctx, objectURI, source, lockHandle, transport, fixedETag)
+	}
+	return "", err
+}
+
+// trySetSource attempts SetSource with the lock handle retry
+// (header-first for R/3, query-param retry for S/4).
+func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
 	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
 	if err != nil && lockHandle != "" && isInvalidLockHandle(err) {
 		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
