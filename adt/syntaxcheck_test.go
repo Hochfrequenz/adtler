@@ -19,7 +19,7 @@ func TestSyntaxCheckWithErrors(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path != "/sap/bc/adt/checkruns" {
+		if r.URL.Path != checkrunsPath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -210,7 +210,7 @@ func TestSyntaxCheck_FalsePositiveRetriesToActive(t *testing.T) {
 			return
 		}
 		// Checkruns POST.
-		if r.URL.Path == "/sap/bc/adt/checkruns" {
+		if r.URL.Path == checkrunsPath {
 			callCount++
 			body, _ := io.ReadAll(r.Body)
 			bodyStr := string(body)
@@ -287,7 +287,7 @@ func TestSyntaxCheck_NonExistentObjectReturnsError(t *testing.T) {
 			return
 		}
 		// Checkruns: return the false-positive pattern.
-		if r.URL.Path == "/sap/bc/adt/checkruns" {
+		if r.URL.Path == checkrunsPath {
 			w.Header().Set("Content-Type", "application/vnd.sap.adt.checkmessages+xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
