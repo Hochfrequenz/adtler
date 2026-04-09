@@ -239,15 +239,19 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
-	// Pass lockHandle as a query parameter, matching SetIncludeSource and
-	// CreateTestInclude in this same file. The SAP ADT REST endpoint
-	// expects lockHandle in the URL, not as an HTTP header. The previous
-	// X-SAP-Lock-Handle header form caused 423 ExceptionResourceInvalid-
-	// LockHandle on S/4 because the server didn't recognize the handle
-	// delivery mechanism. See adtler#4.
+	// Send lockHandle BOTH as a query parameter AND as an HTTP header.
+	// S/4 recognises the query parameter form (?lockHandle=xxx) and ignores
+	// the header. R/3 recognises the HTTP header (X-SAP-Lock-Handle) and
+	// ignores the query parameter. Sending both is safe — SAP endpoints
+	// ignore unrecognised headers/params — and avoids the need to detect
+	// the system version at call time. See adtler#4:
+	//   - v2 (header only): S/4 423, R/3 OK
+	//   - v3 (query only):  S/4 OK, R/3 423
+	//   - v4 (both):        S/4 OK, R/3 OK ← this version
 	params := url.Values{}
 	if lockHandle != "" {
 		params.Set("lockHandle", lockHandle)
+		headers["X-SAP-Lock-Handle"] = lockHandle
 	}
 	if transport != "" {
 		params.Set("corrNr", transport)
