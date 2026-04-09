@@ -234,21 +234,27 @@ func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandl
 
 func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
 	headers := map[string]string{
-		"Content-Type": "text/plain; charset=utf-8",
-		"Accept":       "text/plain",
-		"If-Match":     etag,
-		// Stateful session: pins this request to the same SAP work process
-		// that holds the lock from LockObject. Without this, S/4 may route
-		// the write to a different work process where the lock handle is
-		// invisible → 423 ExceptionResourceInvalidLockHandle. See adtler#4.
+		"Content-Type":          "text/plain; charset=utf-8",
+		"Accept":                "text/plain",
+		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
+	// Pass lockHandle as a query parameter, matching SetIncludeSource and
+	// CreateTestInclude in this same file. The SAP ADT REST endpoint
+	// expects lockHandle in the URL, not as an HTTP header. The previous
+	// X-SAP-Lock-Handle header form caused 423 ExceptionResourceInvalid-
+	// LockHandle on S/4 because the server didn't recognize the handle
+	// delivery mechanism. See adtler#4.
+	params := url.Values{}
 	if lockHandle != "" {
-		headers["X-SAP-Lock-Handle"] = lockHandle
+		params.Set("lockHandle", lockHandle)
+	}
+	if transport != "" {
+		params.Set("corrNr", transport)
 	}
 	path := objectURI + "/source/main"
-	if transport != "" {
-		path += "?corrNr=" + url.QueryEscape(transport)
+	if len(params) > 0 {
+		path += "?" + params.Encode()
 	}
 	resp, err := c.doMutate(ctx, http.MethodPut, path,
 		strings.NewReader(source),
