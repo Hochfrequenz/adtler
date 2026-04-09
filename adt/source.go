@@ -12,6 +12,35 @@ import (
 	"sync"
 )
 
+// FetchETag reads the ETag for any object URI by GETting the bare URI with
+// the type-appropriate Accept header (via acceptHeaderForURI / discovery).
+// This is the same pattern DeleteObject uses for optimistic locking.
+//
+// Unlike GetSource (which hardcodes /source/main and text/plain), this works
+// for ALL object types including CLAS, DTEL, DOMA, and TABL — because it
+// delegates content negotiation to acceptHeaderForURI which already knows
+// the correct vendor MIME type per URI prefix.
+//
+// Used as a fallback by LockMap.ResolveETag when GetSource fails (e.g. 400
+// for CLAS on S/4, 404 for DTEL/DOMA). See adtler#9, adtler#14.
+func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, error) {
+	accept := c.acceptHeaderForURI(objectURI)
+	resp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
+	if err != nil {
+		return "", fmt.Errorf("FetchETag: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := checkResponse(resp); err != nil {
+		return "", fmt.Errorf("FetchETag: %w", err)
+	}
+	_, _ = io.ReadAll(resp.Body) // drain body to allow connection reuse
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		return "", fmt.Errorf("FetchETag: no ETag returned for %s", objectURI)
+	}
+	return etag, nil
+}
+
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
 	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": "text/plain"})
 	if err != nil {

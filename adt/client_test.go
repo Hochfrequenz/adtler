@@ -22,6 +22,10 @@ const checkrunsPath = "/sap/bc/adt/checkruns"
 // CreateObject's post-create session cleanup. Hoisted for goconst.
 const logoffPath = "/sap/public/bc/icf/logoff"
 
+// progType is the ADT object type for ABAP programs, used in assertions
+// across multiple test files. Hoisted for goconst.
+const progType = "PROG/P"
+
 func newTestConfig(host string) sapmcpconfig.SAPSystem {
 	return sapmcpconfig.SAPSystem{
 		Host:     host,

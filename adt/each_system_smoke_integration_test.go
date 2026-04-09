@@ -52,7 +52,7 @@ func TestEachSystem_Smoke_Integration(t *testing.T) {
 				t.Errorf("[%s] GetObjectInfo returned empty Name", sys.Name)
 				return
 			}
-			if info.Type != "PROG/P" {
+			if info.Type != progType {
 				t.Errorf("[%s] expected Type PROG/P, got %q", sys.Name, info.Type)
 			}
 			t.Logf("[%s] sanity OK: name=%s type=%s description=%q",
