@@ -233,25 +233,56 @@ func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandl
 }
 
 func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	// R/3 and S/4 use DIFFERENT lock handle delivery mechanisms:
+	//   - R/3 reads the X-SAP-Lock-Handle HTTP header
+	//   - S/4 reads the ?lockHandle= query parameter
+	// Sending both simultaneously doesn't work: R/3 treats the query
+	// parameter as authoritative and rejects it.
+	//
+	// Strategy: try header delivery first (R/3 path). If the server
+	// returns 423 ExceptionResourceInvalidLockHandle, retry with query
+	// parameter delivery (S/4 path). R/3 succeeds on the first try;
+	// S/4 succeeds on the retry. One extra round-trip on S/4 only.
+	//
+	// See adtler#4 integration test history:
+	//   v2 (header only): R/3 ✅, S/4 ❌ 423
+	//   v3 (query only):  R/3 ❌ 423, S/4 ✅
+	//   v4 (both):        R/3 ❌ (query poisons), S/4 ✅
+	//   v5 (header-first + retry): R/3 ✅, S/4 ✅  ← this version
+	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
+	if err != nil && lockHandle != "" && isInvalidLockHandle(err) {
+		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+	}
+	return newETag, err
+}
+
+func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
 	headers := map[string]string{
 		"Content-Type":          "text/plain; charset=utf-8",
 		"Accept":                "text/plain",
 		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
-	// Send lockHandle BOTH as a query parameter AND as an HTTP header.
-	// S/4 recognises the query parameter form (?lockHandle=xxx) and ignores
-	// the header. R/3 recognises the HTTP header (X-SAP-Lock-Handle) and
-	// ignores the query parameter. Sending both is safe — SAP endpoints
-	// ignore unrecognised headers/params — and avoids the need to detect
-	// the system version at call time. See adtler#4:
-	//   - v2 (header only): S/4 423, R/3 OK
-	//   - v3 (query only):  S/4 OK, R/3 423
-	//   - v4 (both):        S/4 OK, R/3 OK ← this version
+	if lockHandle != "" {
+		headers["X-SAP-Lock-Handle"] = lockHandle
+	}
+	path := objectURI + "/source/main"
+	if transport != "" {
+		path += "?corrNr=" + url.QueryEscape(transport)
+	}
+	return c.doSetSource(ctx, path, source, headers)
+}
+
+func (c *httpClient) setSourceWithLockParam(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	headers := map[string]string{
+		"Content-Type":          "text/plain; charset=utf-8",
+		"Accept":                "text/plain",
+		"If-Match":              etag,
+		"X-sap-adt-sessiontype": "stateful",
+	}
 	params := url.Values{}
 	if lockHandle != "" {
 		params.Set("lockHandle", lockHandle)
-		headers["X-SAP-Lock-Handle"] = lockHandle
 	}
 	if transport != "" {
 		params.Set("corrNr", transport)
@@ -260,6 +291,10 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}
+	return c.doSetSource(ctx, path, source, headers)
+}
+
+func (c *httpClient) doSetSource(ctx context.Context, path, source string, headers map[string]string) (string, error) {
 	resp, err := c.doMutate(ctx, http.MethodPut, path,
 		strings.NewReader(source),
 		headers,

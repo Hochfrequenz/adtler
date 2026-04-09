@@ -1,6 +1,9 @@
 package adt
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Common constants used across ADT operations.
 const (
@@ -132,4 +135,16 @@ type ADTError struct {
 
 func (e *ADTError) Error() string {
 	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
+}
+
+// isInvalidLockHandle returns true if the error is a 423
+// ExceptionResourceInvalidLockHandle from SAP. Used by SetSource to
+// decide whether to retry with a different lock handle delivery
+// mechanism (header vs query param). See adtler#4.
+func isInvalidLockHandle(err error) bool {
+	var adtErr *ADTError
+	if errors.As(err, &adtErr) {
+		return adtErr.StatusCode == 423
+	}
+	return false
 }
