@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -462,9 +463,30 @@ func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method
 	return hc.Do(req)
 }
 
-// parseADTError reads an XML error response body and returns an *ADTError.
+// htmlErrorTextHeaderRe matches the SAP "Application Server Error" page's
+// header line, e.g. <p class="errorTextHeader">500 Internal Server Error</p>.
+var htmlErrorTextHeaderRe = regexp.MustCompile(`<p class="errorTextHeader">([^<]*)</p>`)
+
+// htmlDetailTextRe matches the SAP "Application Server Error" page's detail
+// lines, e.g. <p class="detailText">Internal error code 8.</p>.
+var htmlDetailTextRe = regexp.MustCompile(`<p class="detailText">([^<]*)</p>`)
+
+// parseADTError reads an error response body and returns an *ADTError.
+//
+// The body is parsed in three layers:
+//  1. As an ADT framework <ExceptionText><message>…</message></ExceptionText>
+//     envelope (the normal case for ADT-aware endpoints).
+//  2. As a SAP "Application Server Error" HTML page (the case for generic
+//     SAP HTTP server failures — e.g. R/3 ADT activate on a non-existent
+//     program). adtler#13 / mcp-server-abap#292 documents how this used to
+//     dump several KB of HTML, CSS, and base64-encoded SAP-logo PNG into
+//     ADTError.Message; this layer extracts only the user-facing fragments.
+//  3. As-is (trimmed) for anything else, preserving prior behaviour for
+//     non-XML, non-HTML bodies.
 func parseADTError(statusCode int, body io.Reader) error {
 	data, _ := io.ReadAll(body)
+
+	// Layer 1: ADT framework XML envelope.
 	var xmlErr struct {
 		XMLName xml.Name `xml:"ExceptionText"`
 		Message string   `xml:"message"`
@@ -472,7 +494,54 @@ func parseADTError(statusCode int, body io.Reader) error {
 	if err := xml.Unmarshal(data, &xmlErr); err == nil && xmlErr.Message != "" {
 		return &ADTError{StatusCode: statusCode, Message: xmlErr.Message}
 	}
+
+	// Layer 2: SAP HTML "Application Server Error" page.
+	if msg := parseHTMLErrorBody(data); msg != "" {
+		return &ADTError{StatusCode: statusCode, Message: msg}
+	}
+
+	// Layer 3: any other body, trimmed.
 	return &ADTError{StatusCode: statusCode, Message: strings.TrimSpace(string(data))}
+}
+
+// parseHTMLErrorBody returns a short, human-readable summary of an SAP HTML
+// error page, or "" if the body doesn't look like one. The expected page
+// shape is the standard <p class="errorTextHeader"> + several
+// <p class="detailText"> lines that the SAP HTTP server emits for generic
+// 4xx/5xx failures.
+func parseHTMLErrorBody(data []byte) string {
+	s := strings.TrimSpace(string(data))
+	if s == "" {
+		return ""
+	}
+	head := s
+	if len(head) > 64 {
+		head = head[:64]
+	}
+	headLower := strings.ToLower(head)
+	if !strings.HasPrefix(headLower, "<!doctype html") && !strings.HasPrefix(headLower, "<html") {
+		return ""
+	}
+
+	var parts []string
+	if m := htmlErrorTextHeaderRe.FindStringSubmatch(s); m != nil {
+		if t := strings.TrimSpace(m[1]); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	for _, m := range htmlDetailTextRe.FindAllStringSubmatch(s, -1) {
+		if t := strings.TrimSpace(m[1]); t != "" {
+			parts = append(parts, t)
+		}
+	}
+
+	if len(parts) == 0 {
+		// It's HTML, but not the expected SAP error layout. Don't dump
+		// the whole page; tell the caller it was an HTML response so they
+		// can investigate further.
+		return "SAP returned an HTML error page (no parseable detail)"
+	}
+	return strings.Join(parts, " — ")
 }
 
 // encodeNamespacePath detects SAP namespace objects in ADT paths and
