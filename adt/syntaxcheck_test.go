@@ -186,3 +186,138 @@ func TestBatchSyntaxCheckHTTPError(t *testing.T) {
 		}
 	}
 }
+
+// TestSyntaxCheck_FalsePositiveRetriesToActive regression-tests adtler#11:
+// when the inactive-version check returns the "REPORT/PROGRAM missing" false
+// positive (the pattern produced when there is no inactive version), the fix
+// retries with version="active". The test mocks a server that:
+//   - returns the false-positive on checkruns with version="inactive"
+//   - returns clean results on checkruns with version="active"
+//   - responds to GetObjectInfo with a valid object (so the existence check passes)
+func TestSyntaxCheck_FalsePositiveRetriesToActive(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// GetObjectInfo call (existence check).
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/sap/bc/adt/programs/programs/") {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<program:abapProgram xmlns:program="http://www.sap.com/adt/programs/programs" xmlns:adtcore="http://www.sap.com/adt/core" adtcore:name="ZEXISTING" adtcore:type="PROG/P"/>`))
+			return
+		}
+		// Checkruns POST.
+		if r.URL.Path == "/sap/bc/adt/checkruns" {
+			callCount++
+			body, _ := io.ReadAll(r.Body)
+			bodyStr := string(body)
+
+			w.Header().Set("Content-Type", "application/vnd.sap.adt.checkmessages+xml")
+			w.WriteHeader(http.StatusOK)
+
+			if strings.Contains(bodyStr, `version="inactive"`) {
+				// First call: return the false-positive pattern.
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
+<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun">
+  <chkrun:checkReport chkrun:reporter="abapCheckRun"
+    chkrun:triggeringUri="/sap/bc/adt/programs/programs/ZEXISTING"
+    chkrun:status="processed">
+    <chkrun:checkMessageList>
+      <chkrun:checkMessage chkrun:uri="/sap/bc/adt/programs/programs/ZEXISTING/source/main#start=1,0"
+        chkrun:type="E" chkrun:shortText="The REPORT/PROGRAM statement is missing, or the program type is INCLUDE."/>
+    </chkrun:checkMessageList>
+  </chkrun:checkReport>
+</chkrun:checkRunReports>`))
+				return
+			}
+			if strings.Contains(bodyStr, `version="active"`) {
+				// Retry call: return clean results (active version is fine).
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
+<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun">
+  <chkrun:checkReport chkrun:reporter="abapCheckRun"
+    chkrun:triggeringUri="/sap/bc/adt/programs/programs/ZEXISTING"
+    chkrun:status="processed"/>
+</chkrun:checkRunReports>`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	msgs, err := client.SyntaxCheck(context.Background(), "/sap/bc/adt/programs/programs/ZEXISTING")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The active-version check returned clean — so we expect zero messages.
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 messages after active-version retry, got %d: %+v", len(msgs), msgs)
+	}
+	// The server should have been hit twice: once for inactive, once for active.
+	if callCount != 2 {
+		t.Errorf("expected 2 checkruns calls (inactive then active retry), got %d", callCount)
+	}
+}
+
+// TestSyntaxCheck_NonExistentObjectReturnsError regression-tests adtler#11:
+// when the false-positive pattern fires AND the object doesn't exist, the fix
+// returns a clear "object does not exist" error rather than the misleading
+// "REPORT statement missing" syntax error.
+func TestSyntaxCheck_NonExistentObjectReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// GetObjectInfo returns 404 — object doesn't exist.
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/sap/bc/adt/programs/programs/") {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<exc:ExceptionText xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <message>Resource PROG ZNONEXISTENT does not exist.</message>
+</exc:ExceptionText>`))
+			return
+		}
+		// Checkruns: return the false-positive pattern.
+		if r.URL.Path == "/sap/bc/adt/checkruns" {
+			w.Header().Set("Content-Type", "application/vnd.sap.adt.checkmessages+xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
+<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun">
+  <chkrun:checkReport chkrun:reporter="abapCheckRun"
+    chkrun:triggeringUri="/sap/bc/adt/programs/programs/ZNONEXISTENT"
+    chkrun:status="processed">
+    <chkrun:checkMessageList>
+      <chkrun:checkMessage chkrun:uri="/sap/bc/adt/programs/programs/ZNONEXISTENT/source/main#start=1,0"
+        chkrun:type="E" chkrun:shortText="The REPORT/PROGRAM statement is missing, or the program type is INCLUDE."/>
+    </chkrun:checkMessageList>
+  </chkrun:checkReport>
+</chkrun:checkRunReports>`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.SyntaxCheck(context.Background(), "/sap/bc/adt/programs/programs/ZNONEXISTENT")
+	if err == nil {
+		t.Fatal("expected error for non-existent object, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error should mention 'does not exist', got: %v", err)
+	}
+	if strings.Contains(err.Error(), "REPORT") {
+		t.Errorf("error should NOT be the misleading REPORT-missing message, got: %v", err)
+	}
+}
