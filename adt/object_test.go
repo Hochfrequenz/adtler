@@ -13,15 +13,20 @@ import (
 )
 
 func TestCreateObjectProgram(t *testing.T) {
-	var gotPath, gotMethod string
+	var gotCreatePath, gotCreateMethod string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		gotPath = r.URL.Path
-		gotMethod = r.Method
+		// The post-create Logout call (adtler#4 workaround) hits /sap/public/bc/icf/logoff.
+		if r.URL.Path == "/sap/public/bc/icf/logoff" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotCreatePath = r.URL.Path
+		gotCreateMethod = r.Method
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
@@ -33,11 +38,46 @@ func TestCreateObjectProgram(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotMethod != http.MethodPost {
-		t.Errorf("method: got %q", gotMethod)
+	if gotCreateMethod != http.MethodPost {
+		t.Errorf("method: got %q", gotCreateMethod)
 	}
-	if gotPath != "/sap/bc/adt/programs/programs" {
-		t.Errorf("path: got %q", gotPath)
+	if gotCreatePath != "/sap/bc/adt/programs/programs" {
+		t.Errorf("path: got %q", gotCreatePath)
+	}
+}
+
+// TestCreateObject_LogsOutAfterSuccess regression-tests adtler#4:
+// after a successful CreateObject, the client must call Logout to release
+// the session-bound ESRDIRE enqueue that S/4 creates. Without this, the
+// next LockObject/SetSource fails with 423 InvalidLockHandle.
+func TestCreateObject_LogsOutAfterSuccess(t *testing.T) {
+	logoffCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/sap/public/bc/icf/logoff" {
+			logoffCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// CreateObject POST
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	err := client.CreateObject(context.Background(), "PROG", "ZTEST_LOGOUT", "$TMP", "test", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !logoffCalled {
+		t.Error("Logout was NOT called after successful CreateObject — " +
+			"the ESRDIRE enqueue workaround (adtler#4) is missing")
 	}
 }
 

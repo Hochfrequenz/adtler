@@ -249,6 +249,14 @@ func (c *httpClient) Logout(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.csrfToken = ""
+	// Replace the cookie jar with a fresh one so no stale session cookies
+	// leak into the next request. The old jar may still hold SAP_SESSIONID_*
+	// and sap-usercontext cookies that reference the now-terminated server
+	// session — sending them alongside new cookies on some SAP versions
+	// confuses the session manager.
+	jar, _ := cookiejar.New(nil)
+	c.http.Jar = jar
+	c.httpLong.Jar = jar
 	c.mu.Unlock()
 	return nil
 }
