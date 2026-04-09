@@ -19,8 +19,9 @@ import (
 //     itself is broken, not any fix that builds on top.
 //
 // Run with:
-//   SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" \
-//     go test -tags=integration -v -run TestEachSystem_Smoke_Integration ./adt/...
+//
+//	SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" \
+//	  go test -tags=integration -v -run TestEachSystem_Smoke_Integration ./adt/...
 func TestEachSystem_Smoke_Integration(t *testing.T) {
 	systems := eachSystem(t)
 	if len(systems) == 0 {
