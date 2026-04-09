@@ -21,7 +21,7 @@ func TestCreateObjectProgram(t *testing.T) {
 			return
 		}
 		// The post-create Logout call (adtler#4 workaround) hits /sap/public/bc/icf/logoff.
-		if r.URL.Path == "/sap/public/bc/icf/logoff" {
+		if r.URL.Path == logoffPath {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -58,7 +58,7 @@ func TestCreateObject_LogsOutAfterSuccess(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == "/sap/public/bc/icf/logoff" {
+		if r.URL.Path == logoffPath {
 			logoffCalled = true
 			w.WriteHeader(http.StatusOK)
 			return

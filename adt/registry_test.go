@@ -306,7 +306,7 @@ func TestRegistryDelegatesAllMethods(t *testing.T) {
 func TestLogoutAllCallsAllClients(t *testing.T) {
 	logoutCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/public/bc/icf/logoff" {
+		if r.URL.Path == logoffPath {
 			logoutCount++
 		}
 		w.WriteHeader(http.StatusOK)
