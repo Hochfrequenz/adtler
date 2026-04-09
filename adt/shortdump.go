@@ -87,17 +87,30 @@ func parseShortDumpHeaders(data []byte, filterUser string) ([]ShortDumpHeader, e
 			User:      e.Author.Name,
 			Timestamp: e.Published,
 		}
-		for _, cat := range e.Categories {
-			if strings.Contains(cat.Label, "Laufzeitfehler") || strings.Contains(cat.Label, "Runtime Error") {
-				h.RuntimeError = cat.Term
-			}
-			if strings.Contains(cat.Label, "Programm") || strings.Contains(cat.Label, "Program") {
-				h.Program = cat.Term
-			}
-		}
+		extractRuntimeFields(&h, e.Categories)
 		headers = append(headers, h)
 	}
 	return headers, nil
+}
+
+// extractRuntimeFields populates RuntimeError and Program on a ShortDumpHeader
+// from the ATOM <category> elements. The label text varies by SAP release and
+// system language — R/3 typically uses German ("Laufzeitfehler", "Programm"),
+// while S/4 may use English or a different wording. Case-insensitive matching
+// catches all known variants. See adtler#7 / mcp-server-abap#289.
+func extractRuntimeFields(h *ShortDumpHeader, categories []struct {
+	Term  string `xml:"term,attr"`
+	Label string `xml:"label,attr"`
+}) {
+	for _, cat := range categories {
+		label := strings.ToLower(cat.Label)
+		if strings.Contains(label, "laufzeitfehler") || strings.Contains(label, "runtime error") || strings.Contains(label, "runtime_error") {
+			h.RuntimeError = cat.Term
+		}
+		if strings.Contains(label, "programm") || strings.Contains(label, "program") {
+			h.Program = cat.Term
+		}
+	}
 }
 
 type dumpEntry struct {
@@ -147,14 +160,7 @@ func parseShortDumpFeed(data []byte, filterUser string) ([]ShortDump, error) {
 			},
 		}
 
-		for _, cat := range e.Categories {
-			if strings.Contains(cat.Label, "Laufzeitfehler") || strings.Contains(cat.Label, "Runtime Error") {
-				d.RuntimeError = cat.Term
-			}
-			if strings.Contains(cat.Label, "Programm") || strings.Contains(cat.Label, "Program") {
-				d.Program = cat.Term
-			}
-		}
+		extractRuntimeFields(&d.ShortDumpHeader, e.Categories)
 
 		// Extract source link from atom:link with ADT URI
 		for _, l := range e.Links {
