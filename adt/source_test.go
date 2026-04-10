@@ -180,3 +180,54 @@ func TestSetSource(t *testing.T) {
 		t.Errorf("body: got %q", gotBody)
 	}
 }
+
+func TestSourceContentType_DiscoveryEmpty_FallsBackToTextPlain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Empty discovery response
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClientForTest(cfg)
+
+	got := client.SourceContentTypeForTest("/sap/bc/adt/programs/programs/ZTEST")
+	if got != "text/plain" {
+		t.Errorf("empty discovery: got %q, want %q", got, "text/plain")
+	}
+}
+
+func TestSourceContentType_DiscoveryAdvertisesType_UsesIt(t *testing.T) {
+	discoveryXML := `<?xml version="1.0"?>
+<app:service xmlns:app="http://www.w3.org/2007/app">
+  <app:workspace>
+    <app:collection href="/sap/bc/adt/programs/programs">
+      <app:accept>text/plain; charset=utf-8</app:accept>
+      <app:accept>text/plain</app:accept>
+    </app:collection>
+  </app:workspace>
+</app:service>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sap/bc/adt/discovery" {
+			w.Header().Set("X-CSRF-Token", "tok")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(discoveryXML))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClientForTest(cfg)
+
+	// Force discovery load
+	if err := client.LoadDiscoveryForTest(context.Background()); err != nil {
+		t.Fatalf("LoadDiscoveryForTest: %v", err)
+	}
+
+	got := client.SourceContentTypeForTest("/sap/bc/adt/programs/programs/ZTEST")
+	if got != "text/plain; charset=utf-8" {
+		t.Errorf("discovery-advertised: got %q, want %q", got, "text/plain; charset=utf-8")
+	}
+}
