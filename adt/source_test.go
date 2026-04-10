@@ -272,3 +272,43 @@ func TestGetSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
 		t.Errorf("Accept header: got %q, want %q", capturedAccept, "text/plain; charset=utf-8")
 	}
 }
+
+func TestGetIncludeSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
+	discoveryXML := `<?xml version="1.0"?>
+<app:service xmlns:app="http://www.w3.org/2007/app">
+  <app:workspace>
+    <app:collection href="/sap/bc/adt/oo/classes">
+      <app:accept>text/plain; charset=utf-8</app:accept>
+    </app:collection>
+  </app:workspace>
+</app:service>`
+
+	var capturedAccept string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sap/bc/adt/discovery" {
+			w.Header().Set("X-CSRF-Token", "tok")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(discoveryXML))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/includes/testclasses") {
+			capturedAccept = r.Header.Get("Accept")
+			w.Header().Set("ETag", `"etag-inc"`)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("CLASS ltcl_test DEFINITION."))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	if _, err := client.GetIncludeSource(context.Background(), "/sap/bc/adt/oo/classes/ZCL_TEST", "testclasses"); err != nil {
+		t.Fatalf("GetIncludeSource: %v", err)
+	}
+	if capturedAccept != "text/plain; charset=utf-8" {
+		t.Errorf("Accept: got %q, want %q", capturedAccept, "text/plain; charset=utf-8")
+	}
+}

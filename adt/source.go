@@ -228,7 +228,11 @@ func (c *httpClient) GetIncludeSource(ctx context.Context, objectURI, include st
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.doRead(ctx, path, map[string]string{"Accept": "text/plain"})
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("GetIncludeSource: %w", err)
+	}
+	accept := c.sourceContentType(objectURI)
+	resp, err := c.doRead(ctx, path, map[string]string{"Accept": accept})
 	if err != nil {
 		return nil, fmt.Errorf("GetIncludeSource: %w", err)
 	}
