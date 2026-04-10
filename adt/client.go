@@ -290,10 +290,9 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 }
 
 // ensureCSRF populates the CSRF token (and, as a side effect, the
-// discovery cache) exactly once. Safe to call from any request path
-// before or after a mutex is held elsewhere — it acquires c.mu for
-// the duration of the check. Subsequent calls after the token is
-// populated are a cheap mutex-only no-op.
+// discovery cache) exactly once. It acquires c.mu for the duration
+// of the check, so callers MUST NOT already hold c.mu. Subsequent
+// calls after the token is populated are a cheap mutex-only no-op.
 //
 // Call this from any method that needs discovery data available
 // BEFORE the request-level preflight inside doReadWith/doMutateWith
