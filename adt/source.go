@@ -41,43 +41,50 @@ func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, e
 	return etag, nil
 }
 
-// sourceContentType returns the Accept / Content-Type to use for source
-// operations on the given endpoint. It consults the ADT discovery cache
-// first and falls back to "text/plain" when the endpoint is absent from
-// discovery.
+// sourceContentType returns the Accept / Content-Type for source operations
+// on the given endpoint (typically an object URI). It resolves the longest
+// matching discovery-cache key and picks the first preferred type the server
+// advertises; if nothing matches, it falls back to "text/plain".
 //
-// The fallback matches today's hardcoded value, so callers on systems
-// where discovery has no source-endpoint entry behave exactly as before.
+// Unlike acceptHeaderForURI (which does longest-prefix over the hardcoded
+// objectTypeAcceptHeaders map and then consults discovery), this helper is
+// a pure discovery-driven lookup. The two are intentionally separate: source
+// operations historically hardcoded "text/plain" without any vendor-type
+// map, so there is no hardcoded catalog to prefix-match against.
 //
-// Callers typically pass the bare object URI (e.g.
-// "/sap/bc/adt/programs/programs/ZTEST"). The discovery cache is keyed
-// by collection href (e.g. "/sap/bc/adt/programs/programs"), so we
-// resolve the longest matching prefix before delegating to
-// NegotiateContentType.
+// The prefix resolution and content-type selection run under a single
+// c.mu acquisition so the discovery snapshot stays consistent.
 func (c *httpClient) sourceContentType(endpoint string) string {
-	resolved := c.longestDiscoveryPrefix(endpoint)
-	return c.NegotiateContentType(resolved,
-		[]string{"text/plain; charset=utf-8", "text/plain"},
-		"text/plain")
-}
+	const fallback = "text/plain"
+	preferred := []string{"text/plain; charset=utf-8", "text/plain"}
 
-// longestDiscoveryPrefix returns the longest discovery-cache key that is
-// a prefix of endpoint, or endpoint unchanged when no prefix matches.
-// Used by content-negotiation helpers that take object URIs but look
-// up collection-level discovery entries.
-func (c *httpClient) longestDiscoveryPrefix(endpoint string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	best := ""
-	for key := range c.discovery {
-		if strings.HasPrefix(endpoint, key) && len(key) > len(best) {
-			best = key
+
+	// Longest-prefix match against discovery cache keys. Callers pass
+	// bare object URIs (e.g. "/sap/bc/adt/programs/programs/ZTEST") but
+	// discovery is keyed by collection href (e.g. "/sap/bc/adt/programs/programs").
+	var accepted []string
+	bestLen := 0
+	for key, types := range c.discovery {
+		if len(key) > bestLen && strings.HasPrefix(endpoint, key) {
+			bestLen = len(key)
+			accepted = types
 		}
 	}
-	if best == "" {
-		return endpoint
+	if len(accepted) == 0 {
+		return fallback
 	}
-	return best
+	acceptedSet := make(map[string]bool, len(accepted))
+	for _, a := range accepted {
+		acceptedSet[a] = true
+	}
+	for _, p := range preferred {
+		if acceptedSet[p] {
+			return p
+		}
+	}
+	return fallback
 }
 
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
