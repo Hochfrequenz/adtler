@@ -329,6 +329,16 @@ func (c *httpClient) doReadLong(ctx context.Context, path string, headers map[st
 
 func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path string, headers map[string]string) (*http.Response, error) {
 	path = encodeNamespacePath(path)
+
+	c.mu.Lock()
+	if c.csrfToken == "" {
+		if err := c.fetchCSRFToken(ctx); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
+	}
+	c.mu.Unlock()
+
 	makeReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+path, nil)
 		if err != nil {
