@@ -88,14 +88,9 @@ func (c *httpClient) sourceContentType(endpoint string) string {
 }
 
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
-	c.mu.Lock()
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			c.mu.Unlock()
-			return nil, fmt.Errorf("GetSource: %w", err)
-		}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("GetSource: %w", err)
 	}
-	c.mu.Unlock()
 	accept := c.sourceContentType(objectURI)
 	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": accept})
 	if err != nil {

@@ -289,6 +289,26 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	return nil
 }
 
+// ensureCSRF populates the CSRF token (and, as a side effect, the
+// discovery cache) exactly once. Safe to call from any request path
+// before or after a mutex is held elsewhere — it acquires c.mu for
+// the duration of the check. Subsequent calls after the token is
+// populated are a cheap mutex-only no-op.
+//
+// Call this from any method that needs discovery data available
+// BEFORE the request-level preflight inside doReadWith/doMutateWith
+// has a chance to run — e.g. callers that compute content-type
+// headers via sourceContentType or acceptHeaderForURI before
+// invoking doRead/doMutate.
+func (c *httpClient) ensureCSRF(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.csrfToken != "" {
+		return nil
+	}
+	return c.fetchCSRFToken(ctx)
+}
+
 // hasSecureCookieOnHTTP returns true if the response sets a cookie with the
 // Secure flag while the connection uses plain HTTP. This combination silently
 // breaks CSRF validation on S4 systems because the client never sends the
@@ -330,14 +350,9 @@ func (c *httpClient) doReadLong(ctx context.Context, path string, headers map[st
 func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path string, headers map[string]string) (*http.Response, error) {
 	path = encodeNamespacePath(path)
 
-	c.mu.Lock()
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, err
 	}
-	c.mu.Unlock()
 
 	makeReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+path, nil)
@@ -416,13 +431,10 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		return bytes.NewReader(bodyBytes)
 	}
 
-	c.mu.Lock()
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, err
 	}
+	c.mu.Lock()
 	token := c.csrfToken
 	c.mu.Unlock()
 
