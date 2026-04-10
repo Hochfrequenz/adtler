@@ -141,10 +141,20 @@ func TestSetIncludeSource_NoETag(t *testing.T) {
 func TestSetSource(t *testing.T) {
 	var gotMethod, gotIfMatch, gotContentType, gotBody string
 
+	discoveryXML := `<?xml version="1.0"?>
+<app:service xmlns:app="http://www.w3.org/2007/app">
+  <app:workspace>
+    <app:collection href="/sap/bc/adt/programs/programs">
+      <app:accept>text/plain; charset=utf-8</app:accept>
+    </app:collection>
+  </app:workspace>
+</app:service>`
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(discoveryXML))
 			return
 		}
 		if r.URL.Path == "/sap/bc/adt/programs/programs/ZTEST/source/main" {
@@ -310,5 +320,59 @@ func TestGetIncludeSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
 	}
 	if capturedAccept != "text/plain; charset=utf-8" {
 		t.Errorf("Accept: got %q, want %q", capturedAccept, "text/plain; charset=utf-8")
+	}
+}
+
+func TestSetSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
+	// Discovery advertises ONLY "text/plain" (no charset). This differs
+	// from the pre-refactor hardcoded "text/plain; charset=utf-8", so a
+	// captured Content-Type of "text/plain" proves discovery was
+	// actually consulted.
+	discoveryXML := `<?xml version="1.0"?>
+<app:service xmlns:app="http://www.w3.org/2007/app">
+  <app:workspace>
+    <app:collection href="/sap/bc/adt/programs/programs">
+      <app:accept>text/plain</app:accept>
+    </app:collection>
+  </app:workspace>
+</app:service>`
+
+	var capturedContentType, capturedAccept string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sap/bc/adt/discovery" {
+			w.Header().Set("X-CSRF-Token", "tok")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(discoveryXML))
+			return
+		}
+		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/source/main") {
+			capturedContentType = r.Header.Get("Content-Type")
+			capturedAccept = r.Header.Get("Accept")
+			w.Header().Set("ETag", `"etag-new"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.SetSource(context.Background(),
+		"/sap/bc/adt/programs/programs/ZTEST",
+		"REPORT ZTEST.",
+		"lock1", "", `"etag-old"`)
+	if err != nil {
+		t.Fatalf("SetSource: %v", err)
+	}
+	// sourceContentType prefers "text/plain; charset=utf-8" but discovery
+	// only advertises "text/plain" → should return "text/plain".
+	want := "text/plain"
+	if capturedContentType != want {
+		t.Errorf("Content-Type: got %q, want %q", capturedContentType, want)
+	}
+	if capturedAccept != want {
+		t.Errorf("Accept: got %q, want %q", capturedAccept, want)
 	}
 }

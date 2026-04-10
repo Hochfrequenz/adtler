@@ -316,6 +316,9 @@ func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandl
 }
 
 func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("SetSource: %w", err)
+	}
 	// R/3 and S/4 use DIFFERENT lock handle delivery mechanisms:
 	//   - R/3 reads the X-SAP-Lock-Handle HTTP header
 	//   - S/4 reads the ?lockHandle= query parameter
@@ -367,9 +370,10 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 }
 
 func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
@@ -384,9 +388,10 @@ func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, sou
 }
 
 func (c *httpClient) setSourceWithLockParam(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
