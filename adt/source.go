@@ -54,9 +54,18 @@ func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, e
 //
 // The prefix resolution and content-type selection run under a single
 // c.mu acquisition so the discovery snapshot stays consistent.
+// contentTypeTextPlain is the default Accept / Content-Type for source
+// operations — SAP source endpoints accept bare "text/plain". Used as
+// the fallback when discovery advertises nothing for the endpoint.
+const contentTypeTextPlain = "text/plain"
+
+// contentTypeTextPlainUTF8 is the charset-qualified source content type
+// that SAP embeds in ETags for some object types (see adtler#15). It is
+// also the preferred Accept type when discovery advertises it.
+const contentTypeTextPlainUTF8 = "text/plain; charset=utf-8"
+
 func (c *httpClient) sourceContentType(endpoint string) string {
-	const fallback = "text/plain"
-	preferred := []string{"text/plain; charset=utf-8", "text/plain"}
+	preferred := []string{contentTypeTextPlainUTF8, contentTypeTextPlain}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -73,7 +82,7 @@ func (c *httpClient) sourceContentType(endpoint string) string {
 		}
 	}
 	if len(accepted) == 0 {
-		return fallback
+		return contentTypeTextPlain
 	}
 	acceptedSet := make(map[string]bool, len(accepted))
 	for _, a := range accepted {
@@ -84,7 +93,7 @@ func (c *httpClient) sourceContentType(endpoint string) string {
 			return p
 		}
 	}
-	return fallback
+	return contentTypeTextPlain
 }
 
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
@@ -356,8 +365,8 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 	// "text/plain" and retry. This is SAP-specific string manipulation
 	// driven by the observation that the timestamp + version portions of
 	// the ETag are identical — only the MIME suffix differs.
-	if isPreconditionFailed(err) && strings.Contains(etag, "text/plain") && !strings.Contains(etag, "charset") {
-		fixedETag := strings.Replace(etag, "text/plain", "text/plain; charset=utf-8", 1)
+	if isPreconditionFailed(err) && strings.Contains(etag, contentTypeTextPlain) && !strings.Contains(etag, "charset") {
+		fixedETag := strings.Replace(etag, contentTypeTextPlain, contentTypeTextPlainUTF8, 1)
 		return c.trySetSource(ctx, objectURI, source, lockHandle, transport, fixedETag)
 	}
 	return "", err
