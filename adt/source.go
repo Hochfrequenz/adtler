@@ -252,9 +252,13 @@ func (c *httpClient) SetIncludeSource(ctx context.Context, objectURI, include, s
 	if err != nil {
 		return "", err
 	}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("SetIncludeSource: %w", err)
+	}
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"X-sap-adt-sessiontype": "stateful",
 	}
 	if etag != "" {
