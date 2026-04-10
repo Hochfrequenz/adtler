@@ -41,19 +41,6 @@ func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, e
 	return etag, nil
 }
 
-// sourceContentType returns the Accept / Content-Type for source operations
-// on the given endpoint (typically an object URI). It resolves the longest
-// matching discovery-cache key and picks the first preferred type the server
-// advertises; if nothing matches, it falls back to "text/plain".
-//
-// Unlike acceptHeaderForURI (which does longest-prefix over the hardcoded
-// objectTypeAcceptHeaders map and then consults discovery), this helper is
-// a pure discovery-driven lookup. The two are intentionally separate: source
-// operations historically hardcoded "text/plain" without any vendor-type
-// map, so there is no hardcoded catalog to prefix-match against.
-//
-// The prefix resolution and content-type selection run under a single
-// c.mu acquisition so the discovery snapshot stays consistent.
 // contentTypeTextPlain is the default Accept / Content-Type for source
 // operations — SAP source endpoints accept bare "text/plain". Used as
 // the fallback when discovery advertises nothing for the endpoint.
@@ -64,6 +51,19 @@ const contentTypeTextPlain = "text/plain"
 // also the preferred Accept type when discovery advertises it.
 const contentTypeTextPlainUTF8 = "text/plain; charset=utf-8"
 
+// sourceContentType returns the Accept / Content-Type for source operations
+// on the given endpoint (typically an object URI). It resolves the longest
+// matching discovery-cache key and picks the first preferred type the server
+// advertises; if nothing matches, it falls back to contentTypeTextPlain.
+//
+// Unlike acceptHeaderForURI (which does longest-prefix over the hardcoded
+// objectTypeAcceptHeaders map and then consults discovery), this helper is
+// a pure discovery-driven lookup. The two are intentionally separate: source
+// operations historically hardcoded "text/plain" without any vendor-type
+// map, so there is no hardcoded catalog to prefix-match against.
+//
+// The prefix resolution and content-type selection run under a single
+// c.mu acquisition so the discovery snapshot stays consistent.
 func (c *httpClient) sourceContentType(endpoint string) string {
 	preferred := []string{contentTypeTextPlainUTF8, contentTypeTextPlain}
 
