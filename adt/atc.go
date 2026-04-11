@@ -73,11 +73,17 @@ func (c *httpClient) RunATCCheck(ctx context.Context, objectURIs []string, check
 
 	// Step 1: Trigger ATC run with a worklist to collect results.
 	const worklistID = "0000000000"
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("RunATCCheck: %w", err)
+	}
+	ct := c.NegotiateContentType("/sap/bc/adt/atc/runs",
+		[]string{"application/vnd.sap.adt.atc.runs.v1+xml", "application/xml"},
+		"application/xml")
 	resp, err := c.doMutate(ctx, http.MethodPost,
 		"/sap/bc/adt/atc/runs?clientWait=false&worklistId="+worklistID,
 		strings.NewReader(body),
 		map[string]string{
-			"Content-Type": "application/xml",
+			"Content-Type": ct,
 			"Accept":       "application/xml",
 		},
 	)

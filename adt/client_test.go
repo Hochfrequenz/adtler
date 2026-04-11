@@ -257,3 +257,41 @@ func TestOAuth2TokenRefreshOn401(t *testing.T) {
 		t.Errorf("expected 2 calls (initial + retry), got %d", callCount.Load())
 	}
 }
+
+func TestDoReadLoadsDiscoveryBeforeFirstRead(t *testing.T) {
+	var discoveryCalls atomic.Int32
+	var readCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			discoveryCalls.Add(1)
+			w.Header().Set("X-CSRF-Token", "tok")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><app:service xmlns:app="http://www.w3.org/2007/app"/>`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/source/main") {
+			readCalls.Add(1)
+			w.Header().Set("ETag", `"etag-xyz"`)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("REPORT ZTEST."))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := newTestConfig(srv.URL)
+	client := adt.NewClient(cfg)
+
+	_, err := client.GetSource(context.Background(), "/sap/bc/adt/programs/programs/ZTEST")
+	if err != nil {
+		t.Fatalf("GetSource: %v", err)
+	}
+	if discoveryCalls.Load() != 1 {
+		t.Errorf("discovery calls: got %d, want 1", discoveryCalls.Load())
+	}
+	if readCalls.Load() != 1 {
+		t.Errorf("read calls: got %d, want 1", readCalls.Load())
+	}
+}

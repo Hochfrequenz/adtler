@@ -41,8 +41,67 @@ func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, e
 	return etag, nil
 }
 
+// contentTypeTextPlain is the default Accept / Content-Type for source
+// operations — SAP source endpoints accept bare "text/plain". Used as
+// the fallback when discovery advertises nothing for the endpoint.
+const contentTypeTextPlain = "text/plain"
+
+// contentTypeTextPlainUTF8 is the charset-qualified source content type
+// that SAP embeds in ETags for some object types (see adtler#15). It is
+// also the preferred Accept type when discovery advertises it.
+const contentTypeTextPlainUTF8 = "text/plain; charset=utf-8"
+
+// sourceContentType returns the Accept / Content-Type for source operations
+// on the given endpoint (typically an object URI). It resolves the longest
+// matching discovery-cache key and picks the first preferred type the server
+// advertises; if nothing matches, it falls back to contentTypeTextPlain.
+//
+// Unlike acceptHeaderForURI (which does longest-prefix over the hardcoded
+// objectTypeAcceptHeaders map and then consults discovery), this helper is
+// a pure discovery-driven lookup. The two are intentionally separate: source
+// operations historically hardcoded "text/plain" without any vendor-type
+// map, so there is no hardcoded catalog to prefix-match against.
+//
+// The prefix resolution and content-type selection run under a single
+// c.mu acquisition so the discovery snapshot stays consistent.
+func (c *httpClient) sourceContentType(endpoint string) string {
+	preferred := []string{contentTypeTextPlainUTF8, contentTypeTextPlain}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Longest-prefix match against discovery cache keys. Callers pass
+	// bare object URIs (e.g. "/sap/bc/adt/programs/programs/ZTEST") but
+	// discovery is keyed by collection href (e.g. "/sap/bc/adt/programs/programs").
+	var accepted []string
+	bestLen := 0
+	for key, types := range c.discovery {
+		if len(key) > bestLen && strings.HasPrefix(endpoint, key) {
+			bestLen = len(key)
+			accepted = types
+		}
+	}
+	if len(accepted) == 0 {
+		return contentTypeTextPlain
+	}
+	acceptedSet := make(map[string]bool, len(accepted))
+	for _, a := range accepted {
+		acceptedSet[a] = true
+	}
+	for _, p := range preferred {
+		if acceptedSet[p] {
+			return p
+		}
+	}
+	return contentTypeTextPlain
+}
+
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
-	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": "text/plain"})
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("GetSource: %w", err)
+	}
+	accept := c.sourceContentType(objectURI)
+	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": accept})
 	if err != nil {
 		return nil, fmt.Errorf("GetSource: %w", err)
 	}
@@ -178,7 +237,11 @@ func (c *httpClient) GetIncludeSource(ctx context.Context, objectURI, include st
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.doRead(ctx, path, map[string]string{"Accept": "text/plain"})
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("GetIncludeSource: %w", err)
+	}
+	accept := c.sourceContentType(objectURI)
+	resp, err := c.doRead(ctx, path, map[string]string{"Accept": accept})
 	if err != nil {
 		return nil, fmt.Errorf("GetIncludeSource: %w", err)
 	}
@@ -198,9 +261,13 @@ func (c *httpClient) SetIncludeSource(ctx context.Context, objectURI, include, s
 	if err != nil {
 		return "", err
 	}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("SetIncludeSource: %w", err)
+	}
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"X-sap-adt-sessiontype": "stateful",
 	}
 	if etag != "" {
@@ -262,6 +329,9 @@ func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandl
 }
 
 func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("SetSource: %w", err)
+	}
 	// R/3 and S/4 use DIFFERENT lock handle delivery mechanisms:
 	//   - R/3 reads the X-SAP-Lock-Handle HTTP header
 	//   - S/4 reads the ?lockHandle= query parameter
@@ -295,8 +365,8 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 	// "text/plain" and retry. This is SAP-specific string manipulation
 	// driven by the observation that the timestamp + version portions of
 	// the ETag are identical — only the MIME suffix differs.
-	if isPreconditionFailed(err) && strings.Contains(etag, "text/plain") && !strings.Contains(etag, "charset") {
-		fixedETag := strings.Replace(etag, "text/plain", "text/plain; charset=utf-8", 1)
+	if isPreconditionFailed(err) && strings.Contains(etag, contentTypeTextPlain) && !strings.Contains(etag, "charset") {
+		fixedETag := strings.Replace(etag, contentTypeTextPlain, contentTypeTextPlainUTF8, 1)
 		return c.trySetSource(ctx, objectURI, source, lockHandle, transport, fixedETag)
 	}
 	return "", err
@@ -313,9 +383,10 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 }
 
 func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
@@ -330,9 +401,10 @@ func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, sou
 }
 
 func (c *httpClient) setSourceWithLockParam(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
 	}
