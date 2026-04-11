@@ -26,7 +26,7 @@ func TestRunATCCheck_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/sap/bc/adt/discovery":
+		case r.URL.Path == csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(discoveryXML))
@@ -62,7 +62,7 @@ func TestRunATCCheck_FallbackContentTypeWhenDiscoveryEmpty(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/sap/bc/adt/discovery":
+		case r.URL.Path == csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			// Empty discovery body — no entries

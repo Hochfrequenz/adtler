@@ -263,7 +263,7 @@ func TestDoReadLoadsDiscoveryBeforeFirstRead(t *testing.T) {
 	var readCalls atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/discovery" {
+		if r.URL.Path == csrfEndpoint {
 			discoveryCalls.Add(1)
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)

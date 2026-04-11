@@ -11,6 +11,14 @@ import (
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
+// Test-local constants for source-op content-type assertions. Mirror
+// adt.contentTypeTextPlain / adt.contentTypeTextPlainUTF8 (unexported
+// from the production package).
+const (
+	testCTTextPlain     = `text/plain`
+	testCTTextPlainUTF8 = `text/plain; charset=utf-8`
+)
+
 func TestGetSource(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/sap/bc/adt/programs/programs/ZTEST/source/main" {
@@ -184,8 +192,8 @@ func TestSetSource(t *testing.T) {
 	if gotIfMatch != `"etag-abc123"` {
 		t.Errorf("If-Match: got %q", gotIfMatch)
 	}
-	if gotContentType != "text/plain; charset=utf-8" {
-		t.Errorf("Content-Type: got %q, want %q", gotContentType, "text/plain; charset=utf-8")
+	if gotContentType != testCTTextPlainUTF8 {
+		t.Errorf("Content-Type: got %q, want %q", gotContentType, testCTTextPlainUTF8)
 	}
 	if gotBody != "REPORT ZTEST.\nNEW CODE." {
 		t.Errorf("body: got %q", gotBody)
@@ -203,8 +211,8 @@ func TestSourceContentType_DiscoveryEmpty_FallsBackToTextPlain(t *testing.T) {
 	client := adt.NewClientForTest(cfg)
 
 	got := client.SourceContentTypeForTest("/sap/bc/adt/programs/programs/ZTEST")
-	if got != "text/plain" {
-		t.Errorf("empty discovery: got %q, want %q", got, "text/plain")
+	if got != testCTTextPlain {
+		t.Errorf("empty discovery: got %q, want %q", got, testCTTextPlain)
 	}
 }
 
@@ -219,7 +227,7 @@ func TestSourceContentType_DiscoveryAdvertisesType_UsesIt(t *testing.T) {
   </app:workspace>
 </app:service>`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/discovery" {
+		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(discoveryXML))
@@ -238,8 +246,8 @@ func TestSourceContentType_DiscoveryAdvertisesType_UsesIt(t *testing.T) {
 	}
 
 	got := client.SourceContentTypeForTest("/sap/bc/adt/programs/programs/ZTEST")
-	if got != "text/plain; charset=utf-8" {
-		t.Errorf("discovery-advertised: got %q, want %q", got, "text/plain; charset=utf-8")
+	if got != testCTTextPlainUTF8 {
+		t.Errorf("discovery-advertised: got %q, want %q", got, testCTTextPlainUTF8)
 	}
 }
 
@@ -255,7 +263,7 @@ func TestGetSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
 
 	var capturedAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/discovery" {
+		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(discoveryXML))
@@ -278,8 +286,8 @@ func TestGetSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
 	if _, err := client.GetSource(context.Background(), "/sap/bc/adt/programs/programs/ZTEST"); err != nil {
 		t.Fatalf("GetSource: %v", err)
 	}
-	if capturedAccept != "text/plain; charset=utf-8" {
-		t.Errorf("Accept header: got %q, want %q", capturedAccept, "text/plain; charset=utf-8")
+	if capturedAccept != testCTTextPlainUTF8 {
+		t.Errorf("Accept header: got %q, want %q", capturedAccept, testCTTextPlainUTF8)
 	}
 }
 
@@ -295,7 +303,7 @@ func TestGetIncludeSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
 
 	var capturedAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/discovery" {
+		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(discoveryXML))
@@ -318,15 +326,15 @@ func TestGetIncludeSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
 	if _, err := client.GetIncludeSource(context.Background(), "/sap/bc/adt/oo/classes/ZCL_TEST", "testclasses"); err != nil {
 		t.Fatalf("GetIncludeSource: %v", err)
 	}
-	if capturedAccept != "text/plain; charset=utf-8" {
-		t.Errorf("Accept: got %q, want %q", capturedAccept, "text/plain; charset=utf-8")
+	if capturedAccept != testCTTextPlainUTF8 {
+		t.Errorf("Accept: got %q, want %q", capturedAccept, testCTTextPlainUTF8)
 	}
 }
 
 func TestSetSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
-	// Discovery advertises ONLY "text/plain" (no charset). This differs
-	// from the pre-refactor hardcoded "text/plain; charset=utf-8", so a
-	// captured Content-Type of "text/plain" proves discovery was
+	// Discovery advertises ONLY testCTTextPlain (no charset). This differs
+	// from the pre-refactor hardcoded testCTTextPlainUTF8, so a
+	// captured Content-Type of testCTTextPlain proves discovery was
 	// actually consulted.
 	discoveryXML := `<?xml version="1.0"?>
 <app:service xmlns:app="http://www.w3.org/2007/app">
@@ -339,7 +347,7 @@ func TestSetSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 
 	var capturedContentType, capturedAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/discovery" {
+		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(discoveryXML))
@@ -366,9 +374,9 @@ func TestSetSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetSource: %v", err)
 	}
-	// sourceContentType prefers "text/plain; charset=utf-8" but discovery
-	// only advertises "text/plain" → should return "text/plain".
-	want := "text/plain"
+	// sourceContentType prefers testCTTextPlainUTF8 but discovery
+	// only advertises testCTTextPlain → should return testCTTextPlain.
+	want := testCTTextPlain
 	if capturedContentType != want {
 		t.Errorf("Content-Type: got %q, want %q", capturedContentType, want)
 	}
@@ -378,9 +386,9 @@ func TestSetSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 }
 
 func TestSetIncludeSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
-	// Discovery advertises only "text/plain" (no charset). Since the
-	// pre-refactor hardcoded Content-Type was "text/plain; charset=utf-8",
-	// a captured Content-Type of plain "text/plain" proves discovery was
+	// Discovery advertises only testCTTextPlain (no charset). Since the
+	// pre-refactor hardcoded Content-Type was testCTTextPlainUTF8,
+	// a captured Content-Type of plain testCTTextPlain proves discovery was
 	// actually consulted.
 	discoveryXML := `<?xml version="1.0"?>
 <app:service xmlns:app="http://www.w3.org/2007/app">
@@ -393,7 +401,7 @@ func TestSetIncludeSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 
 	var capturedCT string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/discovery" {
+		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(discoveryXML))
@@ -419,7 +427,7 @@ func TestSetIncludeSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetIncludeSource: %v", err)
 	}
-	want := "text/plain"
+	want := testCTTextPlain
 	if capturedCT != want {
 		t.Errorf("Content-Type: got %q, want %q", capturedCT, want)
 	}
