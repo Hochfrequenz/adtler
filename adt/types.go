@@ -128,12 +128,25 @@ type QueryColumn struct {
 }
 
 // ADTError is returned when SAP ADT responds with an error status.
+//
+// Namespace and Type carry the SAP-stable identifier from <exc:exception>
+// envelopes (the ADT equivalent of an ABAP MSGID/MSGNO). They are populated
+// when the error body matches the modern <exc:exception> schema and remain
+// "" for legacy <ExceptionText> bodies, HTML error pages, and plain-text
+// fallbacks. Callers that branch on a specific exception (e.g. resource
+// locked) should compare ADTError.Type against an ExceptionType* constant
+// rather than substring-matching the localised Message.
 type ADTError struct {
 	StatusCode int
+	Namespace  string // e.g. "com.sap.adt" — empty if unknown
+	Type       string // e.g. "ExceptionResourceLocked" — empty if unknown
 	Message    string
 }
 
 func (e *ADTError) Error() string {
+	if e.Type != "" {
+		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
+	}
 	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 }
 

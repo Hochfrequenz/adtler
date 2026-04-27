@@ -137,3 +137,30 @@ func TestParseADTError_PlainText(t *testing.T) {
 		t.Errorf("Message: got %q, want trimmed plain text", adtErr.Message)
 	}
 }
+
+// TestADTError_Error_WithType verifies that when Type is populated, Error()
+// includes it in parentheses after the status code.
+func TestADTError_Error_WithType(t *testing.T) {
+	e := &ADTError{
+		StatusCode: 423,
+		Namespace:  "com.sap.adt",
+		Type:       "ExceptionResourceLocked",
+		Message:    "Object is locked by user X",
+	}
+	got := e.Error()
+	want := "SAP ADT error 423 (ExceptionResourceLocked): Object is locked by user X"
+	if got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+// TestADTError_Error_WithoutType verifies that when Type is empty, Error()
+// preserves the legacy format exactly.
+func TestADTError_Error_WithoutType(t *testing.T) {
+	e := &ADTError{StatusCode: 500, Message: "Internal server error"}
+	got := e.Error()
+	want := "SAP ADT error 500: Internal server error"
+	if got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
