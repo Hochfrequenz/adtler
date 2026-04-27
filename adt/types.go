@@ -127,6 +127,21 @@ type QueryColumn struct {
 	IsKey       bool
 }
 
+// Exception type IDs that adtler reacts to internally.
+//
+// These are the values SAP places in <exc:exception><type id="…"/> for the
+// exceptions adtler asserts against (retry logic, error classification).
+// They are stable across SAP releases and locales — far safer to compare
+// against than the localised <message> text. Consumer code is welcome to
+// compare against bare strings for IDs not listed here; new constants are
+// added on demand.
+const (
+	ExceptionTypeResourceInvalidLockHandle = "ExceptionResourceInvalidLockHandle"
+	ExceptionTypeResourceLocked            = "ExceptionResourceLocked"
+	ExceptionTypePreconditionFailed        = "ExceptionPreconditionFailed"
+	ExceptionTypeResourceWrongData         = "ExceptionResourceWrongData"
+)
+
 // ADTError is returned when SAP ADT responds with an error status.
 //
 // Namespace and Type carry the SAP-stable identifier from <exc:exception>
@@ -154,22 +169,36 @@ func (e *ADTError) Error() string {
 // ExceptionResourceInvalidLockHandle from SAP. Used by SetSource to
 // decide whether to retry with a different lock handle delivery
 // mechanism (header vs query param). See adtler#4.
+//
+// When the error carries a populated Type, this is a structural check
+// against ExceptionTypeResourceInvalidLockHandle. When Type is empty
+// (legacy <ExceptionText> responses), the function falls back to the
+// status-code check that predates the structured envelope support.
 func isInvalidLockHandle(err error) bool {
 	var adtErr *ADTError
-	if errors.As(err, &adtErr) {
-		return adtErr.StatusCode == 423
+	if !errors.As(err, &adtErr) {
+		return false
 	}
-	return false
+	if adtErr.Type != "" {
+		return adtErr.Type == ExceptionTypeResourceInvalidLockHandle
+	}
+	return adtErr.StatusCode == 423
 }
 
 // isPreconditionFailed returns true if the error is a 412
 // ExceptionPreconditionFailed from SAP. Used by SetSource to retry
 // with a re-fetched ETag when the original ETag doesn't match what
 // the server expects (e.g. TABL charset mismatch). See adtler#15.
+//
+// Type-aware in the same way as isInvalidLockHandle: prefers Type
+// when present, falls back to status code for legacy responses.
 func isPreconditionFailed(err error) bool {
 	var adtErr *ADTError
-	if errors.As(err, &adtErr) {
-		return adtErr.StatusCode == 412
+	if !errors.As(err, &adtErr) {
+		return false
 	}
-	return false
+	if adtErr.Type != "" {
+		return adtErr.Type == ExceptionTypePreconditionFailed
+	}
+	return adtErr.StatusCode == 412
 }

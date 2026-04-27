@@ -297,3 +297,96 @@ func TestParseADTError_LegacyEnvelopeNoNamespaceOrType(t *testing.T) {
 		t.Errorf("Message: got %q", adtErr.Message)
 	}
 }
+
+// TestIsInvalidLockHandle_TypeAware exercises the rewritten predicate:
+// when Type is populated, the predicate matches on Type, not status code.
+// When Type is empty (legacy responses), the predicate falls back to the
+// status-code check.
+func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "423 with InvalidLockHandle type → true",
+			err:  &ADTError{StatusCode: 423, Type: ExceptionTypeResourceInvalidLockHandle, Message: "x"},
+			want: true,
+		},
+		{
+			name: "423 with ResourceLocked type → false (different exception)",
+			err:  &ADTError{StatusCode: 423, Type: ExceptionTypeResourceLocked, Message: "x"},
+			want: false,
+		},
+		{
+			name: "423 with empty Type → true (legacy fallback)",
+			err:  &ADTError{StatusCode: 423, Message: "x"},
+			want: true,
+		},
+		{
+			name: "500 with empty Type → false",
+			err:  &ADTError{StatusCode: 500, Message: "x"},
+			want: false,
+		},
+		{
+			name: "non-ADTError → false",
+			err:  errors.New("some other error"),
+			want: false,
+		},
+		{
+			name: "nil → false",
+			err:  nil,
+			want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isInvalidLockHandle(tc.err); got != tc.want {
+				t.Errorf("isInvalidLockHandle(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsPreconditionFailed_TypeAware mirrors TestIsInvalidLockHandle_TypeAware
+// for the 412 / ExceptionPreconditionFailed predicate.
+func TestIsPreconditionFailed_TypeAware(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "412 with PreconditionFailed type → true",
+			err:  &ADTError{StatusCode: 412, Type: ExceptionTypePreconditionFailed, Message: "x"},
+			want: true,
+		},
+		{
+			name: "412 with WrongData type → false (different exception)",
+			err:  &ADTError{StatusCode: 412, Type: ExceptionTypeResourceWrongData, Message: "x"},
+			want: false,
+		},
+		{
+			name: "412 with empty Type → true (legacy fallback)",
+			err:  &ADTError{StatusCode: 412, Message: "x"},
+			want: true,
+		},
+		{
+			name: "500 with empty Type → false",
+			err:  &ADTError{StatusCode: 500, Message: "x"},
+			want: false,
+		},
+		{
+			name: "non-ADTError → false",
+			err:  errors.New("some other error"),
+			want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPreconditionFailed(tc.err); got != tc.want {
+				t.Errorf("isPreconditionFailed(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
