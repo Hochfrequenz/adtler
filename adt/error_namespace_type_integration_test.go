@@ -35,6 +35,8 @@ func TestADTError_NamespaceTypeExtraction_MultiSystem(t *testing.T) {
 				t.Fatalf("[%s] expected LockObject on non-existent URI to fail, got nil", sys.Name)
 			}
 
+			t.Logf("[%s] raw error: %v", sys.Name, err)
+
 			var adtErr *adt.ADTError
 			if !errors.As(err, &adtErr) {
 				t.Fatalf("[%s] expected *adt.ADTError, got %T: %v", sys.Name, err, err)
@@ -52,7 +54,8 @@ func TestADTError_NamespaceTypeExtraction_MultiSystem(t *testing.T) {
 					sys.Name, adtErr.Type, err)
 			}
 			if adtErr.Message == "" {
-				t.Errorf("[%s] expected non-empty Message, got empty", sys.Name)
+				t.Errorf("[%s] expected non-empty Message, got empty (full error: %v)",
+					sys.Name, err)
 			}
 		})
 	}
