@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -106,16 +107,19 @@ func (c *httpClient) SetTextElements(ctx context.Context, objectURI string, symb
 // that holds the lock. Transport, when present, is passed as ?corrNr= and is
 // required by S/4 for writes to transport-managed packages.
 func (c *httpClient) writeTextElementSource(ctx context.Context, path, contentType, body, lockHandle, transport string) error {
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
-	}
+	params := url.Values{}
 	if lockHandle != "" {
-		path += sep + "lockHandle=" + lockHandle
-		sep = "&"
+		params.Set("lockHandle", lockHandle)
 	}
 	if transport != "" {
-		path += sep + "corrNr=" + transport
+		params.Set("corrNr", transport)
+	}
+	if len(params) > 0 {
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		path += sep + params.Encode()
 	}
 
 	resp, err := c.doMutate(ctx, http.MethodPut, path, strings.NewReader(body),
