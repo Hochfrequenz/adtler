@@ -502,34 +502,80 @@ var htmlDetailTextRe = regexp.MustCompile(`<p class="detailText">([^<]*)</p>`)
 
 // parseADTError reads an error response body and returns an *ADTError.
 //
-// The body is parsed in three layers:
-//  1. As an ADT framework <ExceptionText><message>…</message></ExceptionText>
-//     envelope (the normal case for ADT-aware endpoints).
-//  2. As a SAP "Application Server Error" HTML page (the case for generic
-//     SAP HTTP server failures — e.g. R/3 ADT activate on a non-existent
-//     program). adtler#13 / mcp-server-abap#292 documents how this used to
-//     dump several KB of HTML, CSS, and base64-encoded SAP-logo PNG into
-//     ADTError.Message; this layer extracts only the user-facing fragments.
-//  3. As-is (trimmed) for anything else, preserving prior behaviour for
+// The body is parsed in four layers:
+//  1. As an <exc:exception> envelope. Two SAP XML namespaces share this root
+//     local name: the modern schema
+//     (http://www.sap.com/abapxml/types/communicationframework) and an older
+//     schema (http://www.sap.com/adt/exceptions, used by some refactoring
+//     endpoints). A single unmarshal claims both. Namespace and Type are only
+//     populated when the XML namespace URI matches the modern schema — the
+//     older schema does not carry those children, and a caller reading
+//     adtErr.Type from an old-namespace body would be confused by an empty
+//     value next to a non-empty Message. The old namespace yields Message-only.
+//  2. As the legacy ADT framework <ExceptionText><message>…</message>
+//     envelope — populates Message only.
+//  3. As a SAP "Application Server Error" HTML page — see adtler#13 /
+//     mcp-server-abap#292 for the regression this layer prevents (dumping
+//     several KB of HTML, CSS, and base64-encoded PNG into the message).
+//  4. As-is (trimmed) for anything else, preserving prior behaviour for
 //     non-XML, non-HTML bodies.
+//
+// Layer 1 falls through to subsequent layers when <message> is empty or
+// missing — even if <namespace> and <type> children were present. This is
+// rare in practice (SAP always sends <message> for non-trivial errors) but
+// means a hypothetical <exc:exception> body with structured identifiers but
+// no message text would degrade to whatever later layers can extract.
 func parseADTError(statusCode int, body io.Reader) error {
 	data, _ := io.ReadAll(body)
 
-	// Layer 1: ADT framework XML envelope.
-	var xmlErr struct {
+	// Layer 1: <exc:exception> envelope. Both the modern schema
+	// (http://www.sap.com/abapxml/types/communicationframework) and an
+	// older SAP namespace (http://www.sap.com/adt/exceptions, used by
+	// some refactoring endpoints) share the same root local name, so a
+	// single unmarshal claims both. Namespace and Type are only
+	// populated when the XML namespace URI matches the modern schema —
+	// the older schema does not carry those children, and a caller
+	// reading adtErr.Type from an old-namespace body would be confused
+	// by an empty value next to a non-empty Message.
+	const modernExcNS = "http://www.sap.com/abapxml/types/communicationframework"
+	var excEnv struct {
+		XMLName   xml.Name `xml:"exception"`
+		Namespace struct {
+			ID string `xml:"id,attr"`
+		} `xml:"namespace"`
+		Type struct {
+			ID string `xml:"id,attr"`
+		} `xml:"type"`
+		Message string `xml:"message"`
+	}
+	if err := xml.Unmarshal(data, &excEnv); err == nil && excEnv.Message != "" {
+		if excEnv.XMLName.Space == modernExcNS {
+			return &ADTError{
+				StatusCode: statusCode,
+				Namespace:  excEnv.Namespace.ID,
+				Type:       excEnv.Type.ID,
+				Message:    excEnv.Message,
+			}
+		}
+		// Old-namespace envelope: extract message only, leave Namespace/Type empty.
+		return &ADTError{StatusCode: statusCode, Message: excEnv.Message}
+	}
+
+	// Layer 2: legacy <ExceptionText> envelope. Namespace/Type stay empty.
+	var legacy struct {
 		XMLName xml.Name `xml:"ExceptionText"`
 		Message string   `xml:"message"`
 	}
-	if err := xml.Unmarshal(data, &xmlErr); err == nil && xmlErr.Message != "" {
-		return &ADTError{StatusCode: statusCode, Message: xmlErr.Message}
+	if err := xml.Unmarshal(data, &legacy); err == nil && legacy.Message != "" {
+		return &ADTError{StatusCode: statusCode, Message: legacy.Message}
 	}
 
-	// Layer 2: SAP HTML "Application Server Error" page.
+	// Layer 3: SAP HTML "Application Server Error" page.
 	if msg := parseHTMLErrorBody(data); msg != "" {
 		return &ADTError{StatusCode: statusCode, Message: msg}
 	}
 
-	// Layer 3: any other body, trimmed.
+	// Layer 4: any other body, trimmed.
 	return &ADTError{StatusCode: statusCode, Message: strings.TrimSpace(string(data))}
 }
 
