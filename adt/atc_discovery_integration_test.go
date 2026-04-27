@@ -9,19 +9,24 @@ import (
 	"time"
 )
 
-// TestRunATCCheck_DiscoveryDriven_Integration verifies that after the
-// discovery-first content-negotiation refactor (adtler#35), RunATCCheck
-// still succeeds end-to-end against both R/3 and S/4.
+// TestRunATCCheck_DiscoveryDriven_Integration verifies that RunATCCheck
+// succeeds end-to-end against both R/3 and S/4 using the canonical 3-step
+// Eclipse-style flow:
 //
-// Historically RunATCCheck on R/3 returned HTTP 500 because the client sent
-// a hardcoded Content-Type that R/3 did not accept (adtler#12). With the
-// discovery-driven transport, the Content-Type is negotiated from the ATC
-// collection's advertised accept types, which should make the call succeed
-// on R/3 as well as S/4.
+//  1. POST /sap/bc/adt/atc/worklists?checkVariant=DEFAULT (text/plain)
+//  2. POST /sap/bc/adt/atc/runs?worklistId={id}            (XML body)
+//  3. GET  /sap/bc/adt/atc/worklists/{id}                  (findings)
+//
+// Historically RunATCCheck on R/3 returned HTTP 500 with empty body
+// (adtler#12). The earlier discovery-first content-negotiation refactor
+// (adtler#35) did not fix this. Root cause: the previous 2-step shortcut
+// posted /runs with a placeholder worklistId="0000000000" that R/3 does
+// not accept. The 3-step flow creates a real worklist first, matching
+// abap-adt-api / Eclipse ADT, and works on both R/3 and S/4.
 //
 // Uses eachSystem so a single test function validates behaviour against
-// every whitelisted SAP system (R/3 and S/4) in one run. On R/3 this may
-// close adtler#12; on S/4 it is a regression guard.
+// every whitelisted SAP system (R/3 and S/4) in one run. Closes adtler#12
+// when green on R/3.
 func TestRunATCCheck_DiscoveryDriven_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
