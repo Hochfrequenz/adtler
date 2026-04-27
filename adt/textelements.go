@@ -99,6 +99,12 @@ func (c *httpClient) SetTextElements(ctx context.Context, objectURI string, symb
 	return nil
 }
 
+// writeTextElementSource PUTs a text-element body. The textelements endpoint
+// requires the lock handle as a ?lockHandle= URL parameter (unlike SetSource,
+// which prefers it as a header on R/3). The X-sap-adt-sessiontype: stateful
+// header is required to keep the request bound to the same SAP work process
+// that holds the lock. Transport, when present, is passed as ?corrNr= and is
+// required by S/4 for writes to transport-managed packages.
 func (c *httpClient) writeTextElementSource(ctx context.Context, path, contentType, body, lockHandle, transport string) error {
 	sep := "?"
 	if strings.Contains(path, "?") {
@@ -114,7 +120,9 @@ func (c *httpClient) writeTextElementSource(ctx context.Context, path, contentTy
 
 	resp, err := c.doMutate(ctx, http.MethodPut, path, strings.NewReader(body),
 		map[string]string{
-			"Content-Type": contentType,
+			"Content-Type":          contentType,
+			"Accept":                contentType,
+			"X-sap-adt-sessiontype": "stateful",
 		},
 	)
 	if err != nil {
