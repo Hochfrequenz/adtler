@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -249,6 +250,14 @@ func (c *httpClient) Logout(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.csrfToken = ""
+	// Replace the cookie jar with a fresh one so no stale session cookies
+	// leak into the next request. The old jar may still hold SAP_SESSIONID_*
+	// and sap-usercontext cookies that reference the now-terminated server
+	// session — sending them alongside new cookies on some SAP versions
+	// confuses the session manager.
+	jar, _ := cookiejar.New(nil)
+	c.http.Jar = jar
+	c.httpLong.Jar = jar
 	c.mu.Unlock()
 	return nil
 }
@@ -279,6 +288,25 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	c.csrfToken = resp.Header.Get("X-CSRF-Token")
 	c.hasSecureCookies = hasSecureCookieOnHTTP(c.cfg.Host, resp.Header)
 	return nil
+}
+
+// ensureCSRF populates the CSRF token (and, as a side effect, the
+// discovery cache) exactly once. It acquires c.mu for the duration
+// of the check, so callers MUST NOT already hold c.mu. Subsequent
+// calls after the token is populated are a cheap mutex-only no-op.
+//
+// Call this from any method that needs discovery data available
+// BEFORE the request-level preflight inside doReadWith/doMutateWith
+// has a chance to run — e.g. callers that compute content-type
+// headers via sourceContentType or acceptHeaderForURI before
+// invoking doRead/doMutate.
+func (c *httpClient) ensureCSRF(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.csrfToken != "" {
+		return nil
+	}
+	return c.fetchCSRFToken(ctx)
 }
 
 // hasSecureCookieOnHTTP returns true if the response sets a cookie with the
@@ -321,6 +349,11 @@ func (c *httpClient) doReadLong(ctx context.Context, path string, headers map[st
 
 func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path string, headers map[string]string) (*http.Response, error) {
 	path = encodeNamespacePath(path)
+
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, err
+	}
+
 	makeReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+path, nil)
 		if err != nil {
@@ -398,13 +431,10 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		return bytes.NewReader(bodyBytes)
 	}
 
-	c.mu.Lock()
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, err
 	}
+	c.mu.Lock()
 	token := c.csrfToken
 	c.mu.Unlock()
 
@@ -463,17 +493,131 @@ func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method
 	return hc.Do(req)
 }
 
-// parseADTError reads an XML error response body and returns an *ADTError.
+// htmlErrorTextHeaderRe matches the SAP "Application Server Error" page's
+// header line, e.g. <p class="errorTextHeader">500 Internal Server Error</p>.
+var htmlErrorTextHeaderRe = regexp.MustCompile(`<p class="errorTextHeader">([^<]*)</p>`)
+
+// htmlDetailTextRe matches the SAP "Application Server Error" page's detail
+// lines, e.g. <p class="detailText">Internal error code 8.</p>.
+var htmlDetailTextRe = regexp.MustCompile(`<p class="detailText">([^<]*)</p>`)
+
+// parseADTError reads an error response body and returns an *ADTError.
+//
+// The body is parsed in four layers:
+//  1. As an <exc:exception> envelope. Two SAP XML namespaces share this root
+//     local name: the modern schema
+//     (http://www.sap.com/abapxml/types/communicationframework) and an older
+//     schema (http://www.sap.com/adt/exceptions, used by some refactoring
+//     endpoints). A single unmarshal claims both. Namespace and Type are only
+//     populated when the XML namespace URI matches the modern schema — the
+//     older schema does not carry those children, and a caller reading
+//     adtErr.Type from an old-namespace body would be confused by an empty
+//     value next to a non-empty Message. The old namespace yields Message-only.
+//  2. As the legacy ADT framework <ExceptionText><message>…</message>
+//     envelope — populates Message only.
+//  3. As a SAP "Application Server Error" HTML page — see adtler#13 /
+//     mcp-server-abap#292 for the regression this layer prevents (dumping
+//     several KB of HTML, CSS, and base64-encoded PNG into the message).
+//  4. As-is (trimmed) for anything else, preserving prior behaviour for
+//     non-XML, non-HTML bodies.
+//
+// Layer 1 falls through to subsequent layers when <message> is empty or
+// missing — even if <namespace> and <type> children were present. This is
+// rare in practice (SAP always sends <message> for non-trivial errors) but
+// means a hypothetical <exc:exception> body with structured identifiers but
+// no message text would degrade to whatever later layers can extract.
 func parseADTError(statusCode int, body io.Reader) error {
 	data, _ := io.ReadAll(body)
-	var xmlErr struct {
+
+	// Layer 1: <exc:exception> envelope. Both the modern schema
+	// (http://www.sap.com/abapxml/types/communicationframework) and an
+	// older SAP namespace (http://www.sap.com/adt/exceptions, used by
+	// some refactoring endpoints) share the same root local name, so a
+	// single unmarshal claims both. Namespace and Type are only
+	// populated when the XML namespace URI matches the modern schema —
+	// the older schema does not carry those children, and a caller
+	// reading adtErr.Type from an old-namespace body would be confused
+	// by an empty value next to a non-empty Message.
+	const modernExcNS = "http://www.sap.com/abapxml/types/communicationframework"
+	var excEnv struct {
+		XMLName   xml.Name `xml:"exception"`
+		Namespace struct {
+			ID string `xml:"id,attr"`
+		} `xml:"namespace"`
+		Type struct {
+			ID string `xml:"id,attr"`
+		} `xml:"type"`
+		Message string `xml:"message"`
+	}
+	if err := xml.Unmarshal(data, &excEnv); err == nil && excEnv.Message != "" {
+		if excEnv.XMLName.Space == modernExcNS {
+			return &ADTError{
+				StatusCode: statusCode,
+				Namespace:  excEnv.Namespace.ID,
+				Type:       excEnv.Type.ID,
+				Message:    excEnv.Message,
+			}
+		}
+		// Old-namespace envelope: extract message only, leave Namespace/Type empty.
+		return &ADTError{StatusCode: statusCode, Message: excEnv.Message}
+	}
+
+	// Layer 2: legacy <ExceptionText> envelope. Namespace/Type stay empty.
+	var legacy struct {
 		XMLName xml.Name `xml:"ExceptionText"`
 		Message string   `xml:"message"`
 	}
-	if err := xml.Unmarshal(data, &xmlErr); err == nil && xmlErr.Message != "" {
-		return &ADTError{StatusCode: statusCode, Message: xmlErr.Message}
+	if err := xml.Unmarshal(data, &legacy); err == nil && legacy.Message != "" {
+		return &ADTError{StatusCode: statusCode, Message: legacy.Message}
 	}
+
+	// Layer 3: SAP HTML "Application Server Error" page.
+	if msg := parseHTMLErrorBody(data); msg != "" {
+		return &ADTError{StatusCode: statusCode, Message: msg}
+	}
+
+	// Layer 4: any other body, trimmed.
 	return &ADTError{StatusCode: statusCode, Message: strings.TrimSpace(string(data))}
+}
+
+// parseHTMLErrorBody returns a short, human-readable summary of an SAP HTML
+// error page, or "" if the body doesn't look like one. The expected page
+// shape is the standard <p class="errorTextHeader"> + several
+// <p class="detailText"> lines that the SAP HTTP server emits for generic
+// 4xx/5xx failures.
+func parseHTMLErrorBody(data []byte) string {
+	s := strings.TrimSpace(string(data))
+	if s == "" {
+		return ""
+	}
+	head := s
+	if len(head) > 64 {
+		head = head[:64]
+	}
+	headLower := strings.ToLower(head)
+	if !strings.HasPrefix(headLower, "<!doctype html") && !strings.HasPrefix(headLower, "<html") {
+		return ""
+	}
+
+	var parts []string
+	if m := htmlErrorTextHeaderRe.FindStringSubmatch(s); m != nil {
+		if t := strings.TrimSpace(m[1]); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	for _, m := range htmlDetailTextRe.FindAllStringSubmatch(s, -1) {
+		if t := strings.TrimSpace(m[1]); t != "" {
+			parts = append(parts, t)
+		}
+	}
+
+	if len(parts) == 0 {
+		// It's HTML, but not the expected SAP error layout. Don't dump
+		// the whole page; tell the caller it was an HTML response so they
+		// can investigate further.
+		return "SAP returned an HTML error page (no parseable detail)"
+	}
+	return strings.Join(parts, " — ")
 }
 
 // encodeNamespacePath detects SAP namespace objects in ADT paths and

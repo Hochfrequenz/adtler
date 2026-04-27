@@ -122,7 +122,13 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 		return fmt.Errorf("CreateObject: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == 404 {
+	// R/3 systems either return 404 (endpoint missing entirely) or 415
+	// (endpoint exists but the v2 content type is rejected) for DDIC create
+	// requests. Treat both as "DDIC create not available on this system" so
+	// the user gets the same friendly hint regardless of which way the older
+	// release fails. See adtler#16 / mcp-server-abap#295 (DTEL on R/3 returned
+	// the raw 415 because the original guard only matched 404).
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnsupportedMediaType {
 		ot := strings.ToUpper(objectType)
 		if ot == objTypeDTEL || ot == objTypeDOMA || ot == objTypeTABL || ot == objTypeDDLS {
 			return fmt.Errorf("CreateObject: the /sap/bc/adt/ddic/ endpoint for %s is not available on this SAP system — "+
@@ -130,7 +136,38 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 				"On older ECC systems, create DDIC objects via transaction SE11", ot)
 		}
 	}
-	return checkResponse(resp)
+	if err := checkResponse(resp); err != nil {
+		return err
+	}
+
+	// WORKAROUND for adtler#4 (mcp-server-abap#282):
+	//
+	// On S/4, CreateObject leaves a session-bound exclusive enqueue on
+	// TRDIR/<name> (lock object ESRDIRE, Session-Schlüssel = T67_...) that
+	// the SAP server refuses to release for any subsequent call from the
+	// same logical client. The next LockObject or SetSource lands in a
+	// DIFFERENT SAP session and is rejected with 423 InvalidLockHandle —
+	// even though it's the same user, same cookies, same TCP connection.
+	// The entire create → write → activate chain is broken on S/4.
+	// ECC/R/3 is unaffected (clean release at request end).
+	//
+	// The SM12 evidence (issue #4) proved the enqueue is anchored to a
+	// specific SAP work-process session. Logging out terminates that
+	// session and releases all its enqueues. The next call re-authenticates
+	// via fetchCSRFToken (the same path used on first-ever call).
+	//
+	// This is a deliberate DIRTY FIX for fast value delivery. The proper
+	// solution is stateful session support (X-sap-adt-sessiontype: stateful)
+	// where CreateObject and the subsequent LockObject/SetSource share the
+	// same SAP session. That requires architectural changes to the HTTP
+	// client's session management and is tracked in adtler#4.
+	//
+	// Cost: ~1 extra HTTP round-trip per CreateObject (logoff + re-auth
+	// on next call). CreateObject is called once per new ABAP object, so
+	// the latency impact is negligible.
+	_ = c.Logout(ctx)
+
+	return nil
 }
 
 func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error {
@@ -211,6 +248,16 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	accept := c.acceptHeaderForURI(objectURI)
 	etagResp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
 	if err != nil {
+		return fmt.Errorf("DeleteObject fetch ETag: %w", err)
+	}
+	// Check the HTTP status before reading the ETag header. doRead only
+	// surfaces transport-level errors; an HTTP 4xx response (e.g. S/4 returning
+	// 400 ExceptionResourceWrongData for a CLAS bare-URI GET) flows through as
+	// a "successful" response with no ETag header, and the old code surfaced
+	// the misleading "no ETag returned" instead of the real SAP error.
+	// See adtler#19 / mcp-server-abap#299.
+	if err := checkResponse(etagResp); err != nil {
+		_ = etagResp.Body.Close()
 		return fmt.Errorf("DeleteObject fetch ETag: %w", err)
 	}
 	etag := etagResp.Header.Get("ETag")

@@ -110,3 +110,39 @@ func TestAcceptHeaderForURI_UnknownURI(t *testing.T) {
 		t.Errorf("expected generic xml, got %q", got)
 	}
 }
+
+// TestAcceptHeaderForURI_FUGRInclude regression-tests adtler#17:
+// S/4 returns HTTP 406 when GetObjectInfo for a function group include URI
+// sends the parent group's Accept header (functions.groups.v3+xml). The
+// include sub-resource needs functions.fincludes.v2+xml. Without the
+// special case in acceptHeaderForURI, the longest-prefix loop returns the
+// parent type for both the bare FUGR and its includes — wrong for includes.
+func TestAcceptHeaderForURI_FUGRInclude(t *testing.T) {
+	c := &httpClient{}
+	want := "application/vnd.sap.adt.functions.fincludes.v2+xml, application/xml"
+
+	got := c.acceptHeaderForURI("/sap/bc/adt/functions/groups/zmy_fg/includes/lzmy_fgtop")
+	if got != want {
+		t.Errorf("FUGR include: got %q, want %q", got, want)
+	}
+
+	// Also verify with a different (uppercase, namespaced) include name.
+	got = c.acceptHeaderForURI("/sap/bc/adt/functions/groups/ZMY_FG/includes/LZMY_FGUXX")
+	if got != want {
+		t.Errorf("uppercase FUGR include: got %q, want %q", got, want)
+	}
+}
+
+// TestAcceptHeaderForURI_FUGRBare guards the FUGR include fix from over-
+// reaching: the bare function group URI must still return the *group* type
+// (functions.groups.v3+xml), not the include type. The include special-case
+// must only fire when "/includes/" is actually present in the path.
+func TestAcceptHeaderForURI_FUGRBare(t *testing.T) {
+	c := &httpClient{}
+	want := "application/vnd.sap.adt.functions.groups.v3+xml, application/xml"
+
+	got := c.acceptHeaderForURI("/sap/bc/adt/functions/groups/zmy_fg")
+	if got != want {
+		t.Errorf("bare FUGR: got %q, want %q", got, want)
+	}
+}

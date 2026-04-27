@@ -131,7 +131,7 @@ func allEndpointsHandler() http.Handler {
 		emptyCheckReports  = `<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun"/>`
 		emptyRunResult     = `<runResult></runResult>`
 		emptyTransports    = `<root><workbench><modifiable/><released/></workbench><customizing><modifiable/><released/></customizing></root>`
-		emptyCompletions   = `<completions></completions>`
+		emptyCompletions   = `<codecompletion:completions xmlns:codecompletion="http://www.sap.com/adt/codecompletion"></codecompletion:completions>`
 		activatePath       = "/sap/bc/adt/activation"
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +165,7 @@ func allEndpointsHandler() http.Handler {
 		case path == "/sap/bc/adt/programs/programs/ZTEST":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<program:abapProgram adtcore:name="ZTEST" adtcore:type="PROG/P" adtcore:description="" xmlns:program="http://www.sap.com/adt/programs/programs" xmlns:adtcore="http://www.sap.com/adt/core"><adtcore:packageRef adtcore:name=""/></program:abapProgram>`))
-		case path == "/sap/bc/adt/checkruns":
+		case path == checkrunsPath:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyCheckReports))
 		case path == "/sap/bc/adt/abapunit/testruns":
@@ -306,7 +306,7 @@ func TestRegistryDelegatesAllMethods(t *testing.T) {
 func TestLogoutAllCallsAllClients(t *testing.T) {
 	logoutCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/public/bc/icf/logoff" {
+		if r.URL.Path == logoffPath {
 			logoutCount++
 		}
 		w.WriteHeader(http.StatusOK)

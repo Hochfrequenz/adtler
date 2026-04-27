@@ -14,6 +14,18 @@ import (
 
 const csrfEndpoint = "/sap/bc/adt/discovery"
 
+// checkrunsPath is the ADT syntax-check / ATC endpoint used across
+// multiple test files. Hoisted to a constant to satisfy goconst.
+const checkrunsPath = "/sap/bc/adt/checkruns"
+
+// logoffPath is the ICF logoff endpoint used by Logout and by
+// CreateObject's post-create session cleanup. Hoisted for goconst.
+const logoffPath = "/sap/public/bc/icf/logoff"
+
+// progType is the ADT object type for ABAP programs, used in assertions
+// across multiple test files. Hoisted for goconst.
+const progType = "PROG/P"
+
 func newTestConfig(host string) sapmcpconfig.SAPSystem {
 	return sapmcpconfig.SAPSystem{
 		Host:     host,
@@ -243,5 +255,43 @@ func TestOAuth2TokenRefreshOn401(t *testing.T) {
 	}
 	if callCount.Load() != 2 {
 		t.Errorf("expected 2 calls (initial + retry), got %d", callCount.Load())
+	}
+}
+
+func TestDoReadLoadsDiscoveryBeforeFirstRead(t *testing.T) {
+	var discoveryCalls atomic.Int32
+	var readCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			discoveryCalls.Add(1)
+			w.Header().Set("X-CSRF-Token", "tok")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><app:service xmlns:app="http://www.w3.org/2007/app"/>`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/source/main") {
+			readCalls.Add(1)
+			w.Header().Set("ETag", `"etag-xyz"`)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("REPORT ZTEST."))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := newTestConfig(srv.URL)
+	client := adt.NewClient(cfg)
+
+	_, err := client.GetSource(context.Background(), "/sap/bc/adt/programs/programs/ZTEST")
+	if err != nil {
+		t.Fatalf("GetSource: %v", err)
+	}
+	if discoveryCalls.Load() != 1 {
+		t.Errorf("discovery calls: got %d, want 1", discoveryCalls.Load())
+	}
+	if readCalls.Load() != 1 {
+		t.Errorf("read calls: got %d, want 1", readCalls.Load())
 	}
 }

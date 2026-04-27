@@ -12,8 +12,96 @@ import (
 	"sync"
 )
 
+// FetchETag reads the ETag for any object URI by GETting the bare URI with
+// the type-appropriate Accept header (via acceptHeaderForURI / discovery).
+// This is the same pattern DeleteObject uses for optimistic locking.
+//
+// Unlike GetSource (which hardcodes /source/main and text/plain), this works
+// for ALL object types including CLAS, DTEL, DOMA, and TABL — because it
+// delegates content negotiation to acceptHeaderForURI which already knows
+// the correct vendor MIME type per URI prefix.
+//
+// Used as a fallback by LockMap.ResolveETag when GetSource fails (e.g. 400
+// for CLAS on S/4, 404 for DTEL/DOMA). See adtler#9, adtler#14.
+func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, error) {
+	accept := c.acceptHeaderForURI(objectURI)
+	resp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
+	if err != nil {
+		return "", fmt.Errorf("FetchETag: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := checkResponse(resp); err != nil {
+		return "", fmt.Errorf("FetchETag: %w", err)
+	}
+	_, _ = io.ReadAll(resp.Body) // drain body to allow connection reuse
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		return "", fmt.Errorf("FetchETag: no ETag returned for %s", objectURI)
+	}
+	return etag, nil
+}
+
+// contentTypeTextPlain is the default Accept / Content-Type for source
+// operations — SAP source endpoints accept bare "text/plain". Used as
+// the fallback when discovery advertises nothing for the endpoint.
+const contentTypeTextPlain = "text/plain"
+
+// contentTypeTextPlainUTF8 is the charset-qualified source content type
+// that SAP embeds in ETags for some object types (see adtler#15). It is
+// also the preferred Accept type when discovery advertises it.
+const contentTypeTextPlainUTF8 = "text/plain; charset=utf-8"
+
+// sourceContentType returns the Accept / Content-Type for source operations
+// on the given endpoint (typically an object URI). It resolves the longest
+// matching discovery-cache key and picks the first preferred type the server
+// advertises; if nothing matches, it falls back to contentTypeTextPlain.
+//
+// Unlike acceptHeaderForURI (which does longest-prefix over the hardcoded
+// objectTypeAcceptHeaders map and then consults discovery), this helper is
+// a pure discovery-driven lookup. The two are intentionally separate: source
+// operations historically hardcoded "text/plain" without any vendor-type
+// map, so there is no hardcoded catalog to prefix-match against.
+//
+// The prefix resolution and content-type selection run under a single
+// c.mu acquisition so the discovery snapshot stays consistent.
+func (c *httpClient) sourceContentType(endpoint string) string {
+	preferred := []string{contentTypeTextPlainUTF8, contentTypeTextPlain}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Longest-prefix match against discovery cache keys. Callers pass
+	// bare object URIs (e.g. "/sap/bc/adt/programs/programs/ZTEST") but
+	// discovery is keyed by collection href (e.g. "/sap/bc/adt/programs/programs").
+	var accepted []string
+	bestLen := 0
+	for key, types := range c.discovery {
+		if len(key) > bestLen && strings.HasPrefix(endpoint, key) {
+			bestLen = len(key)
+			accepted = types
+		}
+	}
+	if len(accepted) == 0 {
+		return contentTypeTextPlain
+	}
+	acceptedSet := make(map[string]bool, len(accepted))
+	for _, a := range accepted {
+		acceptedSet[a] = true
+	}
+	for _, p := range preferred {
+		if acceptedSet[p] {
+			return p
+		}
+	}
+	return contentTypeTextPlain
+}
+
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
-	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": "text/plain"})
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("GetSource: %w", err)
+	}
+	accept := c.sourceContentType(objectURI)
+	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": accept})
 	if err != nil {
 		return nil, fmt.Errorf("GetSource: %w", err)
 	}
@@ -149,7 +237,11 @@ func (c *httpClient) GetIncludeSource(ctx context.Context, objectURI, include st
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.doRead(ctx, path, map[string]string{"Accept": "text/plain"})
+	if err := c.ensureCSRF(ctx); err != nil {
+		return nil, fmt.Errorf("GetIncludeSource: %w", err)
+	}
+	accept := c.sourceContentType(objectURI)
+	resp, err := c.doRead(ctx, path, map[string]string{"Accept": accept})
 	if err != nil {
 		return nil, fmt.Errorf("GetIncludeSource: %w", err)
 	}
@@ -169,9 +261,13 @@ func (c *httpClient) SetIncludeSource(ctx context.Context, objectURI, include, s
 	if err != nil {
 		return "", err
 	}
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("SetIncludeSource: %w", err)
+	}
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type":          "text/plain; charset=utf-8",
-		"Accept":                "text/plain",
+		"Content-Type":          ct,
+		"Accept":                ct,
 		"X-sap-adt-sessiontype": "stateful",
 	}
 	if etag != "" {
@@ -233,10 +329,66 @@ func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandl
 }
 
 func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("SetSource: %w", err)
+	}
+	// R/3 and S/4 use DIFFERENT lock handle delivery mechanisms:
+	//   - R/3 reads the X-SAP-Lock-Handle HTTP header
+	//   - S/4 reads the ?lockHandle= query parameter
+	// Sending both simultaneously doesn't work: R/3 treats the query
+	// parameter as authoritative and rejects it.
+	//
+	// Strategy: try header delivery first (R/3 path). If the server
+	// returns 423 ExceptionResourceInvalidLockHandle, retry with query
+	// parameter delivery (S/4 path). R/3 succeeds on the first try;
+	// S/4 succeeds on the retry. One extra round-trip on S/4 only.
+	//
+	// See adtler#4 integration test history:
+	//   v2 (header only): R/3 ✅, S/4 ❌ 423
+	//   v3 (query only):  R/3 ❌ 423, S/4 ✅
+	//   v4 (both):        R/3 ❌ (query poisons), S/4 ✅
+	//   v5 (header-first + retry): R/3 ✅, S/4 ✅  ← this version
+	newETag, err := c.trySetSource(ctx, objectURI, source, lockHandle, transport, etag)
+	if err == nil {
+		return newETag, nil
+	}
+
+	// ETag charset fix (adtler#15 / mcp-server-abap#294):
+	//
+	// SAP embeds the Content-Type INTO the ETag value. GetSource sends
+	// Accept: text/plain and gets an ETag like "...text/plain2". But
+	// PUT /source/main validates against "...text/plain; charset=utf-82"
+	// — the full Content-Type with charset qualifier. The GET endpoint
+	// ignores charset in Accept and always returns the short form.
+	//
+	// Fix: on 412, patch the ETag by inserting "; charset=utf-8" after
+	// "text/plain" and retry. This is SAP-specific string manipulation
+	// driven by the observation that the timestamp + version portions of
+	// the ETag are identical — only the MIME suffix differs.
+	if isPreconditionFailed(err) && strings.Contains(etag, contentTypeTextPlain) && !strings.Contains(etag, "charset") {
+		fixedETag := strings.Replace(etag, contentTypeTextPlain, contentTypeTextPlainUTF8, 1)
+		return c.trySetSource(ctx, objectURI, source, lockHandle, transport, fixedETag)
+	}
+	return "", err
+}
+
+// trySetSource attempts SetSource with the lock handle retry
+// (header-first for R/3, query-param retry for S/4).
+func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
+	if err != nil && lockHandle != "" && isInvalidLockHandle(err) {
+		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+	}
+	return newETag, err
+}
+
+func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	ct := c.sourceContentType(objectURI)
 	headers := map[string]string{
-		"Content-Type": "text/plain; charset=utf-8",
-		"Accept":       "text/plain",
-		"If-Match":     etag,
+		"Content-Type":          ct,
+		"Accept":                ct,
+		"If-Match":              etag,
+		"X-sap-adt-sessiontype": "stateful",
 	}
 	if lockHandle != "" {
 		headers["X-SAP-Lock-Handle"] = lockHandle
@@ -245,6 +397,32 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 	if transport != "" {
 		path += "?corrNr=" + url.QueryEscape(transport)
 	}
+	return c.doSetSource(ctx, path, source, headers)
+}
+
+func (c *httpClient) setSourceWithLockParam(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	ct := c.sourceContentType(objectURI)
+	headers := map[string]string{
+		"Content-Type":          ct,
+		"Accept":                ct,
+		"If-Match":              etag,
+		"X-sap-adt-sessiontype": "stateful",
+	}
+	params := url.Values{}
+	if lockHandle != "" {
+		params.Set("lockHandle", lockHandle)
+	}
+	if transport != "" {
+		params.Set("corrNr", transport)
+	}
+	path := objectURI + "/source/main"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+	return c.doSetSource(ctx, path, source, headers)
+}
+
+func (c *httpClient) doSetSource(ctx context.Context, path, source string, headers map[string]string) (string, error) {
 	resp, err := c.doMutate(ctx, http.MethodPut, path,
 		strings.NewReader(source),
 		headers,

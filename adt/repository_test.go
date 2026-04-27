@@ -77,7 +77,7 @@ func TestBrowsePackage(t *testing.T) {
 	if results[0].URI != "/sap/bc/adt/programs/programs/RSPARAM" {
 		t.Errorf("uri[0]: got %q", results[0].URI)
 	}
-	if results[0].Type != "PROG/P" {
+	if results[0].Type != progType {
 		t.Errorf("type[0]: got %q", results[0].Type)
 	}
 	if results[0].Description != "Display SAP Profile Parameters" {
@@ -118,7 +118,7 @@ func TestGetObjectInfoProgram(t *testing.T) {
 	if info.Name != "RSPARAM" {
 		t.Errorf("name: got %q", info.Name)
 	}
-	if info.Type != "PROG/P" {
+	if info.Type != progType {
 		t.Errorf("type: got %q", info.Type)
 	}
 	if info.Description != "Display SAP Profile Parameters" {

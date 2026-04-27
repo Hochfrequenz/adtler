@@ -20,6 +20,10 @@ type FieldInfo struct {
 }
 
 // GetTableFields returns the field definitions of a DDIC table or structure.
+// Returns a typed *TableNotFoundError when DD03L has no rows for the supplied
+// name (no real DDIC table can have zero fields, so an empty result always
+// means the table doesn't exist). Callers can use errors.As to distinguish
+// "not found" from other failures.
 func (c *httpClient) GetTableFields(ctx context.Context, tableName string) ([]FieldInfo, error) {
 	table := strings.ToUpper(strings.TrimSpace(tableName))
 	if table == "" {
@@ -36,7 +40,7 @@ func (c *httpClient) GetTableFields(ctx context.Context, tableName string) ([]Fi
 		return nil, fmt.Errorf("GetTableFields: %w", err)
 	}
 
-	var fields []FieldInfo
+	fields := make([]FieldInfo, 0, len(result.Rows))
 	for _, row := range result.Rows {
 		if len(row) < 8 {
 			continue
@@ -61,5 +65,19 @@ func (c *httpClient) GetTableFields(ctx context.Context, tableName string) ([]Fi
 			DataElement: strings.TrimSpace(row[7]),
 		})
 	}
+	if len(fields) == 0 {
+		return nil, &TableNotFoundError{TableName: table}
+	}
 	return fields, nil
+}
+
+// TableNotFoundError is returned by GetTableFields when DD03L has no rows
+// for the requested table name. This is the framework's signal that the
+// table doesn't exist — no real DDIC table can have zero fields.
+type TableNotFoundError struct {
+	TableName string
+}
+
+func (e *TableNotFoundError) Error() string {
+	return fmt.Sprintf("GetTableFields: DDIC table %q does not exist (DD03L has no rows for it)", e.TableName)
 }

@@ -73,11 +73,30 @@ var objectTypeAcceptHeaders = map[string]string{
 	"/sap/bc/adt/acm/dcl/sources":        "application/vnd.sap.adt.dclSource+xml",
 }
 
+// fugrIncludeContentType is the vendor MIME type S/4 requires for function
+// group include sub-resources (.../functions/groups/<fg>/includes/<inc>).
+// The bare /sap/bc/adt/functions/groups prefix maps to a *different* type
+// (functions.groups.v3+xml) which S/4 rejects with HTTP 406 for include
+// URIs. See adtler#17 / mcp-server-abap#296.
+const fugrIncludeContentType = "application/vnd.sap.adt.functions.fincludes.v2+xml"
+
 // acceptHeaderForURI returns the best Accept header for a given object URI.
 // It first checks the ADT discovery cache (populated from /sap/bc/adt/discovery
 // during CSRF fetch) for supported content types, then falls back to the
 // hardcoded objectTypeAcceptHeaders map.
+//
+// Sub-resources whose content type differs from their parent endpoint
+// (e.g. function group includes vs. the function group itself) are handled
+// by an explicit pre-check before the prefix loop, because the
+// objectTypeAcceptHeaders map only does straight prefix matching.
 func (c *httpClient) acceptHeaderForURI(objectURI string) string {
+	// Sub-resource special cases — must run before the longest-prefix loop
+	// because the parent prefix would otherwise win and return the wrong type.
+	if strings.HasPrefix(objectURI, "/sap/bc/adt/functions/groups/") &&
+		strings.Contains(objectURI, "/includes/") {
+		return fugrIncludeContentType + ", application/xml"
+	}
+
 	// Find the best matching prefix from the hardcoded map.
 	bestPrefix := ""
 	hardcoded := ""

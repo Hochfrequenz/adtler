@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,121 @@ func newIntegrationClient(t *testing.T) adt.Client {
 		t.Fatal("SAP password not configured — check YAML config or SAP_INTEGRATION_PASSWORD")
 	}
 	return adt.NewClient(cfg)
+}
+
+// integrationSystem pairs a logical system name (the key in systems.json) with
+// a ready-to-use adt.Client built from that system's credentials.
+type integrationSystem struct {
+	Name   string
+	Client adt.Client
+}
+
+// eachSystem returns one entry per SAP system the test run is allowed to hit,
+// so a single test function can validate behaviour against R/3 and S/4 in one
+// go via t.Run sub-tests:
+//
+//	for _, sys := range eachSystem(t) {
+//		sys := sys
+//		t.Run(sys.Name, func(t *testing.T) {
+//			result, err := sys.Client.GetMessageClass(ctx, "00")
+//			...
+//		})
+//	}
+//
+// The system list is the intersection of:
+//  1. Systems present in the JSON config (SAP_CONFIG_FILE or
+//     ~/.config/sap-mcp/systems.json).
+//  2. A whitelist resolved in this order:
+//     a. SAP_INTEGRATION_SYSTEMS (plural, comma-separated) — explicit
+//     multi-system whitelist
+//     b. SAP_INTEGRATION_SYSTEM (singular) — compat with newIntegrationClient
+//     c. cfg.DefaultSystem from the JSON config
+//
+// **The helper t.Skips and never returns to the caller** when no JSON config
+// is reachable or when no whitelisted system exists in the config. Callers
+// can therefore rely on the returned slice always being non-empty when
+// execution continues past this call. This intentionally does NOT fall back
+// to the legacy SAP_INTEGRATION_HOST env vars — those only describe a single
+// system and the whole point of eachSystem is parametrization.
+//
+// The helper does NOT verify that whitelisted systems have credentials
+// configured; if a system entry has no User/Password the first HTTP call
+// against its client will fail loudly. This matches newIntegrationClient's
+// behaviour for misconfigured systems.
+func eachSystem(t *testing.T) []integrationSystem {
+	t.Helper()
+
+	paths := []string{os.Getenv("SAP_CONFIG_FILE")}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, home+"/.config/sap-mcp/systems.json")
+	}
+	var cfg *sapmcpconfig.Config
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		c, err := sapmcpconfig.Load(p)
+		if err == nil {
+			cfg = c
+			break
+		}
+	}
+	if cfg == nil || len(cfg.Systems) == 0 {
+		t.Skip("eachSystem: no SAP JSON config found — set SAP_CONFIG_FILE or place systems.json under ~/.config/sap-mcp/")
+	}
+
+	// Whitelist resolution, in order of precedence:
+	//
+	//  1. SAP_INTEGRATION_SYSTEMS (comma-separated, plural) — explicit
+	//     multi-system whitelist. Empty/whitespace-only entries are skipped.
+	//  2. SAP_INTEGRATION_SYSTEM (singular) — single-system whitelist for
+	//     compatibility with newIntegrationClient. A developer who already
+	//     uses the singular var to point newIntegrationClient at one system
+	//     gets the same single-system run from eachSystem.
+	//  3. cfg.DefaultSystem from the JSON config.
+	//
+	// `allowed` is always non-nil after this block; the helper t.Skips below
+	// if neither resolves to anything. This guarantees we never silently run
+	// against every system in the config when none was explicitly requested
+	// — that's the safety posture newIntegrationClient maintains.
+	allowed := make(map[string]bool)
+	if raw := strings.TrimSpace(os.Getenv("SAP_INTEGRATION_SYSTEMS")); raw != "" {
+		for _, name := range strings.Split(raw, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				allowed[name] = true
+			}
+		}
+	} else if singular := strings.TrimSpace(os.Getenv("SAP_INTEGRATION_SYSTEM")); singular != "" {
+		allowed[singular] = true
+	} else if cfg.DefaultSystem != "" {
+		allowed[cfg.DefaultSystem] = true
+	}
+
+	// Deterministic sub-test names so failing -run filters reproduce the
+	// same order on every machine.
+	names := make([]string, 0, len(cfg.Systems))
+	for name := range cfg.Systems {
+		if !allowed[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	if len(names) == 0 {
+		t.Skip("eachSystem: no systems matched the SAP_INTEGRATION_SYSTEMS whitelist")
+	}
+
+	systems := make([]integrationSystem, 0, len(names))
+	for _, name := range names {
+		sys := cfg.Systems[name]
+		sys.TLSSkipVerify = true
+		systems = append(systems, integrationSystem{
+			Name:   name,
+			Client: adt.NewClient(sys),
+		})
+	}
+	return systems
 }
 
 // setupDisposableReport creates a $TMP program with the given name and initial
