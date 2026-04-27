@@ -1,9 +1,7 @@
 package adt
 
 import (
-	"context"
 	"encoding/xml"
-	"strings"
 )
 
 // parseDiscovery extracts accepted content types per endpoint from the ADT
@@ -32,23 +30,6 @@ func parseDiscovery(data []byte) map[string][]string {
 		}
 	}
 	return result
-}
-
-// hasEndpointInDiscovery checks whether the discovery cache contains an entry
-// whose href starts with the given prefix. Triggers a CSRF fetch (which
-// populates the cache) if no discovery data is available yet.
-func (c *httpClient) hasEndpointInDiscovery(ctx context.Context, pathPrefix string) bool {
-	c.mu.Lock()
-	if c.discovery == nil && c.csrfToken == "" {
-		_ = c.fetchCSRFToken(ctx)
-	}
-	defer c.mu.Unlock()
-	for endpoint := range c.discovery {
-		if endpoint == pathPrefix || strings.HasPrefix(endpoint, pathPrefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // NegotiateContentType returns the best content type for the given endpoint
