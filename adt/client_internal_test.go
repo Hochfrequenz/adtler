@@ -164,3 +164,134 @@ func TestADTError_Error_WithoutType(t *testing.T) {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
+
+// TestParseADTError_ExcExceptionEnvelope verifies the new layer 1: when the
+// body is the modern <exc:exception> shape with namespace, type, and message
+// children, all three are extracted into ADTError.
+func TestParseADTError_ExcExceptionEnvelope(t *testing.T) {
+	body := strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <namespace id="com.sap.adt"/>
+  <type id="ExceptionResourceWrongData"/>
+  <message lang="EN">Resource ZCL_TEST: wrong input data for processing</message>
+</exc:exception>`)
+	err := parseADTError(400, body)
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *ADTError, got %T: %v", err, err)
+	}
+	if adtErr.StatusCode != 400 {
+		t.Errorf("StatusCode: got %d, want 400", adtErr.StatusCode)
+	}
+	if adtErr.Namespace != "com.sap.adt" {
+		t.Errorf("Namespace: got %q, want %q", adtErr.Namespace, "com.sap.adt")
+	}
+	if adtErr.Type != "ExceptionResourceWrongData" {
+		t.Errorf("Type: got %q, want %q", adtErr.Type, "ExceptionResourceWrongData")
+	}
+	if adtErr.Message != "Resource ZCL_TEST: wrong input data for processing" {
+		t.Errorf("Message: got %q", adtErr.Message)
+	}
+}
+
+// TestParseADTError_ExcExceptionMissingNamespace verifies that when the
+// modern envelope omits <namespace>, Type and Message are still extracted
+// and Namespace stays empty.
+func TestParseADTError_ExcExceptionMissingNamespace(t *testing.T) {
+	body := strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <type id="ExceptionResourceWrongData"/>
+  <message lang="EN">Some message</message>
+</exc:exception>`)
+	err := parseADTError(400, body)
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *ADTError, got %T: %v", err, err)
+	}
+	if adtErr.Namespace != "" {
+		t.Errorf("Namespace: got %q, want empty", adtErr.Namespace)
+	}
+	if adtErr.Type != "ExceptionResourceWrongData" {
+		t.Errorf("Type: got %q, want %q", adtErr.Type, "ExceptionResourceWrongData")
+	}
+	if adtErr.Message != "Some message" {
+		t.Errorf("Message: got %q", adtErr.Message)
+	}
+}
+
+// TestParseADTError_ExcExceptionMissingType verifies that when the modern
+// envelope omits <type>, Namespace and Message are still extracted and Type
+// stays empty.
+func TestParseADTError_ExcExceptionMissingType(t *testing.T) {
+	body := strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>
+<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <namespace id="com.sap.adt"/>
+  <message lang="EN">Some message</message>
+</exc:exception>`)
+	err := parseADTError(400, body)
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *ADTError, got %T: %v", err, err)
+	}
+	if adtErr.Namespace != "com.sap.adt" {
+		t.Errorf("Namespace: got %q, want %q", adtErr.Namespace, "com.sap.adt")
+	}
+	if adtErr.Type != "" {
+		t.Errorf("Type: got %q, want empty", adtErr.Type)
+	}
+	if adtErr.Message != "Some message" {
+		t.Errorf("Message: got %q", adtErr.Message)
+	}
+}
+
+// TestParseADTError_ExcExceptionMissingMessage verifies that an
+// <exc:exception> body without a <message> child falls through to the
+// plain-text layer (preserves the existing "empty message means try the
+// next layer" semantics shared with the legacy parser).
+func TestParseADTError_ExcExceptionMissingMessage(t *testing.T) {
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <namespace id="com.sap.adt"/>
+  <type id="ExceptionResourceWrongData"/>
+</exc:exception>`
+	err := parseADTError(400, strings.NewReader(body))
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *ADTError, got %T: %v", err, err)
+	}
+	// Without a <message>, layer 1 is skipped. Layers 2 and 3 don't match
+	// either, so we fall through to layer 4 with the trimmed raw body.
+	// Namespace/Type stay empty because layer 1 didn't claim the body.
+	if adtErr.Namespace != "" {
+		t.Errorf("Namespace: got %q, want empty (layer 1 should not have claimed)", adtErr.Namespace)
+	}
+	if adtErr.Type != "" {
+		t.Errorf("Type: got %q, want empty (layer 1 should not have claimed)", adtErr.Type)
+	}
+	if !strings.Contains(adtErr.Message, "<exc:exception") {
+		t.Errorf("Message: expected raw XML body in plain-text fallback, got %q", adtErr.Message)
+	}
+}
+
+// TestParseADTError_LegacyEnvelopeNoNamespaceOrType verifies that the legacy
+// <ExceptionText> path leaves Namespace and Type empty (regression guard).
+func TestParseADTError_LegacyEnvelopeNoNamespaceOrType(t *testing.T) {
+	body := strings.NewReader(`<?xml version="1.0" encoding="utf-8"?>
+<exc:ExceptionText xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
+  <message>Resource ZCL_TEST: wrong input data for processing</message>
+</exc:ExceptionText>`)
+	err := parseADTError(400, body)
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *ADTError, got %T: %v", err, err)
+	}
+	if adtErr.Namespace != "" {
+		t.Errorf("Namespace: got %q, want empty (legacy form has no namespace)", adtErr.Namespace)
+	}
+	if adtErr.Type != "" {
+		t.Errorf("Type: got %q, want empty (legacy form has no type)", adtErr.Type)
+	}
+	if adtErr.Message != "Resource ZCL_TEST: wrong input data for processing" {
+		t.Errorf("Message: got %q", adtErr.Message)
+	}
+}
