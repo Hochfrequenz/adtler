@@ -6,7 +6,9 @@ import (
 	"testing"
 )
 
-// TestParseADTError_XMLEnvelope verifies the layer-1 path: when the body
+const wrongInputDataMsg = "Resource ZCL_TEST: wrong input data for processing"
+
+// TestParseADTError_XMLEnvelope verifies the layer-2 path: when the body
 // is the standard ADT framework <ExceptionText><message>…</message></ExceptionText>
 // envelope, the message is extracted verbatim.
 func TestParseADTError_XMLEnvelope(t *testing.T) {
@@ -22,7 +24,7 @@ func TestParseADTError_XMLEnvelope(t *testing.T) {
 	if adtErr.StatusCode != 400 {
 		t.Errorf("StatusCode: got %d, want 400", adtErr.StatusCode)
 	}
-	if adtErr.Message != "Resource ZCL_TEST: wrong input data for processing" {
+	if adtErr.Message != wrongInputDataMsg {
 		t.Errorf("Message: got %q", adtErr.Message)
 	}
 }
@@ -123,7 +125,7 @@ func TestParseADTError_HTMLWithoutSAPLayout(t *testing.T) {
 	}
 }
 
-// TestParseADTError_PlainText verifies the layer-3 fallback for non-XML,
+// TestParseADTError_PlainText verifies the layer-4 fallback for non-XML,
 // non-HTML bodies (e.g. an SAP server emitting a bare error string). The
 // existing behaviour is preserved.
 func TestParseADTError_PlainText(t *testing.T) {
@@ -189,7 +191,7 @@ func TestParseADTError_ExcExceptionEnvelope(t *testing.T) {
 	if adtErr.Type != "ExceptionResourceWrongData" {
 		t.Errorf("Type: got %q, want %q", adtErr.Type, "ExceptionResourceWrongData")
 	}
-	if adtErr.Message != "Resource ZCL_TEST: wrong input data for processing" {
+	if adtErr.Message != wrongInputDataMsg {
 		t.Errorf("Message: got %q", adtErr.Message)
 	}
 }
@@ -291,7 +293,7 @@ func TestParseADTError_LegacyEnvelopeNoNamespaceOrType(t *testing.T) {
 	if adtErr.Type != "" {
 		t.Errorf("Type: got %q, want empty (legacy form has no type)", adtErr.Type)
 	}
-	if adtErr.Message != "Resource ZCL_TEST: wrong input data for processing" {
+	if adtErr.Message != wrongInputDataMsg {
 		t.Errorf("Message: got %q", adtErr.Message)
 	}
 }
