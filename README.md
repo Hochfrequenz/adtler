@@ -5,6 +5,7 @@
 [![golangci-lint](https://github.com/Hochfrequenz/adtler/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/Hochfrequenz/adtler/actions/workflows/golangci-lint.yml)
 
 Go client library for SAP **A**BAP **D**evelopment **T**ools (ADT).
+For a Python wrapper around the SAP COM GUI, check [**sapsucker**](https://github.com/Hochfrequenz/sapsucker).
 
 `adtler` provides a typed Go interface to the SAP ADT REST API: read and write
 ABAP source, manage transports, run syntax checks and ATC, lock and activate
