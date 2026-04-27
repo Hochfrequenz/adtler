@@ -302,6 +302,8 @@ func TestParseADTError_LegacyEnvelopeNoNamespaceOrType(t *testing.T) {
 // when Type is populated, the predicate matches on Type, not status code.
 // When Type is empty (legacy responses), the predicate falls back to the
 // status-code check.
+//
+//nolint:dupl // intentional mirror of TestIsPreconditionFailed_TypeAware; different predicate, same table shape
 func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
 	tests := []struct {
 		name string
@@ -350,6 +352,8 @@ func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
 
 // TestIsPreconditionFailed_TypeAware mirrors TestIsInvalidLockHandle_TypeAware
 // for the 412 / ExceptionPreconditionFailed predicate.
+//
+//nolint:dupl // intentional mirror of TestIsInvalidLockHandle_TypeAware; different predicate, same table shape
 func TestIsPreconditionFailed_TypeAware(t *testing.T) {
 	tests := []struct {
 		name string
@@ -379,6 +383,11 @@ func TestIsPreconditionFailed_TypeAware(t *testing.T) {
 		{
 			name: "non-ADTError → false",
 			err:  errors.New("some other error"),
+			want: false,
+		},
+		{
+			name: "nil → false",
+			err:  nil,
 			want: false,
 		},
 	}

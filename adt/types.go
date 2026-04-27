@@ -190,8 +190,10 @@ func isInvalidLockHandle(err error) bool {
 // with a re-fetched ETag when the original ETag doesn't match what
 // the server expects (e.g. TABL charset mismatch). See adtler#15.
 //
-// Type-aware in the same way as isInvalidLockHandle: prefers Type
-// when present, falls back to status code for legacy responses.
+// When the error carries a populated Type, this is a structural check
+// against ExceptionTypePreconditionFailed. When Type is empty
+// (legacy <ExceptionText> responses), the function falls back to the
+// status-code check that predates the structured envelope support.
 func isPreconditionFailed(err error) bool {
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
