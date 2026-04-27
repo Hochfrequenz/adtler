@@ -298,18 +298,34 @@ func TestParseADTError_LegacyEnvelopeNoNamespaceOrType(t *testing.T) {
 	}
 }
 
+// predicateTestCase is a single row in a table-driven test of a
+// retry-predicate function (isInvalidLockHandle / isPreconditionFailed).
+type predicateTestCase struct {
+	name string
+	err  error
+	want bool
+}
+
+// runPredicateTests runs a table of predicateTestCase against the given
+// predicate function, registering each row as a t.Run subtest. predicateName
+// appears in error messages so failures point at the right predicate.
+func runPredicateTests(t *testing.T, predicateName string, predicate func(error) bool, cases []predicateTestCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := predicate(tc.err); got != tc.want {
+				t.Errorf("%s(%v) = %v, want %v", predicateName, tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestIsInvalidLockHandle_TypeAware exercises the rewritten predicate:
 // when Type is populated, the predicate matches on Type, not status code.
 // When Type is empty (legacy responses), the predicate falls back to the
 // status-code check.
-//
-//nolint:dupl // intentional mirror of TestIsPreconditionFailed_TypeAware; different predicate, same table shape
 func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
+	cases := []predicateTestCase{
 		{
 			name: "423 with InvalidLockHandle type → true",
 			err:  &ADTError{StatusCode: 423, Type: ExceptionTypeResourceInvalidLockHandle, Message: "x"},
@@ -341,25 +357,13 @@ func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
 			want: false,
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isInvalidLockHandle(tc.err); got != tc.want {
-				t.Errorf("isInvalidLockHandle(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
-	}
+	runPredicateTests(t, "isInvalidLockHandle", isInvalidLockHandle, cases)
 }
 
 // TestIsPreconditionFailed_TypeAware mirrors TestIsInvalidLockHandle_TypeAware
 // for the 412 / ExceptionPreconditionFailed predicate.
-//
-//nolint:dupl // intentional mirror of TestIsInvalidLockHandle_TypeAware; different predicate, same table shape
 func TestIsPreconditionFailed_TypeAware(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
+	cases := []predicateTestCase{
 		{
 			name: "412 with PreconditionFailed type → true",
 			err:  &ADTError{StatusCode: 412, Type: ExceptionTypePreconditionFailed, Message: "x"},
@@ -391,11 +395,5 @@ func TestIsPreconditionFailed_TypeAware(t *testing.T) {
 			want: false,
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isPreconditionFailed(tc.err); got != tc.want {
-				t.Errorf("isPreconditionFailed(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
-	}
+	runPredicateTests(t, "isPreconditionFailed", isPreconditionFailed, cases)
 }
