@@ -503,9 +503,15 @@ var htmlDetailTextRe = regexp.MustCompile(`<p class="detailText">([^<]*)</p>`)
 // parseADTError reads an error response body and returns an *ADTError.
 //
 // The body is parsed in four layers:
-//  1. As the modern <exc:exception> envelope — populates Namespace, Type,
-//     and Message. This is the SAP-ADT equivalent of an MSGID/MSGNO and is
-//     stable across SAP releases and locales.
+//  1. As an <exc:exception> envelope. Two SAP XML namespaces share this root
+//     local name: the modern schema
+//     (http://www.sap.com/abapxml/types/communicationframework) and an older
+//     schema (http://www.sap.com/adt/exceptions, used by some refactoring
+//     endpoints). A single unmarshal claims both. Namespace and Type are only
+//     populated when the XML namespace URI matches the modern schema — the
+//     older schema does not carry those children, and a caller reading
+//     adtErr.Type from an old-namespace body would be confused by an empty
+//     value next to a non-empty Message. The old namespace yields Message-only.
 //  2. As the legacy ADT framework <ExceptionText><message>…</message>
 //     envelope — populates Message only.
 //  3. As a SAP "Application Server Error" HTML page — see adtler#13 /
@@ -513,12 +519,25 @@ var htmlDetailTextRe = regexp.MustCompile(`<p class="detailText">([^<]*)</p>`)
 //     several KB of HTML, CSS, and base64-encoded PNG into the message).
 //  4. As-is (trimmed) for anything else, preserving prior behaviour for
 //     non-XML, non-HTML bodies.
+//
+// Layer 1 falls through to subsequent layers when <message> is empty or
+// missing — even if <namespace> and <type> children were present. This is
+// rare in practice (SAP always sends <message> for non-trivial errors) but
+// means a hypothetical <exc:exception> body with structured identifiers but
+// no message text would degrade to whatever later layers can extract.
 func parseADTError(statusCode int, body io.Reader) error {
 	data, _ := io.ReadAll(body)
 
-	// Layer 1: modern <exc:exception> envelope.
-	// Captures Namespace and Type for callers that need to branch on a
-	// stable, locale-independent identifier (the ADT equivalent of MSGID).
+	// Layer 1: <exc:exception> envelope. Both the modern schema
+	// (http://www.sap.com/abapxml/types/communicationframework) and an
+	// older SAP namespace (http://www.sap.com/adt/exceptions, used by
+	// some refactoring endpoints) share the same root local name, so a
+	// single unmarshal claims both. Namespace and Type are only
+	// populated when the XML namespace URI matches the modern schema —
+	// the older schema does not carry those children, and a caller
+	// reading adtErr.Type from an old-namespace body would be confused
+	// by an empty value next to a non-empty Message.
+	const modernExcNS = "http://www.sap.com/abapxml/types/communicationframework"
 	var excEnv struct {
 		XMLName   xml.Name `xml:"exception"`
 		Namespace struct {
@@ -530,12 +549,16 @@ func parseADTError(statusCode int, body io.Reader) error {
 		Message string `xml:"message"`
 	}
 	if err := xml.Unmarshal(data, &excEnv); err == nil && excEnv.Message != "" {
-		return &ADTError{
-			StatusCode: statusCode,
-			Namespace:  excEnv.Namespace.ID,
-			Type:       excEnv.Type.ID,
-			Message:    excEnv.Message,
+		if excEnv.XMLName.Space == modernExcNS {
+			return &ADTError{
+				StatusCode: statusCode,
+				Namespace:  excEnv.Namespace.ID,
+				Type:       excEnv.Type.ID,
+				Message:    excEnv.Message,
+			}
 		}
+		// Old-namespace envelope: extract message only, leave Namespace/Type empty.
+		return &ADTError{StatusCode: statusCode, Message: excEnv.Message}
 	}
 
 	// Layer 2: legacy <ExceptionText> envelope. Namespace/Type stay empty.

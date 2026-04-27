@@ -298,6 +298,34 @@ func TestParseADTError_LegacyEnvelopeNoNamespaceOrType(t *testing.T) {
 	}
 }
 
+// TestParseADTError_ExcExceptionOldNamespace verifies that an <exc:exception>
+// body from the older SAP namespace (http://www.sap.com/adt/exceptions, used
+// by refactoring endpoints) gets its <message> extracted but leaves Namespace
+// and Type empty. The older schema does not carry <namespace> or <type>
+// children, so empty fields are the correct outcome — the test guards against
+// a future "narrow layer 1 to modern namespace only" change accidentally
+// regressing message extraction for the older envelope.
+func TestParseADTError_ExcExceptionOldNamespace(t *testing.T) {
+	body := strings.NewReader(`<?xml version="1.0"?>
+<exc:exception xmlns:exc="http://www.sap.com/adt/exceptions">
+  <exc:message>Symbol not found at position</exc:message>
+</exc:exception>`)
+	err := parseADTError(400, body)
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *ADTError, got %T: %v", err, err)
+	}
+	if adtErr.Namespace != "" {
+		t.Errorf("Namespace: got %q, want empty (old-namespace envelope has no <namespace>)", adtErr.Namespace)
+	}
+	if adtErr.Type != "" {
+		t.Errorf("Type: got %q, want empty (old-namespace envelope has no <type>)", adtErr.Type)
+	}
+	if adtErr.Message != "Symbol not found at position" {
+		t.Errorf("Message: got %q", adtErr.Message)
+	}
+}
+
 // predicateTestCase is a single row in a table-driven test of a
 // retry-predicate function (isInvalidLockHandle / isPreconditionFailed).
 type predicateTestCase struct {
