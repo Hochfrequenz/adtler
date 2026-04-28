@@ -66,8 +66,9 @@ func (c *httpClient) GetATCCustomizing(ctx context.Context) (*ATCCustomizingResu
 //
 // The earlier 2-step shortcut (POST /runs with worklistId="0000000000",
 // checkVariant in body) returned HTTP 500 with empty body on R/3 — see
-// adtler#12. The 3-step flow is the one Eclipse ADT uses and works on
-// both R/3 and S/4.
+// adtler#12. The 3-step shape was observed in the abap-adt-api reference
+// implementation (src/api/atc.ts) and verified against the SAP ADT REST
+// API on both R/3 and S/4.
 //
 // If checkVariant is empty, "DEFAULT" is used. Callers on S/4 should pass
 // their site-specific variant explicitly.
@@ -130,7 +131,8 @@ func (c *httpClient) createATCWorklist(ctx context.Context, checkVariant string)
 // triggerATCRun performs step 2: posts the object references to the runs
 // endpoint, scoped to worklistID. SAP echoes back the worklist ID (and a
 // timestamp) in a <worklistRun> envelope; if the response carries a
-// non-empty ID, that ID supersedes the input.
+// non-empty ID, that ID supersedes the input (same supersession rule
+// observed in abap-adt-api).
 func (c *httpClient) triggerATCRun(ctx context.Context, worklistID string, objectURIs []string) (string, error) {
 	body := buildATCRunBody(objectURIs)
 

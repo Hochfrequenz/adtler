@@ -145,8 +145,8 @@ func TestRunATCCheck_CreatesWorklistBeforeRun(t *testing.T) {
 }
 
 // TestRunATCCheck_WorklistsPOSTUsesCheckVariantQuery verifies the variant is
-// passed on the /worklists URL query (the SAP ADT contract), not in the
-// /runs body.
+// passed on the /worklists URL query (as observed in abap-adt-api), not in
+// the /runs body.
 func TestRunATCCheck_WorklistsPOSTUsesCheckVariantQuery(t *testing.T) {
 	cap := &atcMockCapture{}
 	srv := newATCMock(t, cap)
@@ -170,7 +170,7 @@ func TestRunATCCheck_WorklistsPOSTUsesCheckVariantQuery(t *testing.T) {
 
 // TestRunATCCheck_WorklistsPOSTSendsTextPlainAccept — the worklist
 // creation response is a plain-text worklist ID, so the request must
-// advertise Accept: text/plain.
+// advertise Accept: text/plain (as observed in abap-adt-api).
 func TestRunATCCheck_WorklistsPOSTSendsTextPlainAccept(t *testing.T) {
 	cap := &atcMockCapture{}
 	srv := newATCMock(t, cap)
