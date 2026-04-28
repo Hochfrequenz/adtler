@@ -21,8 +21,8 @@ import (
 // (adtler#12). The earlier discovery-first content-negotiation refactor
 // (adtler#35) did not fix this. Root cause: the previous 2-step shortcut
 // posted /runs with a placeholder worklistId="0000000000" that R/3 does
-// not accept. The 3-step flow creates a real worklist first, matching
-// abap-adt-api / Eclipse ADT, and works on both R/3 and S/4.
+// not accept. The 3-step flow creates a real worklist first and works on
+// both R/3 and S/4.
 //
 // Uses eachSystem so a single test function validates behaviour against
 // every whitelisted SAP system (R/3 and S/4) in one run. Closes adtler#12
