@@ -13,8 +13,8 @@ jobs:
           go-version: ${{ matrix.go-version }}
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Build for js/wasm
+      - name: Build for js/wasm (excluding custexport which depends on SQLite/CGO via modernc/libc, not supported on js/wasm)
         env:
           GOOS: js
           GOARCH: wasm
-        run: go build ./...
+        run: go build $(go list ./... | grep -v '/adt/custexport')
