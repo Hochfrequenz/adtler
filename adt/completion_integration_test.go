@@ -24,8 +24,8 @@ func TestGetCompletions_Integration(t *testing.T) {
 	// runs return ~20 keywords/built-ins on both R/3 and S/4. An empty
 	// list here means the request shape regressed, not a system quirk.
 	if len(completions) == 0 {
-		t.Fatalf("GetCompletions returned 0 items for `WRITE ` cursor — "+
-			"likely a regression in URI fragment encoding or asXML parsing; "+
+		t.Fatalf("GetCompletions returned 0 items for `WRITE ` cursor — " +
+			"likely a regression in URI fragment encoding or asXML parsing; " +
 			"see CL_CC_ADT_RES_BASE->determine_input_data")
 	}
 	t.Logf("got %d completions", len(completions))
