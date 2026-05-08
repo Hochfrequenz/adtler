@@ -9,19 +9,19 @@ import (
 	"testing"
 )
 
-// TestNavigateToDefinition_Namespace_MultiSystem_Integration exercises
-// NavigateToDefinition against real SAP systems. The fix passes the source
-// code in the request body — without it the SAP handler
-// (CL_SEDI_ADT_RES_NAVIGATION) cannot resolve the cursor position and the
-// response stays empty, which earlier looked to callers like an "echo" of
-// the input URI.
+// TestNavigateToDefinition_MultiSystem_Integration exercises
+// NavigateToDefinition against real SAP systems. The fix posts the source
+// code as the request body — CL_SEDI_ADT_RES_NAVIGATION reads the body via
+// get_handler_for_plain_text and combines it with the cursor position from
+// the URI fragment to compute the target. Without the body the handler
+// returns an empty response, which earlier looked like an "echo" of the
+// input URI.
 //
-// The test:
-//   - Asserts the call does NOT error
-//   - Logs the resolved target so failures are diagnosable
-//   - Skips when the test report has no cross-reference for the cursor to
-//     land on (R/3 fixture is a bare REPORT)
-func TestNavigateToDefinition_Namespace_MultiSystem_Integration(t *testing.T) {
+// The test asserts that a clear cross-reference (cl_abap_unit_assert or
+// TYPE string) resolves to a *different* URI than the cursor position —
+// echoing back means the fix regressed. When no cross-reference exists in
+// the test fixture (the R/3 stub is a bare REPORT), the test skips.
+func TestNavigateToDefinition_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
 		sys := sys
@@ -63,16 +63,14 @@ func TestNavigateToDefinition_Namespace_MultiSystem_Integration(t *testing.T) {
 
 			target, err := sys.Client.NavigateToDefinition(ctx, sourceURI, src.Source)
 			if err != nil {
-				t.Fatalf("[%s] NavigateToDefinition returned error: %v — "+
-					"namespace parsing may be broken", sys.Name, err)
+				t.Fatalf("[%s] NavigateToDefinition returned error: %v", sys.Name, err)
 			}
-
-			t.Logf("[%s] target: %s", sys.Name, target)
-			if target == sourceURI || target == "" {
-				t.Logf("[%s] endpoint echoed input (known SAP limitation per issue #8 investigation)", sys.Name)
-			} else {
-				t.Logf("[%s] endpoint returned a DIFFERENT target — navigation resolved!", sys.Name)
+			if target == "" || target == sourceURI {
+				t.Fatalf("[%s] endpoint echoed input (target=%q) — "+
+					"the body-as-source fix regressed; the SAP handler "+
+					"likely received an empty body", sys.Name, target)
 			}
+			t.Logf("[%s] resolved to %s", sys.Name, target)
 		})
 	}
 }
