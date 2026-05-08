@@ -184,4 +184,3 @@ func isInvalidLockHandle(err error) bool {
 	}
 	return adtErr.StatusCode == 423
 }
-

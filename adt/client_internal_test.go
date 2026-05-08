@@ -387,4 +387,3 @@ func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
 	}
 	runPredicateTests(t, "isInvalidLockHandle", isInvalidLockHandle, cases)
 }
-
