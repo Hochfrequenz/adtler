@@ -11,15 +11,17 @@ import (
 )
 
 // TestSetSource_TABLETagCharset_MultiSystem_Integration regression-tests
-// adtler#15: SAP embeds the Content-Type into the ETag value. GetSource
-// returns an ETag with "text/plain" (no charset), but PUT validates against
-// one with "text/plain; charset=utf-8". The fix patches the ETag string on
-// 412 and retries.
+// adtler#15: SAP embeds the Content-Type into the ETag value, so GetSource
+// and PUT must agree on the Accept / Content-Type form. Discovery-driven
+// negotiation (added in #35, dead-retry cleanup in #42) keeps both sides
+// in sync; if a future SAP release dropped the discovery hint, the GET
+// and PUT forms could diverge again and the PUT would surface a 412.
 //
 // This test creates a TABL, attempts to write source, and asserts:
-//   - The error is NOT 412 PreconditionFailed (the ETag fix must prevent it)
-//   - A 403 (enqueue from CreateObject) is acceptable — that's a separate
-//     known issue (adtler#4 family, DDIC-specific enqueue not yet covered)
+//   - The error is NOT 412 PreconditionFailed — that would mean the
+//     GET / PUT charset asymmetry has come back
+//   - A 403 (enqueue from CreateObject) is acceptable — separate known
+//     issue (adtler#4 family, DDIC-specific enqueue not yet covered)
 //   - On R/3: skips (DDIC TABL creation not available)
 func TestSetSource_TABLETagCharset_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
@@ -62,20 +64,21 @@ func TestSetSource_TABLETagCharset_MultiSystem_Integration(t *testing.T) {
 			}
 
 			// The critical assertion: error must NOT be 412 PreconditionFailed.
-			// The ETag charset patch should have prevented that. A 403 or 423
-			// (enqueue-related) is acceptable — that's the separate DDIC
-			// enqueue issue from the #4 family.
+			// Discovery-driven content negotiation (#35) keeps GetSource and
+			// PUT on the same charset form. A 403 or 423 (enqueue-related) is
+			// acceptable — that's the separate DDIC enqueue issue from the
+			// #4 family.
 			msg := err.Error()
 			t.Logf("[%s] SetSource error: %v", sys.Name, err)
 
 			if strings.Contains(msg, "412") || strings.Contains(msg, "PreconditionFailed") {
-				t.Errorf("[%s] 412 PreconditionFailed — the ETag charset fix did NOT work. "+
-					"The ETag should have been patched from 'text/plain' to "+
-					"'text/plain; charset=utf-8'. Error: %v", sys.Name, err)
+				t.Errorf("[%s] 412 PreconditionFailed — the GET/PUT charset asymmetry "+
+					"has come back. Discovery-driven content negotiation should keep "+
+					"GetSource and PUT on the same ETag form. Error: %v", sys.Name, err)
 			} else {
-				t.Logf("[%s] error is NOT 412 (ETag fix works) — the remaining error "+
-					"(%v) is likely a DDIC enqueue issue from the #4 family, not an "+
-					"ETag problem", sys.Name, err)
+				t.Logf("[%s] error is NOT 412 (charset symmetry holds) — the remaining "+
+					"error (%v) is likely a DDIC enqueue issue from the #4 family, "+
+					"not an ETag problem", sys.Name, err)
 			}
 		})
 	}

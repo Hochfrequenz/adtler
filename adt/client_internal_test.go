@@ -327,7 +327,7 @@ func TestParseADTError_ExcExceptionOldNamespace(t *testing.T) {
 }
 
 // predicateTestCase is a single row in a table-driven test of a
-// retry-predicate function (isInvalidLockHandle / isPreconditionFailed).
+// retry-predicate function (isInvalidLockHandle).
 type predicateTestCase struct {
 	name string
 	err  error
@@ -386,42 +386,4 @@ func TestIsInvalidLockHandle_TypeAware(t *testing.T) {
 		},
 	}
 	runPredicateTests(t, "isInvalidLockHandle", isInvalidLockHandle, cases)
-}
-
-// TestIsPreconditionFailed_TypeAware mirrors TestIsInvalidLockHandle_TypeAware
-// for the 412 / ExceptionPreconditionFailed predicate.
-func TestIsPreconditionFailed_TypeAware(t *testing.T) {
-	cases := []predicateTestCase{
-		{
-			name: "412 with PreconditionFailed type → true",
-			err:  &ADTError{StatusCode: 412, Type: ExceptionTypePreconditionFailed, Message: "x"},
-			want: true,
-		},
-		{
-			name: "412 with WrongData type → false (different exception)",
-			err:  &ADTError{StatusCode: 412, Type: ExceptionTypeResourceWrongData, Message: "x"},
-			want: false,
-		},
-		{
-			name: "412 with empty Type → true (legacy fallback)",
-			err:  &ADTError{StatusCode: 412, Message: "x"},
-			want: true,
-		},
-		{
-			name: "500 with empty Type → false",
-			err:  &ADTError{StatusCode: 500, Message: "x"},
-			want: false,
-		},
-		{
-			name: "non-ADTError → false",
-			err:  errors.New("some other error"),
-			want: false,
-		},
-		{
-			name: "nil → false",
-			err:  nil,
-			want: false,
-		},
-	}
-	runPredicateTests(t, "isPreconditionFailed", isPreconditionFailed, cases)
 }
