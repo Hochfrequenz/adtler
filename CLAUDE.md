@@ -91,7 +91,7 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 - **Lock handle delivery**: R/3 reads `X-SAP-Lock-Handle` header; S/4 reads `?lockHandle=` query param. `SetSource` retries with query param on 423.
 - **Accept headers**: S/4 is stricter — requires vendor MIME types (e.g. `application/vnd.sap.adt.mc.messageclass+xml`). R/3 often accepts `application/xml`.
 - **ESRDIRE enqueue after CreateObject**: S/4 leaves a session-bound enqueue. Workaround: `Logout()` after `CreateObject`.
-- **ETag charset**: TABL ETags on S/4 embed `text/plain; charset=utf-8` but `GetSource` returns `text/plain` without charset. `SetSource` patches the ETag string on 412.
+- **ETag charset**: SAP embeds the source Content-Type into the ETag, so `GetSource` and the validating PUT must agree on the Accept / Content-Type form. `sourceContentType` (discovery-driven, from #35) prefers `text/plain; charset=utf-8` when discovery advertises it; both sides therefore land on the same ETag form. The earlier 412 retry workaround was removed in #42 once the discovery path covered every supported system.
 - **DDIC endpoints**: DTEL/DOMA/TABL creation via `/sap/bc/adt/ddic/` requires S/4. R/3 returns 404 or 415.
 
 ### ETag resolution
