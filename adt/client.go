@@ -57,7 +57,13 @@ type DocuClient interface {
 
 // NavigationClient resolves source references.
 type NavigationClient interface {
-	NavigateToDefinition(ctx context.Context, sourceURI string) (string, error)
+	// NavigateToDefinition resolves the symbol at the cursor position
+	// embedded in sourceURI (as `...#start=line,column`) to its definition.
+	// The source code that the cursor refers to must be passed in source —
+	// the SAP handler reads the body as plain text and uses it together
+	// with the position fragment to compute the navigation target. Passing
+	// the source the caller already has avoids a round-trip GetSource call.
+	NavigateToDefinition(ctx context.Context, sourceURI, source string) (string, error)
 }
 
 // SearchClient provides object discovery.

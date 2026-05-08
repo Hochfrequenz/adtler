@@ -110,8 +110,8 @@ func (r *ClientRegistry) SetMessages(ctx context.Context, messageClassName, etag
 func (r *ClientRegistry) SetTextElements(ctx context.Context, objectURI string, symbols []TextSymbol, selections []SelectionText, lockHandle, transport string) error {
 	return r.activeClient().SetTextElements(ctx, objectURI, symbols, selections, lockHandle, transport)
 }
-func (r *ClientRegistry) NavigateToDefinition(ctx context.Context, sourceURI string) (string, error) {
-	return r.activeClient().NavigateToDefinition(ctx, sourceURI)
+func (r *ClientRegistry) NavigateToDefinition(ctx context.Context, sourceURI, source string) (string, error) {
+	return r.activeClient().NavigateToDefinition(ctx, sourceURI, source)
 }
 func (r *ClientRegistry) GetTableFields(ctx context.Context, tableName string) ([]FieldInfo, error) {
 	return r.activeClient().GetTableFields(ctx, tableName)

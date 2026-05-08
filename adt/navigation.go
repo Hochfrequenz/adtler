@@ -7,12 +7,21 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
-func (c *httpClient) NavigateToDefinition(ctx context.Context, sourceURI string) (string, error) {
+func (c *httpClient) NavigateToDefinition(ctx context.Context, sourceURI, source string) (string, error) {
+	// SAP handler CL_SEDI_ADT_RES_NAVIGATION->post reads the source text
+	// from the request body via get_handler_for_plain_text and combines it
+	// with the cursor position from the URI fragment to resolve the target.
+	// Without a body the navigation cannot run and the response stays empty,
+	// which earlier looked to callers like an "echo" of the input URI.
 	path := "/sap/bc/adt/navigation/target?uri=" + url.QueryEscape(sourceURI)
-	resp, err := c.doMutate(ctx, http.MethodPost, path, nil,
-		map[string]string{"Accept": "application/xml"})
+	resp, err := c.doMutate(ctx, http.MethodPost, path, strings.NewReader(source),
+		map[string]string{
+			"Content-Type": "text/plain; charset=utf-8",
+			"Accept":       "application/xml",
+		})
 	if err != nil {
 		return "", fmt.Errorf("NavigateToDefinition: %w", err)
 	}
