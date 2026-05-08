@@ -8,16 +8,14 @@ import (
 )
 
 // TestGetCompletions_MultiSystem_Integration exercises GetCompletions against
-// real SAP systems. The namespace parsing fix in this PR ensures the
-// codecompletion:text and codecompletion:description attributes are extracted
-// correctly from the namespaced XML response.
+// real SAP systems. SAP returns proposals in asXML envelope form
+// (<asx:abap>...<SCC_COMPLETION>...) when Accept: application/vnd.sap.as+xml
+// is sent. The line/column must be encoded in the URI fragment
+// (...#start=L,C) — the handler's URI mapper extracts the position from
+// there, not from separate query params.
 //
-// IMPORTANT: GetCompletions may return nil even with correct parsing if the
-// completion endpoint returns an empty body (observed in Wave 2 probes on
-// both R/3 and S/4). This test validates that the call doesn't ERROR — a
-// nil result with no error is acceptable (means the endpoint works but has
-// no completions for this position). An error would mean the namespace
-// parsing broke something.
+// A nil result with no error is acceptable (endpoint responded but had no
+// proposals for this position). An error means the request shape regressed.
 //
 // The test uses Z_ADT_MCP_TEST_REPORT's actual source with "sy-" appended.
 // On S/4 this program has executable code; on R/3 it's a bare REPORT.

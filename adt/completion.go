@@ -13,10 +13,14 @@ import (
 )
 
 func (c *httpClient) GetCompletions(ctx context.Context, objectURI, source string, line, column int) ([]CompletionItem, error) {
+	// SAP handler CL_CC_ADT_RES_BASE->determine_input_data calls
+	// map_objref_to_include with set_use_source_based_position=true, which
+	// extracts the (program, include, line, line_offset) tuple from the URI
+	// fragment. The line/column must therefore be encoded in the URI itself
+	// as `...#start=L,C`, not passed as separate top-level query params.
+	sourceURI := objectURI + "/source/main#start=" + strconv.Itoa(line) + "," + strconv.Itoa(column)
 	params := url.Values{}
-	params.Set("uri", objectURI+"/source/main")
-	params.Set("line", strconv.Itoa(line))
-	params.Set("column", strconv.Itoa(column))
+	params.Set("uri", sourceURI)
 	path := "/sap/bc/adt/abapsource/codecompletion/proposal?" + params.Encode()
 
 	resp, err := c.doMutate(ctx, "POST", path,
@@ -47,7 +51,7 @@ func (c *httpClient) GetCompletions(ctx context.Context, objectURI, source strin
 	}
 	result := make([]CompletionItem, len(comps.Items))
 	for i, c := range comps.Items {
-		result[i] = CompletionItem{Text: c.Text, Description: c.Description}
+		result[i] = CompletionItem{Text: c.Identifier}
 	}
 	return result, nil
 }
