@@ -36,19 +36,17 @@ func TestGetCompletions_MultiSystem_Integration(t *testing.T) {
 
 			items, err := sys.Client.GetCompletions(ctx, uri, source, lines, 4)
 			if err != nil {
-				t.Fatalf("[%s] GetCompletions returned error: %v — "+
-					"namespace parsing may be broken", sys.Name, err)
+				t.Fatalf("[%s] GetCompletions returned error: %v", sys.Name, err)
 			}
-			if items == nil {
-				t.Logf("[%s] GetCompletions returned nil (no completions) — "+
-					"endpoint responded but had no proposals for this position. "+
-					"This is the known behaviour from the Wave 2 probes.", sys.Name)
-			} else {
-				t.Logf("[%s] GetCompletions returned %d items!", sys.Name, len(items))
-				for i, item := range items {
-					if i < 5 {
-						t.Logf("[%s]   [%d] text=%q desc=%q", sys.Name, i, item.Text, item.Description)
-					}
+			// SAP returns 0 proposals for `sy-` at end-of-file with no
+			// surrounding statement context (verified on hfq + s4u). The
+			// canary for the URI-shape / asXML regression is
+			// TestGetCompletions_Integration which uses `WRITE ` mid-file
+			// and expects a non-empty list.
+			t.Logf("[%s] GetCompletions returned %d items", sys.Name, len(items))
+			for i, item := range items {
+				if i < 5 {
+					t.Logf("[%s]   [%d] %s", sys.Name, i, item.Text)
 				}
 			}
 		})

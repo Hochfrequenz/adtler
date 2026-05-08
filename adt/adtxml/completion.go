@@ -29,5 +29,4 @@ type Completions struct {
 // Completion is a single code completion proposal in asXML form.
 type Completion struct {
 	Identifier string `xml:"IDENTIFIER"`
-	Kind       int    `xml:"KIND"`
 }
