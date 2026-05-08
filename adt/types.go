@@ -185,22 +185,3 @@ func isInvalidLockHandle(err error) bool {
 	return adtErr.StatusCode == 423
 }
 
-// isPreconditionFailed returns true if the error is a 412
-// ExceptionPreconditionFailed from SAP. Used by SetSource to retry
-// with a re-fetched ETag when the original ETag doesn't match what
-// the server expects (e.g. TABL charset mismatch). See adtler#15.
-//
-// When the error carries a populated Type, this is a structural check
-// against ExceptionTypePreconditionFailed. When Type is empty
-// (legacy <ExceptionText> responses), the function falls back to the
-// status-code check that predates the structured envelope support.
-func isPreconditionFailed(err error) bool {
-	var adtErr *ADTError
-	if !errors.As(err, &adtErr) {
-		return false
-	}
-	if adtErr.Type != "" {
-		return adtErr.Type == ExceptionTypePreconditionFailed
-	}
-	return adtErr.StatusCode == 412
-}
