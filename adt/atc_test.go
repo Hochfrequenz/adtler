@@ -260,8 +260,9 @@ func TestRunATCCheck_PrefersWorklistIDFromRunsResponse(t *testing.T) {
 }
 
 // TestRunATCCheck_DefaultsVariantToDEFAULT — empty caller variant maps to
-// "DEFAULT" on the worklists URL. Avoids GetATCCustomizing (which has its
-// own session-state issue, adtler#44).
+// "DEFAULT" on the worklists URL. The fallback avoids an implicit
+// GetATCCustomizing round-trip; callers who need to discover their
+// system variant can call GetATCCustomizing themselves.
 func TestRunATCCheck_DefaultsVariantToDEFAULT(t *testing.T) {
 	cap := &atcMockCapture{}
 	srv := newATCMock(t, cap)
