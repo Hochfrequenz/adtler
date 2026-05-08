@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 )
 
 func TestNavigateToDefinition(t *testing.T) {
+	const wantSource = "REPORT ztest.\nDATA cls TYPE REF TO zcl_target."
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
@@ -20,6 +22,13 @@ func TestNavigateToDefinition(t *testing.T) {
 		if r.URL.Path != "/sap/bc/adt/navigation/target" {
 			w.WriteHeader(http.StatusNotFound)
 			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != wantSource {
+			t.Errorf("body: got %q, want %q", string(body), wantSource)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+			t.Errorf("Content-Type: got %q", ct)
 		}
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(http.StatusOK)
@@ -35,7 +44,7 @@ func TestNavigateToDefinition(t *testing.T) {
 	client := adt.NewClient(cfg)
 
 	uri, err := client.NavigateToDefinition(context.Background(),
-		"/sap/bc/adt/programs/programs/ztest/source/main#start=5,8")
+		"/sap/bc/adt/programs/programs/ztest/source/main#start=5,8", wantSource)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -10,17 +10,17 @@ import (
 )
 
 // TestNavigateToDefinition_Namespace_MultiSystem_Integration exercises
-// NavigateToDefinition against real SAP systems. The namespace parsing fix
-// in this PR ensures the adtcore:uri attribute is extracted correctly from
-// the namespaced XML response.
+// NavigateToDefinition against real SAP systems. The fix passes the source
+// code in the request body — without it the SAP handler
+// (CL_SEDI_ADT_RES_NAVIGATION) cannot resolve the cursor position and the
+// response stays empty, which earlier looked to callers like an "echo" of
+// the input URI.
 //
-// NOTE: from the Wave 2 investigation (issue #8), we know the endpoint
-// genuinely echoes the input position for many cursor positions — even
-// for clear cross-references like cl_abap_unit_assert. This is a SAP
-// endpoint limitation, not a parsing bug. The test therefore:
-//   - Asserts the call does NOT error (namespace parsing doesn't break it)
-//   - Logs whether the result is an echo or an actual navigation target
-//   - Does NOT hard-fail on echo (that's the known behaviour)
+// The test:
+//   - Asserts the call does NOT error
+//   - Logs the resolved target so failures are diagnosable
+//   - Skips when the test report has no cross-reference for the cursor to
+//     land on (R/3 fixture is a bare REPORT)
 func TestNavigateToDefinition_Namespace_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
@@ -61,7 +61,7 @@ func TestNavigateToDefinition_Namespace_MultiSystem_Integration(t *testing.T) {
 				strconv.Itoa(navLine) + "," + strconv.Itoa(navCol)
 			t.Logf("[%s] navigating from %s", sys.Name, sourceURI)
 
-			target, err := sys.Client.NavigateToDefinition(ctx, sourceURI)
+			target, err := sys.Client.NavigateToDefinition(ctx, sourceURI, src.Source)
 			if err != nil {
 				t.Fatalf("[%s] NavigateToDefinition returned error: %v — "+
 					"namespace parsing may be broken", sys.Name, err)
