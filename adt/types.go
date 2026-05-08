@@ -84,9 +84,13 @@ type TransportCheckResult struct {
 }
 
 // CompletionItem represents a single code completion proposal.
+//
+// The asXML payload from /sap/bc/adt/abapsource/codecompletion/proposal
+// also carries metadata (kind, role, location, grade) and an identifier
+// only — there is no description. Element details (signatures, doc text)
+// come from a separate /elementinfo call.
 type CompletionItem struct {
-	Text        string
-	Description string
+	Text string
 }
 
 // ATCCustomizingResult holds ATC configuration from the SAP system.

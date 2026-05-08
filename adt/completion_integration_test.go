@@ -19,8 +19,15 @@ func TestGetCompletions_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCompletions failed: %v", err)
 	}
-	// Some SAP systems return empty completions (service not configured).
-	// This is not an error — just log the result.
+	// Canary for the URI-shape / asXML regression. `WRITE ` at column 6
+	// is a high-confidence trigger that SAP has proposals for: empirical
+	// runs return ~20 keywords/built-ins on both R/3 and S/4. An empty
+	// list here means the request shape regressed, not a system quirk.
+	if len(completions) == 0 {
+		t.Fatalf("GetCompletions returned 0 items for `WRITE ` cursor — " +
+			"likely a regression in URI fragment encoding or asXML parsing; " +
+			"see CL_CC_ADT_RES_BASE->determine_input_data")
+	}
 	t.Logf("got %d completions", len(completions))
 
 	for i, c := range completions {
@@ -28,6 +35,6 @@ func TestGetCompletions_Integration(t *testing.T) {
 			t.Logf("  ... and %d more", len(completions)-5)
 			break
 		}
-		t.Logf("  [%d] %s — %s", i, c.Text, c.Description)
+		t.Logf("  [%d] %s", i, c.Text)
 	}
 }

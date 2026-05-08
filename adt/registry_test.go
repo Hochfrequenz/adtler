@@ -131,7 +131,7 @@ func allEndpointsHandler() http.Handler {
 		emptyCheckReports  = `<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun"/>`
 		emptyRunResult     = `<runResult></runResult>`
 		emptyTransports    = `<root><workbench><modifiable/><released/></workbench><customizing><modifiable/><released/></customizing></root>`
-		emptyCompletions   = `<codecompletion:completions xmlns:codecompletion="http://www.sap.com/adt/codecompletion"></codecompletion:completions>`
+		emptyCompletions   = `<asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA></DATA></asx:values></asx:abap>`
 		activatePath       = "/sap/bc/adt/activation"
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

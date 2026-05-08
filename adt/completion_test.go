@@ -21,19 +21,21 @@ func TestGetCompletions(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if r.URL.Query().Get("line") != "5" {
-			t.Errorf("line: got %q", r.URL.Query().Get("line"))
+		// SAP expects line/column embedded in the URI fragment, not as
+		// separate top-level query params.
+		gotURI := r.URL.Query().Get("uri")
+		wantURI := "/sap/bc/adt/programs/programs/ZTEST/source/main#start=5,10"
+		if gotURI != wantURI {
+			t.Errorf("uri: got %q, want %q", gotURI, wantURI)
 		}
-		if r.URL.Query().Get("column") != "10" {
-			t.Errorf("column: got %q", r.URL.Query().Get("column"))
-		}
-		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("Content-Type", "application/vnd.sap.as+xml")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<codecompletion:completions xmlns:codecompletion="http://www.sap.com/adt/codecompletion">
-  <codecompletion:completion codecompletion:text="METHOD" codecompletion:description="ABAP Keyword"/>
-  <codecompletion:completion codecompletion:text="MESSAGE" codecompletion:description="ABAP Keyword"/>
-</codecompletion:completions>`))
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>` +
+			`<asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml">` +
+			`<asx:values><DATA>` +
+			`<SCC_COMPLETION><KIND>52</KIND><IDENTIFIER>METHOD</IDENTIFIER></SCC_COMPLETION>` +
+			`<SCC_COMPLETION><KIND>52</KIND><IDENTIFIER>MESSAGE</IDENTIFIER></SCC_COMPLETION>` +
+			`</DATA></asx:values></asx:abap>`))
 	}))
 	defer srv.Close()
 
