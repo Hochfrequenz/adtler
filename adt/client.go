@@ -238,11 +238,12 @@ func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefres
 // Use this when the underlying HTTP transport requires special routing — for example,
 // when running inside SAP BTP Cloud Foundry and reaching an on-premise system through
 // the BTP Connectivity service's SOCKS5 proxy. Authentication (Basic Auth from cfg.User
-// and cfg.Password, or Bearer token via the returned client's token fields) still flows
-// through cfg; the transport is responsible only for the network path.
+// and cfg.Password) still flows through cfg; the transport is responsible only for the
+// network path.
 //
 // Unlike NewClient, TLSSkipVerify from cfg is NOT applied — the caller's RoundTripper
-// owns its own TLS configuration.
+// owns its own TLS configuration. If you need Bearer token auth with a custom transport,
+// use NewClientWithTokenAndTransport (not yet available; see GitHub issue tracker).
 func NewClientWithTransport(cfg sapmcpconfig.SAPSystem, transport http.RoundTripper) Client {
 	return NewClientWithTransportAndPollInterval(cfg, transport, backgroundRunPollInterval)
 }
@@ -250,6 +251,9 @@ func NewClientWithTransport(cfg sapmcpconfig.SAPSystem, transport http.RoundTrip
 // NewClientWithTransportAndPollInterval is like NewClientWithTransport but with a custom
 // polling interval for background release jobs. Use NewClientWithTransport for the default
 // 10-second interval.
+//
+// Like NewClientWithTransport, TLSSkipVerify from cfg is NOT applied — the caller's
+// RoundTripper owns its own TLS configuration.
 func NewClientWithTransportAndPollInterval(cfg sapmcpconfig.SAPSystem, transport http.RoundTripper, pollInterval time.Duration) Client {
 	jar, _ := cookiejar.New(nil)
 	return &httpClient{
