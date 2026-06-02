@@ -211,6 +211,42 @@ func TestBearerAuthHeader(t *testing.T) {
 	}
 }
 
+func TestNewClientWithTransportUsesInjectedTransport(t *testing.T) {
+	var transportCalled atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`REPORT ZTEST.`))
+	}))
+	defer srv.Close()
+
+	// A RoundTripper that records calls and delegates to the default transport.
+	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		transportCalled.Store(true)
+		return http.DefaultTransport.RoundTrip(req)
+	})
+
+	cfg := newTestConfig(srv.URL)
+	client := adt.NewClientWithTransport(cfg, rt)
+
+	_, err := client.GetSource(context.Background(), "/sap/bc/adt/programs/programs/ZTEST")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !transportCalled.Load() {
+		t.Error("expected custom transport to be called")
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
 func TestOAuth2TokenRefreshOn401(t *testing.T) {
 	var refreshCalled atomic.Bool
 	var callCount atomic.Int32
