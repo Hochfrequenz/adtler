@@ -340,6 +340,17 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 	return checkReleaseResponse(transportNumber, data)
 }
 
+// GetTransportRequests lists CTS transport requests filtered by owner and status.
+//
+// user is the SAP username (e.g. "MMUSTERMANN") whose requests to return.
+// Pass an empty string to omit the filter — but note that SAP CTS then scopes
+// results to the authenticated technical user's context, not all system users.
+// If you want a specific developer's requests (e.g. the person currently logged
+// in via a BTP app), extract their username from the JWT and pass it here.
+//
+// status filters by request state: "D" = modifiable (open), "L" = released, "" = all.
+//
+// The returned slice includes requests from both workbench and customizing groups.
 func (c *httpClient) GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error) {
 	params := url.Values{}
 	if user != "" {
