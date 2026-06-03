@@ -342,7 +342,7 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 
 // GetTransportRequests lists CTS transport requests filtered by owner and status.
 //
-// user is the SAP username (e.g. "KKLEIN") whose requests to return.
+// user is the SAP username (e.g. "MMUSTERMANN") whose requests to return.
 // Pass an empty string to omit the filter — but note that SAP CTS then scopes
 // results to the authenticated technical user's context, not all system users.
 // If you want a specific developer's requests (e.g. the person currently logged
