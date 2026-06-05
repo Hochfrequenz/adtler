@@ -35,6 +35,7 @@ package adt
 import (
 	"context"
 	"encoding/xml"
+	"bytes"
 	"io"
 	"net/http"
 	"net/url"
@@ -57,7 +58,8 @@ type issue63System struct {
 // issue63Systems loads all SAP systems permitted by the SAP_INTEGRATION_SYSTEMS
 // (or SAP_INTEGRATION_SYSTEM / default_system) whitelist. It mirrors the
 // selection logic of eachSystem in integration_helpers_test.go but returns
-// *httpClient values for direct HTTP probing.
+// *httpClient values for direct HTTP probing. The duplication is intentional:
+// eachSystem lives in package adt_test and is not accessible from package adt.
 func issue63Systems(t *testing.T) []issue63System {
 	t.Helper()
 
@@ -128,10 +130,11 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 		sys := sys
 		t.Run(sys.name, func(t *testing.T) {
 			ctx := context.Background()
-			client := NewClient(sys.c.cfg)
 
 			// E070: count modifiable transports per KORRDEV type.
-			e070, err := client.RunQuery(ctx,
+			// sys.c implements the full Client interface — reuse it instead of
+			// constructing a second client, which would split CSRF session state.
+			e070, err := sys.c.RunQuery(ctx,
 				"SELECT KORRDEV, COUNT( TRKORR ) AS CNT FROM E070 WHERE TRSTATUS = 'D' GROUP BY KORRDEV ORDER BY CNT DESCENDING",
 				50)
 			if err != nil {
@@ -147,9 +150,20 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 						cntIdx = i
 					}
 				}
+				// SAP may not honour the alias "CNT" for aggregate columns; fall
+				// back to column index 1 if the alias lookup failed.
+				if korrdevIdx < 0 {
+					korrdevIdx = 0
+				}
+				if cntIdx < 0 {
+					if len(e070.Columns) > 1 {
+						cntIdx = 1
+						t.Logf("  (column alias CNT not found, using column index 1: %q)", e070.Columns[1].Name)
+					}
+				}
 				for _, row := range e070.Rows {
 					korrdev, cnt := "", ""
-					if korrdevIdx >= 0 && korrdevIdx < len(row) {
+					if korrdevIdx < len(row) {
 						korrdev = row[korrdevIdx]
 					}
 					if cntIdx >= 0 && cntIdx < len(row) {
@@ -160,7 +174,7 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 			}
 
 			// ADT standard endpoint: current behavior.
-			transports, err := client.GetTransportRequests(ctx, "", "D")
+			transports, err := sys.c.GetTransportRequests(ctx, "", "D")
 			if err != nil {
 				t.Logf("GetTransportRequests failed: %v", err)
 			} else {
@@ -248,6 +262,8 @@ func TestGetTransportRequests_SystCust_AllTypeQueryParams_Integration(t *testing
 			params: url.Values{"WorkbenchRequests": {"true"}, "CustomizingRequests": {"true"}, "TransportOfCopies": {"true"}, "Modifiable": {"true"}},
 		},
 		{
+			// CamelCase type params (CL_CTS_ADT_TM_CONFIG_HANDLER) combined with
+			// the legacy lowercase status=D that GetTransportRequests currently sends.
 			name:   "AllTypes_LegacyStatusD",
 			params: url.Values{"WorkbenchRequests": {"true"}, "CustomizingRequests": {"true"}, "TransportOfCopies": {"true"}, "status": {"D"}},
 		},
@@ -339,7 +355,7 @@ func TestGetTransportRequests_SystCust_CombinedHypothesis_Integration(t *testing
 // regardless of namespace prefix.
 func countXMLRequestElements(data []byte) int {
 	count := 0
-	d := xml.NewDecoder(strings.NewReader(string(data)))
+	d := xml.NewDecoder(bytes.NewReader(data))
 	for {
 		tok, err := d.Token()
 		if err != nil {
@@ -356,7 +372,7 @@ func countXMLRequestElements(data []byte) int {
 // XML response (any element with a "number" attribute).
 func logTransportNumbersFromXML(t *testing.T, data []byte) {
 	t.Helper()
-	d := xml.NewDecoder(strings.NewReader(string(data)))
+	d := xml.NewDecoder(bytes.NewReader(data))
 	logged := 0
 	for {
 		tok, err := d.Token()
