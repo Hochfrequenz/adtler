@@ -29,10 +29,6 @@ const datapreviewXMLResponse = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<dataPreview:metadata dataPreview:name="TRSTATUS" dataPreview:type="C"/>` +
 	`<dataPreview:dataSet><dataPreview:data>D</dataPreview:data><dataPreview:data>D</dataPreview:data></dataPreview:dataSet>` +
 	`</dataPreview:columns>` +
-	`<dataPreview:columns>` +
-	`<dataPreview:metadata dataPreview:name="AS4TEXT" dataPreview:type="C"/>` +
-	`<dataPreview:dataSet><dataPreview:data>SYST transport 1</dataPreview:data><dataPreview:data>SYST transport 2</dataPreview:data></dataPreview:dataSet>` +
-	`</dataPreview:columns>` +
 	`</dataPreview:tableData>`
 
 func TestCheckTransport(t *testing.T) {
@@ -555,8 +551,10 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if transports[0].Status != "D" {
 		t.Errorf("transport[0].Status: got %q, want D", transports[0].Status)
 	}
-	if transports[0].Description != "SYST transport 1" {
-		t.Errorf("transport[0].Description: got %q, want %q", transports[0].Description, "SYST transport 1")
+	// Description is empty in the fallback path (single-table E070 query; no JOIN
+	// because the ADT data preview endpoint rejects JOINs on some S/4HANA releases).
+	if transports[0].Description != "" {
+		t.Errorf("transport[0].Description: fallback path must return empty description, got %q", transports[0].Description)
 	}
 	if !strings.Contains(gotDatapreviewSQL, "AS4USER = 'METZEJ'") {
 		t.Errorf("fallback SQL must filter by user, got: %s", gotDatapreviewSQL)

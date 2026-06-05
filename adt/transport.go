@@ -432,25 +432,27 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 		return nil, fmt.Errorf("GetTransportRequests: status must be a single uppercase letter, got %q", status)
 	}
 
-	where := []string{"e.STRKORR = ''"}
+	// Exclude tasks (STRKORR is set on tasks; top-level requests have STRKORR = '').
+	where := []string{"STRKORR = ''"}
 	if user != "" {
-		where = append(where, "e.AS4USER = '"+user+"'")
+		where = append(where, "AS4USER = '"+user+"'")
 	}
 	if status != "" {
-		where = append(where, "e.TRSTATUS = '"+status+"'")
+		where = append(where, "TRSTATUS = '"+status+"'")
 	}
 
-	query := "SELECT e.TRKORR, e.AS4USER, e.TRSTATUS, t.AS4TEXT" +
-		" FROM E070 AS e LEFT OUTER JOIN E07T AS t ON t.TRKORR = e.TRKORR AND t.LANGU = 'E'" +
-		" WHERE " + strings.Join(where, " AND ") +
-		" ORDER BY e.TRKORR"
+	// Single-table query: the ADT data preview endpoint rejects JOINs on some
+	// S/4HANA releases. Description is not available here; callers that need it
+	// can call GetTransportInfo per transport number.
+	query := "SELECT TRKORR, AS4USER, TRSTATUS FROM E070 WHERE " +
+		strings.Join(where, " AND ") + " ORDER BY TRKORR"
 
 	qr, err := c.RunQuery(ctx, query, 5000)
 	if err != nil {
 		return nil, fmt.Errorf("GetTransportRequests: fallback E070 query: %w", err)
 	}
 
-	trkorrIdx, userIdx, statusIdx, textIdx := -1, -1, -1, -1
+	trkorrIdx, userIdx, statusIdx := -1, -1, -1
 	for i, col := range qr.Columns {
 		switch col.Name {
 		case "TRKORR":
@@ -459,8 +461,6 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 			userIdx = i
 		case "TRSTATUS":
 			statusIdx = i
-		case "AS4TEXT":
-			textIdx = i
 		}
 	}
 	if trkorrIdx < 0 {
@@ -478,9 +478,6 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 		}
 		if statusIdx >= 0 && statusIdx < len(row) {
 			tr.Status = strings.TrimSpace(row[statusIdx])
-		}
-		if textIdx >= 0 && textIdx < len(row) {
-			tr.Description = strings.TrimSpace(row[textIdx])
 		}
 		if tr.Number != "" {
 			result = append(result, tr)
