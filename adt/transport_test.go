@@ -13,6 +13,24 @@ import (
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
+const datapreviewXMLResponse = `<?xml version="1.0" encoding="utf-8"?>` +
+	`<dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">` +
+	`<dataPreview:totalRows>2</dataPreview:totalRows>` +
+	`<dataPreview:queryExecutionTime>12.5</dataPreview:queryExecutionTime>` +
+	`<dataPreview:columns>` +
+	`<dataPreview:metadata dataPreview:name="TRKORR" dataPreview:type="C" dataPreview:keyAttribute="true"/>` +
+	`<dataPreview:dataSet><dataPreview:data>S4UK901071</dataPreview:data><dataPreview:data>S4UK901072</dataPreview:data></dataPreview:dataSet>` +
+	`</dataPreview:columns>` +
+	`<dataPreview:columns>` +
+	`<dataPreview:metadata dataPreview:name="AS4USER" dataPreview:type="C"/>` +
+	`<dataPreview:dataSet><dataPreview:data>METZEJ</dataPreview:data><dataPreview:data>METZEJ</dataPreview:data></dataPreview:dataSet>` +
+	`</dataPreview:columns>` +
+	`<dataPreview:columns>` +
+	`<dataPreview:metadata dataPreview:name="TRSTATUS" dataPreview:type="C"/>` +
+	`<dataPreview:dataSet><dataPreview:data>D</dataPreview:data><dataPreview:data>D</dataPreview:data></dataPreview:dataSet>` +
+	`</dataPreview:columns>` +
+	`</dataPreview:tableData>`
+
 func TestCheckTransport(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -80,7 +98,7 @@ func TestCheckTransport(t *testing.T) {
 
 func TestGetTransportRequests(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/sap/bc/adt/cts/transportrequests" {
+		if r.URL.Path != transportRequestsEndpoint {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -480,5 +498,134 @@ func TestDeleteAndReleaseTransport(t *testing.T) {
 				t.Errorf("path: got %q, want %q", gotPath, tt.wantPath)
 			}
 		})
+	}
+}
+
+// TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty verifies that
+// GetTransportRequests falls back to querying E070/E07T when the ADT transport
+// organizer tree endpoint returns an empty <tm:root/> — the behaviour on
+// S/4HANA systems that use KORRDEV=SYST/CUST instead of the classic K type.
+func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
+	const datapreviewEndpoint = "/sap/bc/adt/datapreview/freestyle"
+	var gotDatapreviewSQL string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "tok")
+			w.WriteHeader(http.StatusOK)
+		case transportRequestsEndpoint:
+			// Simulate KORRDEV=SYST/CUST system: ADT returns empty root.
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core"/>`))
+		case datapreviewEndpoint:
+			body, _ := io.ReadAll(r.Body)
+			gotDatapreviewSQL = string(body)
+			w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(datapreviewXMLResponse))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	transports, err := client.GetTransportRequests(context.Background(), "METZEJ", "D")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transports) != 2 {
+		t.Fatalf("expected 2 transports from E070 fallback, got %d", len(transports))
+	}
+	if transports[0].Number != "S4UK901071" {
+		t.Errorf("transport[0].Number: got %q, want S4UK901071", transports[0].Number)
+	}
+	if transports[0].Owner != "METZEJ" {
+		t.Errorf("transport[0].Owner: got %q, want METZEJ", transports[0].Owner)
+	}
+	if transports[0].Status != "D" {
+		t.Errorf("transport[0].Status: got %q, want D", transports[0].Status)
+	}
+	// Description is empty in the fallback path (single-table E070 query; no JOIN
+	// because the ADT data preview endpoint rejects JOINs on some S/4HANA releases).
+	if transports[0].Description != "" {
+		t.Errorf("transport[0].Description: fallback path must return empty description, got %q", transports[0].Description)
+	}
+	if !strings.Contains(gotDatapreviewSQL, "AS4USER = 'METZEJ'") {
+		t.Errorf("fallback SQL must filter by user, got: %s", gotDatapreviewSQL)
+	}
+	if !strings.Contains(gotDatapreviewSQL, "TRSTATUS = 'D'") {
+		t.Errorf("fallback SQL must filter by status, got: %s", gotDatapreviewSQL)
+	}
+}
+
+// TestGetTransportRequests_RejectsInvalidUserInFallback verifies that the E070
+// fallback path rejects a user parameter that contains characters which could
+// break the SQL WHERE clause (e.g. single quotes).
+func TestGetTransportRequests_RejectsInvalidUserInFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == transportRequestsEndpoint {
+			// Return empty root to trigger the fallback.
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core"/>`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.GetTransportRequests(context.Background(), "ME'TZEJ", "D")
+	if err == nil {
+		t.Fatal("expected error for user containing single quote, got nil")
+	}
+}
+
+// TestGetTransportRequests_SkipsFallbackWhenADTReturnsResults verifies that the
+// E070 fallback is NOT triggered when the ADT transport organizer endpoint
+// already returns results — the normal path on classic K-type systems.
+func TestGetTransportRequests_SkipsFallbackWhenADTReturnsResults(t *testing.T) {
+	datapreviewCalled := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == transportRequestsEndpoint:
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
+<tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
+  <tm:workbench><tm:modifiable>
+    <tm:request tm:number="DEVK900001" tm:owner="DEV" tm:desc="normal transport" tm:status="D"/>
+  </tm:modifiable></tm:workbench>
+</tm:root>`))
+		case strings.Contains(r.URL.Path, "datapreview"):
+			datapreviewCalled = true
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	transports, err := client.GetTransportRequests(context.Background(), "", "D")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transports) != 1 {
+		t.Fatalf("expected 1 transport, got %d", len(transports))
+	}
+	if datapreviewCalled {
+		t.Error("E070 fallback must not be triggered when ADT returns results")
 	}
 }

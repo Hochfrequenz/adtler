@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -391,6 +392,87 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 		result[i] = TransportRequest{
 			Number: r.Number, Owner: r.Owner,
 			Description: r.Description, Status: r.Status,
+		}
+	}
+
+	// S/4HANA systems using KORRDEV=SYST/CUST have transports silently filtered
+	// by the ADT endpoint, which only surfaces KORRDEV=K requests. Fall back to
+	// querying E070/E07T directly when the ADT response is empty.
+	if len(result) == 0 {
+		return c.getTransportRequestsViaQuery(ctx, user, status)
+	}
+	return result, nil
+}
+
+// transportUserRe matches valid SAP usernames safe to embed in a SQL WHERE
+// clause literal. SAP usernames are at most 40 chars: alphanumeric, _, -, ..
+var transportUserRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,40}$`)
+
+// transportStatusRe matches a valid CTS transport status: a single uppercase
+// letter (D = modifiable, L = released, A = accepted, …).
+var transportStatusRe = regexp.MustCompile(`^[A-Z]$`)
+
+// getTransportRequestsViaQuery is the fallback for GetTransportRequests on
+// S/4HANA systems where KORRDEV=SYST/CUST prevents the ADT transport organizer
+// tree endpoint from returning any results. It queries E070 directly via the
+// ADT data preview endpoint (JOINs are rejected on some S/4HANA releases).
+func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, status string) ([]TransportRequest, error) {
+	if user != "" && !transportUserRe.MatchString(user) {
+		return nil, fmt.Errorf("GetTransportRequests: user %q contains characters not allowed in a transport query", user)
+	}
+	if status != "" && !transportStatusRe.MatchString(status) {
+		return nil, fmt.Errorf("GetTransportRequests: status must be a single uppercase letter, got %q", status)
+	}
+
+	// Exclude tasks (STRKORR is set on tasks; top-level requests have STRKORR = '').
+	where := []string{"STRKORR = ''"}
+	if user != "" {
+		where = append(where, "AS4USER = '"+user+"'")
+	}
+	if status != "" {
+		where = append(where, "TRSTATUS = '"+status+"'")
+	}
+
+	// Single-table query: the ADT data preview endpoint rejects JOINs on some
+	// S/4HANA releases. Description is not available here; callers that need it
+	// can call GetTransportInfo per transport number.
+	query := "SELECT TRKORR, AS4USER, TRSTATUS FROM E070 WHERE " +
+		strings.Join(where, " AND ") + " ORDER BY TRKORR"
+
+	qr, err := c.RunQuery(ctx, query, 5000)
+	if err != nil {
+		return nil, fmt.Errorf("GetTransportRequests: fallback E070 query: %w", err)
+	}
+
+	trkorrIdx, userIdx, statusIdx := -1, -1, -1
+	for i, col := range qr.Columns {
+		switch col.Name {
+		case "TRKORR":
+			trkorrIdx = i
+		case "AS4USER":
+			userIdx = i
+		case "TRSTATUS":
+			statusIdx = i
+		}
+	}
+	if trkorrIdx < 0 {
+		return nil, fmt.Errorf("GetTransportRequests: fallback query returned no TRKORR column")
+	}
+
+	result := make([]TransportRequest, 0, len(qr.Rows))
+	for _, row := range qr.Rows {
+		tr := TransportRequest{}
+		if trkorrIdx < len(row) {
+			tr.Number = strings.TrimSpace(row[trkorrIdx])
+		}
+		if userIdx >= 0 && userIdx < len(row) {
+			tr.Owner = strings.TrimSpace(row[userIdx])
+		}
+		if statusIdx >= 0 && statusIdx < len(row) {
+			tr.Status = strings.TrimSpace(row[statusIdx])
+		}
+		if tr.Number != "" {
+			result = append(result, tr)
 		}
 	}
 	return result, nil

@@ -130,7 +130,7 @@ func allEndpointsHandler() http.Handler {
 		emptyNodeStructure = `<asx:abap xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA><TREE_CONTENT></TREE_CONTENT></DATA></asx:values></asx:abap>`
 		emptyCheckReports  = `<chkrun:checkRunReports xmlns:chkrun="http://www.sap.com/adt/checkrun"/>`
 		emptyRunResult     = `<runResult></runResult>`
-		emptyTransports    = `<root><workbench><modifiable/><released/></workbench><customizing><modifiable/><released/></customizing></root>`
+		emptyTransports    = `<tm:root xmlns:tm="http://www.sap.com/cts/adt/tm"><tm:workbench><tm:modifiable><tm:request tm:number="NPLK000001" tm:owner="USER" tm:desc="test" tm:status="D"/></tm:modifiable></tm:workbench></tm:root>`
 		emptyCompletions   = `<asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA></DATA></asx:values></asx:abap>`
 		activatePath       = "/sap/bc/adt/activation"
 	)
@@ -171,7 +171,7 @@ func allEndpointsHandler() http.Handler {
 		case path == "/sap/bc/adt/abapunit/testruns":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyRunResult))
-		case path == "/sap/bc/adt/cts/transportrequests" && method == http.MethodGet:
+		case path == transportRequestsEndpoint && method == http.MethodGet:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyTransports))
 		case strings.HasPrefix(path, "/sap/bc/adt/cts/transportrequests/"):

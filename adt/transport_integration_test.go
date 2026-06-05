@@ -61,3 +61,33 @@ func TestGetTransportRequests_Integration(t *testing.T) {
 		}
 	}
 }
+
+// TestGetTransportRequests_AllSystems_Integration exercises GetTransportRequests
+// against every configured system via eachSystem. On S/4HANA systems with
+// KORRDEV=SYST/CUST (issue #63) the E070 fallback path is triggered; on
+// classic R/3 systems the ADT endpoint returns results directly.
+func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+
+			transports, err := sys.Client.GetTransportRequests(ctx, "", "D")
+			if err != nil {
+				t.Fatalf("GetTransportRequests failed: %v", err)
+			}
+			if len(transports) == 0 {
+				t.Fatal("expected at least one modifiable transport, got 0")
+			}
+			t.Logf("%s: got %d modifiable transport requests", sys.Name, len(transports))
+			for i, tr := range transports {
+				if tr.Number == "" {
+					t.Errorf("transport [%d]: Number is empty", i)
+				}
+				if i < 3 {
+					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.Status, tr.Description)
+				}
+			}
+		})
+	}
+}
