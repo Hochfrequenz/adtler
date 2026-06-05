@@ -33,9 +33,9 @@
 package adt
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
-	"bytes"
 	"io"
 	"net/http"
 	"net/url"
