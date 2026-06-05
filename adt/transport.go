@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -403,32 +404,23 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 	return result, nil
 }
 
+// transportUserRe matches valid SAP usernames safe to embed in a SQL WHERE
+// clause literal. SAP usernames are at most 40 chars: alphanumeric, _, -, ..
+var transportUserRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,40}$`)
+
+// transportStatusRe matches a valid CTS transport status: a single uppercase
+// letter (D = modifiable, L = released, A = accepted, …).
+var transportStatusRe = regexp.MustCompile(`^[A-Z]$`)
+
 // getTransportRequestsViaQuery is the fallback for GetTransportRequests on
 // S/4HANA systems where KORRDEV=SYST/CUST prevents the ADT transport organizer
-// tree endpoint from returning any results. It queries E070 and E07T directly
-// via the ADT data preview endpoint.
-// validTransportUserParam reports whether s is safe to embed in a SQL WHERE
-// clause as a quoted literal. SAP usernames are at most 40 chars and contain
-// only alphanumeric characters, underscores, hyphens, and dots — no quotes,
-// semicolons, or other characters that could break the surrounding SQL string.
-func validTransportUserParam(s string) bool {
-	if len(s) > 40 {
-		return false
-	}
-	for _, r := range s {
-		if ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') || r == '_' || r == '-' || r == '.' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
+// tree endpoint from returning any results. It queries E070 directly via the
+// ADT data preview endpoint (JOINs are rejected on some S/4HANA releases).
 func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, status string) ([]TransportRequest, error) {
-	if user != "" && !validTransportUserParam(user) {
+	if user != "" && !transportUserRe.MatchString(user) {
 		return nil, fmt.Errorf("GetTransportRequests: user %q contains characters not allowed in a transport query", user)
 	}
-	if status != "" && (len(status) != 1 || status[0] < 'A' || status[0] > 'Z') {
+	if status != "" && !transportStatusRe.MatchString(status) {
 		return nil, fmt.Errorf("GetTransportRequests: status must be a single uppercase letter, got %q", status)
 	}
 
