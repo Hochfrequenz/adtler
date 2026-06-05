@@ -393,6 +393,82 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 			Description: r.Description, Status: r.Status,
 		}
 	}
+
+	// S/4HANA systems using KORRDEV=SYST/CUST have transports silently filtered
+	// by the ADT endpoint, which only surfaces KORRDEV=K requests. Fall back to
+	// querying E070/E07T directly when the ADT response is empty.
+	if len(result) == 0 {
+		return c.getTransportRequestsViaQuery(ctx, user, status)
+	}
+	return result, nil
+}
+
+// getTransportRequestsViaQuery is the fallback for GetTransportRequests on
+// S/4HANA systems where KORRDEV=SYST/CUST prevents the ADT transport organizer
+// tree endpoint from returning any results. It queries E070 and E07T directly
+// via the ADT data preview endpoint.
+func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, status string) ([]TransportRequest, error) {
+	if strings.ContainsAny(user, "'\"\\;") {
+		return nil, fmt.Errorf("GetTransportRequests: invalid character in user %q", user)
+	}
+	if status != "" && (len(status) != 1 || status[0] < 'A' || status[0] > 'Z') {
+		return nil, fmt.Errorf("GetTransportRequests: status must be a single uppercase letter, got %q", status)
+	}
+
+	where := []string{"e.STRKORR = ''"}
+	if user != "" {
+		where = append(where, "e.AS4USER = '"+user+"'")
+	}
+	if status != "" {
+		where = append(where, "e.TRSTATUS = '"+status+"'")
+	}
+
+	sql := "SELECT e.TRKORR, e.AS4USER, e.TRSTATUS, t.AS4TEXT" +
+		" FROM E070 AS e LEFT OUTER JOIN E07T AS t ON t.TRKORR = e.TRKORR AND t.LANGU = 'E'" +
+		" WHERE " + strings.Join(where, " AND ") +
+		" ORDER BY e.TRKORR"
+
+	qr, err := c.RunQuery(ctx, sql, 5000)
+	if err != nil {
+		return nil, fmt.Errorf("GetTransportRequests: fallback E070 query: %w", err)
+	}
+
+	trkorrIdx, userIdx, statusIdx, textIdx := -1, -1, -1, -1
+	for i, col := range qr.Columns {
+		switch col.Name {
+		case "TRKORR":
+			trkorrIdx = i
+		case "AS4USER":
+			userIdx = i
+		case "TRSTATUS":
+			statusIdx = i
+		case "AS4TEXT":
+			textIdx = i
+		}
+	}
+	if trkorrIdx < 0 {
+		return nil, fmt.Errorf("GetTransportRequests: fallback query returned no TRKORR column")
+	}
+
+	result := make([]TransportRequest, 0, len(qr.Rows))
+	for _, row := range qr.Rows {
+		tr := TransportRequest{}
+		if trkorrIdx < len(row) {
+			tr.Number = strings.TrimSpace(row[trkorrIdx])
+		}
+		if userIdx >= 0 && userIdx < len(row) {
+			tr.Owner = strings.TrimSpace(row[userIdx])
+		}
+		if statusIdx >= 0 && statusIdx < len(row) {
+			tr.Status = strings.TrimSpace(row[statusIdx])
+		}
+		if textIdx >= 0 && textIdx < len(row) {
+			tr.Description = strings.TrimSpace(row[textIdx])
+		}
+		if tr.Number != "" {
+			result = append(result, tr)
+		}
+	}
 	return result, nil
 }
 
