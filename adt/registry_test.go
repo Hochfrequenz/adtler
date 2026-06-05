@@ -171,7 +171,7 @@ func allEndpointsHandler() http.Handler {
 		case path == "/sap/bc/adt/abapunit/testruns":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyRunResult))
-		case path == "/sap/bc/adt/cts/transportrequests" && method == http.MethodGet:
+		case path == transportRequestsEndpoint && method == http.MethodGet:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyTransports))
 		case strings.HasPrefix(path, "/sap/bc/adt/cts/transportrequests/"):

@@ -98,7 +98,7 @@ func TestCheckTransport(t *testing.T) {
 
 func TestGetTransportRequests(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/sap/bc/adt/cts/transportrequests" {
+		if r.URL.Path != transportRequestsEndpoint {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -510,16 +510,16 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	var gotDatapreviewSQL string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == csrfEndpoint:
+		switch r.URL.Path {
+		case csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "tok")
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/sap/bc/adt/cts/transportrequests":
+		case transportRequestsEndpoint:
 			// Simulate KORRDEV=SYST/CUST system: ADT returns empty root.
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core"/>`))
-		case r.URL.Path == datapreviewEndpoint:
+		case datapreviewEndpoint:
 			body, _ := io.ReadAll(r.Body)
 			gotDatapreviewSQL = string(body)
 			w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
@@ -569,7 +569,7 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 // break the SQL WHERE clause (e.g. single quotes).
 func TestGetTransportRequests_RejectsInvalidUserInFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sap/bc/adt/cts/transportrequests" {
+		if r.URL.Path == transportRequestsEndpoint {
 			// Return empty root to trigger the fallback.
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
@@ -597,7 +597,7 @@ func TestGetTransportRequests_SkipsFallbackWhenADTReturnsResults(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/sap/bc/adt/cts/transportrequests":
+		case r.URL.Path == transportRequestsEndpoint:
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>

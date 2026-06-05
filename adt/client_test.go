@@ -26,6 +26,10 @@ const logoffPath = "/sap/public/bc/icf/logoff"
 // across multiple test files. Hoisted for goconst.
 const progType = "PROG/P"
 
+// transportRequestsEndpoint is the ADT CTS transport list endpoint, referenced
+// across registry_test.go and transport_test.go. Hoisted for goconst.
+const transportRequestsEndpoint = "/sap/bc/adt/cts/transportrequests"
+
 func newTestConfig(host string) sapmcpconfig.SAPSystem {
 	return sapmcpconfig.SAPSystem{
 		Host:     host,
