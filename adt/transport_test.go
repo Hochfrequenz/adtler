@@ -566,6 +566,31 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestGetTransportRequests_RejectsInvalidUserInFallback verifies that the E070
+// fallback path rejects a user parameter that contains characters which could
+// break the SQL WHERE clause (e.g. single quotes).
+func TestGetTransportRequests_RejectsInvalidUserInFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sap/bc/adt/cts/transportrequests" {
+			// Return empty root to trigger the fallback.
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core"/>`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.GetTransportRequests(context.Background(), "ME'TZEJ", "D")
+	if err == nil {
+		t.Fatal("expected error for user containing single quote, got nil")
+	}
+}
+
 // TestGetTransportRequests_SkipsFallbackWhenADTReturnsResults verifies that the
 // E070 fallback is NOT triggered when the ADT transport organizer endpoint
 // already returns results — the normal path on classic K-type systems.

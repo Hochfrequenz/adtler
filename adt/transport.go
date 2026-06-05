@@ -407,9 +407,26 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 // S/4HANA systems where KORRDEV=SYST/CUST prevents the ADT transport organizer
 // tree endpoint from returning any results. It queries E070 and E07T directly
 // via the ADT data preview endpoint.
+// validTransportUserParam reports whether s is safe to embed in a SQL WHERE
+// clause as a quoted literal. SAP usernames are at most 40 chars and contain
+// only alphanumeric characters, underscores, hyphens, and dots — no quotes,
+// semicolons, or other characters that could break the surrounding SQL string.
+func validTransportUserParam(s string) bool {
+	if len(s) > 40 {
+		return false
+	}
+	for _, r := range s {
+		if ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') || r == '_' || r == '-' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, status string) ([]TransportRequest, error) {
-	if strings.ContainsAny(user, "'\"\\;") {
-		return nil, fmt.Errorf("GetTransportRequests: invalid character in user %q", user)
+	if user != "" && !validTransportUserParam(user) {
+		return nil, fmt.Errorf("GetTransportRequests: user %q contains characters not allowed in a transport query", user)
 	}
 	if status != "" && (len(status) != 1 || status[0] < 'A' || status[0] > 'Z') {
 		return nil, fmt.Errorf("GetTransportRequests: status must be a single uppercase letter, got %q", status)
@@ -423,12 +440,12 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 		where = append(where, "e.TRSTATUS = '"+status+"'")
 	}
 
-	sql := "SELECT e.TRKORR, e.AS4USER, e.TRSTATUS, t.AS4TEXT" +
+	query := "SELECT e.TRKORR, e.AS4USER, e.TRSTATUS, t.AS4TEXT" +
 		" FROM E070 AS e LEFT OUTER JOIN E07T AS t ON t.TRKORR = e.TRKORR AND t.LANGU = 'E'" +
 		" WHERE " + strings.Join(where, " AND ") +
 		" ORDER BY e.TRKORR"
 
-	qr, err := c.RunQuery(ctx, sql, 5000)
+	qr, err := c.RunQuery(ctx, query, 5000)
 	if err != nil {
 		return nil, fmt.Errorf("GetTransportRequests: fallback E070 query: %w", err)
 	}
