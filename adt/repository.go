@@ -71,6 +71,7 @@ var objectTypeAcceptHeaders = map[string]string{
 	"/sap/bc/adt/packages":               "application/vnd.sap.adt.packages.v2+xml",
 	"/sap/bc/adt/bo/behaviordefinitions": "application/vnd.sap.adt.blues.v1+xml",
 	"/sap/bc/adt/acm/dcl/sources":        "application/vnd.sap.adt.dclSource+xml",
+	"/sap/bc/adt/vit/wb/object_type":     vitObjectPropertiesContentType,
 }
 
 // fugrIncludeContentType is the vendor MIME type S/4 requires for function
@@ -79,6 +80,12 @@ var objectTypeAcceptHeaders = map[string]string{
 // (functions.groups.v3+xml) which S/4 rejects with HTTP 406 for include
 // URIs. See adtler#17 / mcp-server-abap#296.
 const fugrIncludeContentType = "application/vnd.sap.adt.functions.fincludes.v2+xml"
+
+// vitObjectPropertiesContentType is the vendor MIME type required by SAP for
+// all VIT (Visual IT Tools) object types whose ADT URIs start with
+// /sap/bc/adt/vit/wb/object_type/. SAP advertises this type in the 406
+// response when the wrong Accept header is sent. See adtler#72.
+const vitObjectPropertiesContentType = "application/vnd.sap.adt.basic.object.properties+xml"
 
 // acceptHeaderForURI returns the best Accept header for a given object URI.
 // It first checks the ADT discovery cache (populated from /sap/bc/adt/discovery

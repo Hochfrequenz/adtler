@@ -169,6 +169,115 @@ func TestGetObjectInfoClass(t *testing.T) {
 	}
 }
 
+func TestGetObjectInfoVIT(t *testing.T) {
+	tests := []struct {
+		name      string
+		uri       string
+		wantType  string
+		objectXML string
+	}{
+		{
+			name:     "UIAC (UI annotation component)",
+			uri:      "/sap/bc/adt/vit/wb/object_type/uiac/object_name/%2fHFQ%2fTC_EXT",
+			wantType: "UIAC",
+			objectXML: `<?xml version="1.0" encoding="utf-8"?>
+<wb:objectProperties adtcore:name="/HFQ/TC_EXT" adtcore:type="UIAC"
+  adtcore:description="HFQ UI Annotation Component"
+  xmlns:wb="http://www.sap.com/adt/vit/wb"
+  xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+</wb:objectProperties>`,
+		},
+		{
+			name:     "UIAD (UI annotation definition)",
+			uri:      "/sap/bc/adt/vit/wb/object_type/uiad/object_name/%2fHFQ%2f95A365FBC361529D",
+			wantType: "UIAD",
+			objectXML: `<?xml version="1.0" encoding="utf-8"?>
+<wb:objectProperties adtcore:name="/HFQ/95A365FBC361529D" adtcore:type="UIAD"
+  adtcore:description="HFQ UI Annotation Definition"
+  xmlns:wb="http://www.sap.com/adt/vit/wb"
+  xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+</wb:objectProperties>`,
+		},
+		{
+			name:     "ADVC (advclrp URI subtype)",
+			uri:      "/sap/bc/adt/vit/wb/object_type/advclrp/object_name/%2fHFQ%2fIWGBLTCDZFMCAZLC5IN3LHTJZY",
+			wantType: "ADVC",
+			objectXML: `<?xml version="1.0" encoding="utf-8"?>
+<wb:objectProperties adtcore:name="/HFQ/IWGBLTCDZFMCAZLC5IN3LHTJZY" adtcore:type="ADVC"
+  adtcore:description="HFQ ADVC Object"
+  xmlns:wb="http://www.sap.com/adt/vit/wb"
+  xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+</wb:objectProperties>`,
+		},
+		{
+			name:     "LRCC (lrcclrp URI subtype)",
+			uri:      "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/%2fHFQ%2fW6SSBNYY2TNVIZKIDDTANNQPGY",
+			wantType: "LRCC",
+			objectXML: `<?xml version="1.0" encoding="utf-8"?>
+<wb:objectProperties adtcore:name="/HFQ/W6SSBNYY2TNVIZKIDDTANNQPGY" adtcore:type="LRCC"
+  adtcore:description="HFQ LRCC Object"
+  xmlns:wb="http://www.sap.com/adt/vit/wb"
+  xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+</wb:objectProperties>`,
+		},
+		{
+			name:     "WDCC (web Dynpro component configuration)",
+			uri:      "/sap/bc/adt/vit/wb/object_type/wdcc/object_name/%2fHFQ%2fBB7F8A229259B8B8C03A1EEC4C307",
+			wantType: "WDCC",
+			objectXML: `<?xml version="1.0" encoding="utf-8"?>
+<wb:objectProperties adtcore:name="/HFQ/BB7F8A229259B8B8C03A1EEC4C307" adtcore:type="WDCC"
+  adtcore:description="HFQ Web Dynpro Component Configuration"
+  xmlns:wb="http://www.sap.com/adt/vit/wb"
+  xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+</wb:objectProperties>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objectXML := tt.objectXML
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == csrfEndpoint {
+					w.Header().Set("X-CSRF-Token", "token")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				accept := r.Header.Get("Accept")
+				if !strings.Contains(accept, "application/vnd.sap.adt.basic.object.properties+xml") {
+					w.WriteHeader(http.StatusNotAcceptable)
+					return
+				}
+				w.Header().Set("Content-Type", "application/vnd.sap.adt.basic.object.properties+xml")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(objectXML))
+			}))
+			defer srv.Close()
+
+			cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+			client := adt.NewClient(cfg)
+
+			info, err := client.GetObjectInfo(context.Background(), tt.uri)
+			if err != nil {
+				t.Fatalf("GetObjectInfo(%s) unexpected error: %v", tt.uri, err)
+			}
+			if info.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", info.Type, tt.wantType)
+			}
+			if info.Name == "" {
+				t.Error("Name is empty")
+			}
+			if info.PackageName == "" {
+				t.Error("PackageName is empty")
+			}
+		})
+	}
+}
+
 func TestGetObjectInfoInterface(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/sap/bc/adt/oo/interfaces/ZIF_EXAMPLE" {
