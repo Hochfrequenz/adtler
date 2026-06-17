@@ -213,6 +213,18 @@ func TestGetObjectInfoVIT(t *testing.T) {
 </wb:objectProperties>`,
 		},
 		{
+			name:     "LRCC (lrcclrp URI subtype)",
+			uri:      "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/%2fHFQ%2fW6SSBNYY2TNVIZKIDDTANNQPGY",
+			wantType: "LRCC",
+			objectXML: `<?xml version="1.0" encoding="utf-8"?>
+<wb:objectProperties adtcore:name="/HFQ/W6SSBNYY2TNVIZKIDDTANNQPGY" adtcore:type="LRCC"
+  adtcore:description="HFQ LRCC Object"
+  xmlns:wb="http://www.sap.com/adt/vit/wb"
+  xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+</wb:objectProperties>`,
+		},
+		{
 			name:     "WDCC (web Dynpro component configuration)",
 			uri:      "/sap/bc/adt/vit/wb/object_type/wdcc/object_name/%2fHFQ%2fBB7F8A229259B8B8C03A1EEC4C307",
 			wantType: "WDCC",

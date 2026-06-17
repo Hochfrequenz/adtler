@@ -15,40 +15,34 @@ import (
 // individual cases when the object URI returns 404.
 func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 	tests := []struct {
-		name    string
-		tadir   string // TADIR object type
-		uri     string
-		s4Only  bool
+		name  string
+		tadir string // TADIR object type
+		uri   string
 	}{
 		{
-			name:   "UIAC",
-			tadir:  "UIAC",
-			uri:    "/sap/bc/adt/vit/wb/object_type/uiac/object_name/%2fHFQ%2fTC_EXT",
-			s4Only: true,
+			name:  "UIAC",
+			tadir: "UIAC",
+			uri:   "/sap/bc/adt/vit/wb/object_type/uiac/object_name/%2fHFQ%2fTC_EXT",
 		},
 		{
-			name:   "UIAD",
-			tadir:  "UIAD",
-			uri:    "/sap/bc/adt/vit/wb/object_type/uiad/object_name/%2fHFQ%2f95A365FBC361529D",
-			s4Only: true,
+			name:  "UIAD",
+			tadir: "UIAD",
+			uri:   "/sap/bc/adt/vit/wb/object_type/uiad/object_name/%2fHFQ%2f95A365FBC361529D",
 		},
 		{
-			name:   "ADVC (advclrp)",
-			tadir:  "ADVC",
-			uri:    "/sap/bc/adt/vit/wb/object_type/advclrp/object_name/%2fHFQ%2fIWGBLTCDZFMCAZLC5IN3LHTJZY",
-			s4Only: true,
+			name:  "ADVC (advclrp)",
+			tadir: "ADVC",
+			uri:   "/sap/bc/adt/vit/wb/object_type/advclrp/object_name/%2fHFQ%2fIWGBLTCDZFMCAZLC5IN3LHTJZY",
 		},
 		{
-			name:   "LRCC (lrcclrp)",
-			tadir:  "LRCC",
-			uri:    "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/%2fHFQ%2fW6SSBNYY2TNVIZKIDDTANNQPGY",
-			s4Only: true,
+			name:  "LRCC (lrcclrp)",
+			tadir: "LRCC",
+			uri:   "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/%2fHFQ%2fW6SSBNYY2TNVIZKIDDTANNQPGY",
 		},
 		{
-			name:   "WDCC",
-			tadir:  "WDCC",
-			uri:    "/sap/bc/adt/vit/wb/object_type/wdcc/object_name/%2fHFQ%2fBB7F8A229259B8B8C03A1EEC4C307",
-			s4Only: true,
+			name:  "WDCC",
+			tadir: "WDCC",
+			uri:   "/sap/bc/adt/vit/wb/object_type/wdcc/object_name/%2fHFQ%2fBB7F8A229259B8B8C03A1EEC4C307",
 		},
 	}
 
