@@ -84,6 +84,17 @@ func TestTextElementLockURI(t *testing.T) {
 		t.Errorf("TextElementLockURI = %q, want %q", got, want)
 	}
 
+	// The prefix is matched case-insensitively (the original-case name suffix
+	// is preserved). This is the behavior that differs from a naive
+	// case-sensitive rewrite, so pin it down.
+	got, err = TextElementLockURI("/SAP/BC/ADT/programs/programs/ZFoo")
+	if err != nil {
+		t.Fatalf("unexpected error on mixed-case prefix: %v", err)
+	}
+	if want := "/sap/bc/adt/textelements/programs/ZFoo"; got != want {
+		t.Errorf("TextElementLockURI(mixed-case) = %q, want %q", got, want)
+	}
+
 	if _, err := TextElementLockURI("/sap/bc/adt/ddic/tables/ZTABLE"); err == nil {
 		t.Error("expected error for unsupported object type")
 	}
