@@ -109,14 +109,26 @@ func TestClassifyError_WrappedADTError(t *testing.T) {
 
 func TestErrorKind_String(t *testing.T) {
 	cases := map[adt.ErrorKind]string{
-		adt.ErrorUnknown:        "unknown",
-		adt.ErrorAlreadyExists:  "already_exists",
-		adt.ErrorLocked:         "locked",
-		adt.ErrorLockConflict:   "lock_conflict",
-		adt.ErrorEtagMismatch:   "etag_mismatch",
-		adt.ErrorCreationFailed: "creation_failed",
-		adt.ErrorNotFound:       "not_found",
-		adt.ErrorServerError:    "server_error",
+		adt.ErrorUnknown:           "unknown",
+		adt.ErrorAlreadyExists:     "already_exists",
+		adt.ErrorLocked:            "locked",
+		adt.ErrorLockConflict:      "lock_conflict",
+		adt.ErrorInvalidLockHandle: "invalid_lock_handle",
+		adt.ErrorEtagMismatch:      "etag_mismatch",
+		adt.ErrorNotAcceptable:     "not_acceptable",
+		adt.ErrorUnsupportedMedia:  "unsupported_media",
+		adt.ErrorUnprocessable:     "unprocessable",
+		adt.ErrorMethodNotAllowed:  "method_not_allowed",
+		adt.ErrorCreationFailed:    "creation_failed",
+		adt.ErrorNotFound:          "not_found",
+		adt.ErrorForbidden:         "forbidden",
+		adt.ErrorBadRequest:        "bad_request",
+		adt.ErrorServerError:       "server_error",
+	}
+	// Guard against an unhandled kind silently returning "unknown": a bogus
+	// value must map to "unknown", but every named kind above must not.
+	if got := adt.ErrorKind(999).String(); got != "unknown" {
+		t.Errorf("out-of-range kind = %q, want %q", got, "unknown")
 	}
 	for kind, want := range cases {
 		if got := kind.String(); got != want {
