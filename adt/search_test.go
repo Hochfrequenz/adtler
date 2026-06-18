@@ -12,7 +12,7 @@ import (
 
 func TestSearchObjects(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/sap/bc/adt/repository/informationsystem/search" {
+		if r.URL.Path != searchEndpoint {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -55,7 +55,7 @@ func TestSearchObjects(t *testing.T) {
 
 func TestSearchPackages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/sap/bc/adt/repository/informationsystem/search" {
+		if r.URL.Path != searchEndpoint {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}

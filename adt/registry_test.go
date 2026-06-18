@@ -153,7 +153,7 @@ func allEndpointsHandler() http.Handler {
 		case path == activatePath:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<chkl:messages xmlns:chkl="http://www.sap.com/abapxml/checklist"><chkl:properties checkExecuted="false" activationExecuted="false" generationExecuted="true"/></chkl:messages>`))
-		case path == "/sap/bc/adt/repository/informationsystem/search":
+		case path == searchEndpoint:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(emptyObjectRefs))
 		case path == "/sap/bc/adt/repository/nodestructure":
