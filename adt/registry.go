@@ -233,6 +233,9 @@ func (r *ClientRegistry) RunATCCheck(ctx context.Context, objectURIs []string, c
 func (r *ClientRegistry) RunQuery(ctx context.Context, sql string, maxRows int) (*QueryResult, error) {
 	return r.activeClient().RunQuery(ctx, sql, maxRows)
 }
+func (r *ClientRegistry) GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error) {
+	return r.activeClient().GetObjectDependencies(ctx, objectType, objectName, maxResults, maxDepth)
+}
 func (r *ClientRegistry) GetEnhancementSpot(ctx context.Context, spotName string) (*EnhancementSpotInfo, error) {
 	return r.activeClient().GetEnhancementSpot(ctx, spotName)
 }
