@@ -136,6 +136,15 @@ func (c *httpClient) writeTextElementSource(ctx context.Context, path, contentTy
 	return checkResponse(resp)
 }
 
+// TextElementLockURI returns the ADT textelements resource URI that the text
+// symbols and selection texts of the given object are bound to. SAP attaches
+// the enqueue lock for text elements to this resource rather than to the object
+// itself, so callers that lock before SetTextElements must acquire the lock on
+// this URI. The objectURI must be a program, class, or function group URI.
+func TextElementLockURI(objectURI string) (string, error) {
+	return resolveTextElementPath(objectURI)
+}
+
 func resolveTextElementPath(objectURI string) (string, error) {
 	upper := strings.ToUpper(objectURI)
 	for prefix, tePath := range textElementEndpoints {
@@ -145,7 +154,7 @@ func resolveTextElementPath(objectURI string) (string, error) {
 			return tePath + name, nil
 		}
 	}
-	return "", fmt.Errorf("GetTextElements: unsupported object type for URI %q (only programs, classes, function groups)", objectURI)
+	return "", fmt.Errorf("unsupported object type for text elements: URI %q (only programs, classes, function groups)", objectURI)
 }
 
 func (c *httpClient) readTextElementSource(ctx context.Context, path, accept string) (string, error) {

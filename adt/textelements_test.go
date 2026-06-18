@@ -73,6 +73,22 @@ func TestResolveTextElementPath(t *testing.T) {
 	}
 }
 
+func TestTextElementLockURI(t *testing.T) {
+	// The public wrapper must return the same textelements resource URI that
+	// SetTextElements writes to, so callers lock the correct enqueue resource.
+	got, err := TextElementLockURI("/sap/bc/adt/programs/programs/ZTEST")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "/sap/bc/adt/textelements/programs/ZTEST"; got != want {
+		t.Errorf("TextElementLockURI = %q, want %q", got, want)
+	}
+
+	if _, err := TextElementLockURI("/sap/bc/adt/ddic/tables/ZTABLE"); err == nil {
+		t.Error("expected error for unsupported object type")
+	}
+}
+
 func TestFormatTextSymbols(t *testing.T) {
 	symbols := []TextSymbol{
 		{Key: "001", Text: "Hello World", MaxLength: 50},
