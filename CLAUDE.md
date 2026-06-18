@@ -61,8 +61,7 @@ This agent does NOT push code — it runs tests and comments only.
 If the integration test passes and CI is green:
 
 - Remove the `needs:integration-test` label
-- Enable auto-merge squash: `gh pr merge <N> --auto --squash`
-- The PR squash-merges when all required checks complete
+- The PR is ready to merge — the author decides when and how to merge
 
 ### Labels (workflow-relevant)
 
