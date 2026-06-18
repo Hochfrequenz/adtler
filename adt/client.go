@@ -116,6 +116,7 @@ type TransportClient interface {
 	ReleaseTransport(ctx context.Context, transportNumber string) error
 	ReleaseTransportWithTasks(ctx context.Context, transportNumber string) error
 	ReleaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error)
+	RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error)
 	GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error)
 	AddToTransport(ctx context.Context, objectURI, transport string) error
 	RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error
