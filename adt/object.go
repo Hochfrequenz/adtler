@@ -49,6 +49,10 @@ func supportedObjectTypes() []string {
 // name, e.g. ObjectURI("PROG", "ZFOO") == "/sap/bc/adt/programs/programs/zfoo".
 // The name is lower-cased to match the ADT REST URI convention. It returns an
 // error for object types not known to objectTypeMap.
+//
+// The name is appended verbatim (after lower-casing) and is not URL-encoded, so
+// callers passing namespaced names (e.g. "/NS/NAME") are responsible for any
+// required escaping; an empty name yields a trailing slash.
 func ObjectURI(objectType, name string) (string, error) {
 	info, ok := objectTypeMap[strings.ToUpper(objectType)]
 	if !ok {
