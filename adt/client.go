@@ -149,6 +149,11 @@ type SystemClient interface {
 	Logout(ctx context.Context) error
 }
 
+// DependencyClient resolves the objects an ABAP object depends on.
+type DependencyClient interface {
+	GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error)
+}
+
 // Client is the full ADT client combining all capabilities.
 type Client interface {
 	SourceClient
@@ -167,6 +172,7 @@ type Client interface {
 	EnhancementClient
 	DumpClient
 	SystemClient
+	DependencyClient
 }
 
 type httpClient struct {

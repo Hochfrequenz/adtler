@@ -21,6 +21,9 @@ func (m *mockClient) RunQuery(ctx context.Context, sql string, maxRows int) (*ad
 	}
 	return &adt.QueryResult{}, nil
 }
+func (m *mockClient) GetObjectDependencies(context.Context, string, string, int, int) (*adt.DependencyResult, error) {
+	panic("not implemented")
+}
 
 func (m *mockClient) GetSource(context.Context, string) (*adt.SourceResult, error) {
 	panic("not implemented")
