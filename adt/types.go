@@ -71,6 +71,12 @@ type TransportRequest struct {
 	Status      string // "D" = modifiable, "L" = released
 }
 
+// Transport request status codes (TransportRequest.Status).
+const (
+	TransportStatusModifiable = "D" // request is open / editable
+	TransportStatusReleased   = "L" // request has been released
+)
+
 // TransportCheckResult is returned by CheckTransport.
 type TransportCheckResult struct {
 	PgmID      string             // R3TR, LIMU, etc.

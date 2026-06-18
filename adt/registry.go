@@ -179,6 +179,9 @@ func (r *ClientRegistry) RemoveFromTransport(ctx context.Context, taskNumber, pa
 func (r *ClientRegistry) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) error {
 	return r.activeClient().ReleaseTransportWithTasks(ctx, transportNumber)
 }
+func (r *ClientRegistry) ReleaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error) {
+	return r.activeClient().ReleaseTransportVerified(ctx, transportNumber, includeTasks)
+}
 func (r *ClientRegistry) GetTransportInfo(ctx context.Context, transportNumber string) (*TransportRequest, error) {
 	return r.activeClient().GetTransportInfo(ctx, transportNumber)
 }

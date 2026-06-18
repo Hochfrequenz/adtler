@@ -179,6 +179,47 @@ func (c *httpClient) ReleaseTransportWithTasks(ctx context.Context, transportNum
 	return c.releaseTransport(ctx, transportNumber, true)
 }
 
+// ReleaseResult reports the outcome of a verified transport release.
+type ReleaseResult struct {
+	Transport string `json:"transport"`
+	// Released is true when the request is confirmed no longer modifiable
+	// after the release. It is false — with a nil error — when the release
+	// endpoint reported success but the request stayed modifiable, the
+	// "silent failure" some systems (notably ECC) exhibit.
+	Released bool `json:"released"`
+}
+
+// ReleaseTransportVerified releases a transport request (optionally including
+// its tasks) and then confirms the outcome by re-reading the request status.
+//
+// The plain ReleaseTransport reports success whenever the release endpoint
+// returns 2xx and its release report carries no error — but some systems
+// (notably ECC) return 200 while leaving the request modifiable. This method
+// detects that by checking the post-release status: a request still in the
+// modifiable ("D") state is reported as Released=false (with a nil error) so
+// callers can fall back to another release mechanism. A genuine release error
+// is returned unchanged.
+//
+// If the post-release status read fails, the release is assumed to have
+// succeeded (Released=true) — the optimistic behavior callers had before
+// verification existed.
+func (c *httpClient) ReleaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error) {
+	var err error
+	if includeTasks {
+		err = c.ReleaseTransportWithTasks(ctx, transportNumber)
+	} else {
+		err = c.ReleaseTransport(ctx, transportNumber)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if info, infoErr := c.GetTransportInfo(ctx, transportNumber); infoErr == nil && info != nil && info.Status == TransportStatusModifiable {
+		return &ReleaseResult{Transport: transportNumber, Released: false}, nil
+	}
+	return &ReleaseResult{Transport: transportNumber, Released: true}, nil
+}
+
 func (c *httpClient) releaseTransport(ctx context.Context, transportNumber string, releaseTasks bool) error {
 	err := c.releaseTransportDirect(ctx, transportNumber)
 	if err == nil {

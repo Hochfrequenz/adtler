@@ -133,6 +133,9 @@ func (m *mockClient) DeleteTransport(context.Context, string) error {
 func (m *mockClient) ReleaseTransport(context.Context, string) error {
 	panic("not implemented")
 }
+func (m *mockClient) ReleaseTransportVerified(context.Context, string, bool) (*adt.ReleaseResult, error) {
+	panic("not implemented")
+}
 func (m *mockClient) ReleaseTransportWithTasks(context.Context, string) error {
 	panic("not implemented")
 }
