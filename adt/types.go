@@ -144,6 +144,18 @@ const (
 	ExceptionTypeResourceLocked            = "ExceptionResourceLocked"
 	ExceptionTypePreconditionFailed        = "ExceptionPreconditionFailed"
 	ExceptionTypeResourceWrongData         = "ExceptionResourceWrongData"
+	ExceptionTypeResourceAlreadyExists     = "ExceptionResourceAlreadyExists" // 400 on S/4, 405 on R/3
+	ExceptionTypeResourceLockConflict      = "ExceptionResourceLockConflict"  // 409, S/4 only
+	ExceptionTypeResourceInvalidEtag       = "ExceptionResourceInvalidEtag"   // 412
+	ExceptionTypeResourceNotAcceptable     = "ExceptionResourceNotAcceptable" // 406
+	ExceptionTypeUnsupportedMediaType      = "ExceptionUnsupportedMediaType"  // 415
+	ExceptionTypeUnprocessableEntity       = "ExceptionUnprocessableEntity"   // 422
+	ExceptionTypeNotAllowed                = "ExceptionNotAllowed"            // 405, S/4 only
+	// ExceptionTypeResourceCreationFailure is raised (HTTP 500) when an object
+	// create cannot complete. The PROGRAM-create endpoint reports a name
+	// collision this way rather than as ExceptionResourceAlreadyExists —
+	// verified live on both S/4 and R/3 (mcp-server-abap #406 / #407).
+	ExceptionTypeResourceCreationFailure = "ExceptionResourceCreationFailure"
 )
 
 // ADTError is returned when SAP ADT responds with an error status.
