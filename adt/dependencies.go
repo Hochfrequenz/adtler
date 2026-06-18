@@ -36,8 +36,6 @@ type DependencyResult struct {
 }
 
 const (
-	// dependencyDefaultMaxDepth is the default BFS depth for DDIC chains.
-	dependencyDefaultMaxDepth = 3
 	// dependencyMaxDepthCeiling caps the BFS depth.
 	dependencyMaxDepthCeiling = 10
 	// seometarelMaxRows caps OO relationship lookups; well above any realistic
@@ -60,8 +58,8 @@ const (
 // D010TAB, populated by the activator; CLAS/INTF additionally consult
 // SEOMETAREL), and TABL, DTEL, DOMA, TTYP (iterative BFS over the DDIC catalog
 // tables up to maxDepth levels). maxResults caps the returned list (0 = no
-// cap). maxDepth is clamped to [1, 10] and defaults to 3 when <= 0; it is
-// ignored for the non-DDIC types.
+// cap). maxDepth is clamped to [1, 10] (values below 1 become 1); it is
+// ignored for the non-DDIC types. Callers choose their own default depth.
 func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error) {
 	objectType = strings.ToUpper(objectType)
 
@@ -114,8 +112,8 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		return newDependencyResult(objectType, objectName, append(ddic, oo...), nil), nil
 
 	case "TABL", "DTEL", "DOMA", "TTYP":
-		if maxDepth <= 0 {
-			maxDepth = dependencyDefaultMaxDepth
+		if maxDepth < 1 {
+			maxDepth = 1
 		}
 		if maxDepth > dependencyMaxDepthCeiling {
 			maxDepth = dependencyMaxDepthCeiling
