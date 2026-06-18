@@ -52,6 +52,13 @@ func (c *httpClient) SearchObjects(ctx context.Context, query, objectType string
 	return parseObjectReferences(data)
 }
 
+// SearchPackages searches for packages (DEVC) whose name matches query, up to
+// maxResults. It is SearchObjects constrained to the package object type, so
+// callers need not know the ADT type code.
+func (c *httpClient) SearchPackages(ctx context.Context, query string, maxResults int) ([]ObjectInfo, error) {
+	return c.SearchObjects(ctx, query, ObjectTypePackage, maxResults)
+}
+
 func (c *httpClient) WhereUsed(ctx context.Context, objectURI string) ([]ObjectInfo, error) {
 	params := url.Values{}
 	params.Set("uri", objectURI)

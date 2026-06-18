@@ -69,6 +69,7 @@ type NavigationClient interface {
 // SearchClient provides object discovery.
 type SearchClient interface {
 	SearchObjects(ctx context.Context, query, objectType string, maxResults int) ([]ObjectInfo, error)
+	SearchPackages(ctx context.Context, query string, maxResults int) ([]ObjectInfo, error)
 	WhereUsed(ctx context.Context, objectURI string) ([]ObjectInfo, error)
 	BrowsePackage(ctx context.Context, packageName string) ([]ObjectInfo, error)
 	GetObjectInfo(ctx context.Context, objectURI string) (*ObjectInfo, error)

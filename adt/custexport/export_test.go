@@ -49,6 +49,9 @@ func (m *mockClient) GetInactiveObjects(context.Context) ([]adt.ObjectInfo, erro
 func (m *mockClient) SearchObjects(context.Context, string, string, int) ([]adt.ObjectInfo, error) {
 	panic("not implemented")
 }
+func (m *mockClient) SearchPackages(context.Context, string, int) ([]adt.ObjectInfo, error) {
+	panic("not implemented")
+}
 func (m *mockClient) WhereUsed(context.Context, string) ([]adt.ObjectInfo, error) {
 	panic("not implemented")
 }
