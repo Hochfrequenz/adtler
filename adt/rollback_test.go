@@ -58,6 +58,16 @@ func TestFindPreTransportVersion(t *testing.T) {
 			t.Error("expected error when there is no version before the transport")
 		}
 	})
+
+	t.Run("earlier version with empty ContentURI is treated as no earlier version", func(t *testing.T) {
+		versions := []VersionInfo{
+			{VersionNumber: "2", Transport: "DEVK900100"},
+			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: ""},
+		}
+		if _, err := findPreTransportVersion(versions, "DEVK900100"); err == nil {
+			t.Error("expected error when the earlier version has no ContentURI")
+		}
+	})
 }
 
 // TestRollbackTransport_SkipsNonRestorable confirms the filtering: non-R3TR

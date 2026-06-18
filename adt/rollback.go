@@ -87,19 +87,25 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 // this transport).
 func findPreTransportVersion(versions []VersionInfo, transport string) (string, error) {
 	seenTransport := false
+	restoreURI := ""
 	for _, v := range versions {
 		if v.Transport == transport {
 			seenTransport = true
 			continue
 		}
 		if seenTransport {
-			return v.ContentURI, nil
+			restoreURI = v.ContentURI
+			break
 		}
 	}
 	if !seenTransport {
 		return "", fmt.Errorf("transport %s not found in version history", transport)
 	}
-	return "", fmt.Errorf("no version before transport %s (object may have been created by this transport)", transport)
+	// An empty ContentURI is treated the same as no earlier version at all.
+	if restoreURI == "" {
+		return "", fmt.Errorf("no version before transport %s (object may have been created by this transport)", transport)
+	}
+	return restoreURI, nil
 }
 
 // rollbackObject restores a single object's source to its pre-transport version.
