@@ -73,6 +73,33 @@ func TestResolveTextElementPath(t *testing.T) {
 	}
 }
 
+func TestTextElementLockURI(t *testing.T) {
+	// The public wrapper must return the same textelements resource URI that
+	// SetTextElements writes to, so callers lock the correct enqueue resource.
+	got, err := TextElementLockURI("/sap/bc/adt/programs/programs/ZTEST")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "/sap/bc/adt/textelements/programs/ZTEST"; got != want {
+		t.Errorf("TextElementLockURI = %q, want %q", got, want)
+	}
+
+	// The prefix is matched case-insensitively (the original-case name suffix
+	// is preserved). This is the behavior that differs from a naive
+	// case-sensitive rewrite, so pin it down.
+	got, err = TextElementLockURI("/SAP/BC/ADT/programs/programs/ZFoo")
+	if err != nil {
+		t.Fatalf("unexpected error on mixed-case prefix: %v", err)
+	}
+	if want := "/sap/bc/adt/textelements/programs/ZFoo"; got != want {
+		t.Errorf("TextElementLockURI(mixed-case) = %q, want %q", got, want)
+	}
+
+	if _, err := TextElementLockURI("/sap/bc/adt/ddic/tables/ZTABLE"); err == nil {
+		t.Error("expected error for unsupported object type")
+	}
+}
+
 func TestFormatTextSymbols(t *testing.T) {
 	symbols := []TextSymbol{
 		{Key: "001", Text: "Hello World", MaxLength: 50},
