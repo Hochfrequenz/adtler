@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
@@ -33,14 +34,37 @@ var objectTypeMap = map[string]struct {
 	"MSAG":      {"/sap/bc/adt/messageclass", "MSAG/N"},
 }
 
+// supportedObjectTypes returns the object-type keys known to objectTypeMap,
+// sorted for deterministic error messages.
+func supportedObjectTypes() []string {
+	supported := make([]string, 0, len(objectTypeMap))
+	for k := range objectTypeMap {
+		supported = append(supported, k)
+	}
+	sort.Strings(supported)
+	return supported
+}
+
+// ObjectURI returns the ADT resource URI for an object of the given type and
+// name, e.g. ObjectURI("PROG", "ZFOO") == "/sap/bc/adt/programs/programs/zfoo".
+// The name is lower-cased to match the ADT REST URI convention. It returns an
+// error for object types not known to objectTypeMap.
+//
+// The name is appended verbatim (after lower-casing) and is not URL-encoded, so
+// callers passing namespaced names (e.g. "/NS/NAME") are responsible for any
+// required escaping; an empty name yields a trailing slash.
+func ObjectURI(objectType, name string) (string, error) {
+	info, ok := objectTypeMap[strings.ToUpper(objectType)]
+	if !ok {
+		return "", fmt.Errorf("unsupported object type %q, supported: %s", objectType, strings.Join(supportedObjectTypes(), ", "))
+	}
+	return info.endpoint + "/" + strings.ToLower(name), nil
+}
+
 func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
 	info, ok := objectTypeMap[strings.ToUpper(objectType)]
 	if !ok {
-		supported := make([]string, 0, len(objectTypeMap))
-		for k := range objectTypeMap {
-			supported = append(supported, k)
-		}
-		return fmt.Errorf("unsupported object type %q, supported: %s", objectType, strings.Join(supported, ", "))
+		return fmt.Errorf("unsupported object type %q, supported: %s", objectType, strings.Join(supportedObjectTypes(), ", "))
 	}
 
 	var body []byte
