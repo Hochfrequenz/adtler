@@ -134,6 +134,9 @@ func (r *ClientRegistry) GetObjectInfo(ctx context.Context, objectURI string) (*
 func (r *ClientRegistry) SyntaxCheck(ctx context.Context, objectURI string) ([]SyntaxMessage, error) {
 	return r.activeClient().SyntaxCheck(ctx, objectURI)
 }
+func (r *ClientRegistry) VerifySource(ctx context.Context, source string) (bool, []SyntaxMessage, error) {
+	return r.activeClient().VerifySource(ctx, source)
+}
 func (r *ClientRegistry) BatchSyntaxCheck(ctx context.Context, objectURIs []string) []ObjectSyntaxResult {
 	return r.activeClient().BatchSyntaxCheck(ctx, objectURIs)
 }

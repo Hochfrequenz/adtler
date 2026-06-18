@@ -26,6 +26,9 @@ const logoffPath = "/sap/public/bc/icf/logoff"
 // used by SearchObjects/SearchPackages tests. Hoisted for goconst.
 const searchEndpoint = "/sap/bc/adt/repository/informationsystem/search"
 
+// programsEndpoint is the ADT programs collection endpoint. Hoisted for goconst.
+const programsEndpoint = "/sap/bc/adt/programs/programs"
+
 // progType is the ADT object type for ABAP programs, used in assertions
 // across multiple test files. Hoisted for goconst.
 const progType = "PROG/P"
