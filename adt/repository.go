@@ -14,7 +14,7 @@ import (
 
 func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]ObjectInfo, error) {
 	params := url.Values{}
-	params.Set("parent_type", "DEVC/K")
+	params.Set("parent_type", ObjectTypePackage)
 	params.Set("parent_name", packageName)
 	path := "/sap/bc/adt/repository/nodestructure?" + params.Encode()
 

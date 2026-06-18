@@ -12,7 +12,7 @@ import (
 
 func TestSearchObjects(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/sap/bc/adt/repository/informationsystem/search" {
+		if r.URL.Path != searchEndpoint {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -50,6 +50,53 @@ func TestSearchObjects(t *testing.T) {
 	}
 	if results[0].PackageName != "ZPACKAGE" {
 		t.Errorf("package: got %q", results[0].PackageName)
+	}
+}
+
+func TestSearchPackages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != searchEndpoint {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("operation") != "quickSearch" {
+			t.Errorf("operation: got %q", q.Get("operation"))
+		}
+		if q.Get("query") != "ZPKG*" {
+			t.Errorf("query: got %q", q.Get("query"))
+		}
+		// SearchPackages must constrain the search to the package object type.
+		if q.Get("objectType") != adt.ObjectTypePackage {
+			t.Errorf("objectType: got %q, want %q", q.Get("objectType"), adt.ObjectTypePackage)
+		}
+		if q.Get("maxResults") != "5" {
+			t.Errorf("maxResults: got %q", q.Get("maxResults"))
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0"?>
+<adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:objectReference adtcore:uri="/sap/bc/adt/packages/ZPKG_TEST" adtcore:type="DEVC/K" adtcore:name="ZPKG_TEST" adtcore:description="Test Package"/>
+</adtcore:objectReferences>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	results, err := client.SearchPackages(context.Background(), "ZPKG*", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Name != "ZPKG_TEST" {
+		t.Errorf("name: got %q", results[0].Name)
+	}
+	if results[0].Type != adt.ObjectTypePackage {
+		t.Errorf("type: got %q, want %q", results[0].Type, adt.ObjectTypePackage)
 	}
 }
 

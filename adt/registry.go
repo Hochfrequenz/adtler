@@ -119,6 +119,9 @@ func (r *ClientRegistry) GetTableFields(ctx context.Context, tableName string) (
 func (r *ClientRegistry) SearchObjects(ctx context.Context, query, objectType string, maxResults int) ([]ObjectInfo, error) {
 	return r.activeClient().SearchObjects(ctx, query, objectType, maxResults)
 }
+func (r *ClientRegistry) SearchPackages(ctx context.Context, query string, maxResults int) ([]ObjectInfo, error) {
+	return r.activeClient().SearchPackages(ctx, query, maxResults)
+}
 func (r *ClientRegistry) WhereUsed(ctx context.Context, objectURI string) ([]ObjectInfo, error) {
 	return r.activeClient().WhereUsed(ctx, objectURI)
 }

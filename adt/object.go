@@ -19,6 +19,10 @@ const (
 	objTypeDDLS = "DDLS"
 )
 
+// ObjectTypePackage is the ADT object type code for a package (DEVCLASS),
+// used as the objectType in searches and the type in package creation/browse.
+const ObjectTypePackage = "DEVC/K"
+
 var objectTypeMap = map[string]struct {
 	endpoint string
 	adtType  string
@@ -227,7 +231,7 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 		NSPak:       "http://www.sap.com/adt/packages",
 		NSCore:      nsADTCore,
 		Name:        strings.ToUpper(name),
-		Type:        "DEVC/K",
+		Type:        ObjectTypePackage,
 		Description: description,
 		Responsible: strings.ToUpper(responsible),
 		Attributes:  adtxml.PakAttributes{PackageType: "development"},
