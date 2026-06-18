@@ -95,6 +95,7 @@ type DumpClient interface {
 type QualityClient interface {
 	SyntaxCheck(ctx context.Context, objectURI string) ([]SyntaxMessage, error)
 	BatchSyntaxCheck(ctx context.Context, objectURIs []string) []ObjectSyntaxResult
+	VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error)
 	RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error)
 	RunATCCheck(ctx context.Context, objectURIs []string, checkVariant string) (*ATCResult, error)
 	GetATCCustomizing(ctx context.Context) (*ATCCustomizingResult, error)
