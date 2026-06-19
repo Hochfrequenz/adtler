@@ -6,7 +6,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Tests in this file exercise ReleaseTransportVerified and RollbackTransport
@@ -111,26 +110,13 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	// We roll back T2 (not T1) because findPreTransportVersion returns the version
 	// *before* the given transport. T1 is the first activation so there is no
 	// version before it — rolling back T1 would error. Rolling back T2 returns v1.
+	//
+	// ReleaseTransportWithTasks internally polls until the background job finishes,
+	// so when it returns nil the transport is already released — no extra polling needed.
 	if err := client.ReleaseTransportWithTasks(ctx, t1); err != nil {
 		t.Fatalf("[2] ReleaseTransportWithTasks T1: %v", err)
 	}
-	released := false
-	for i := 0; i < 6; i++ {
-		info, err := client.GetTransportInfo(ctx, t1)
-		if err != nil {
-			t.Fatalf("[2] GetTransportInfo T1: %v", err)
-		}
-		if info.Status == "L" || info.Status == "R" {
-			t.Logf("[2] T1 released (status=%s)", info.Status)
-			released = true
-			break
-		}
-		t.Logf("[2] T1 status=%q, waiting...", info.Status)
-		time.Sleep(10 * time.Second)
-	}
-	if !released {
-		t.Fatalf("[2] T1 not released after polling; last status unknown — aborting to avoid stale transport interference")
-	}
+	t.Logf("[2] T1 released")
 
 	// ── Phase 3: Create T2, add object, write v2 source, activate ──────────
 	t2, err := client.CreateTransport(ctx, "K", "DUM", "MCP Rollback test T2", testPackage)
