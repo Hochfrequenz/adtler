@@ -76,6 +76,9 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		t.Fatalf("[1] CreateTransport T1: %v", err)
 	}
 	t.Logf("[1] T1=%s", t1)
+	t.Cleanup(func() {
+		_ = client.ReleaseTransportWithTasks(context.Background(), t1)
+	})
 
 	if err := client.CreateObject(ctx, "PROG", objName, testPackage, "Rollback test", t1); err != nil {
 		if _, infoErr := client.GetObjectInfo(ctx, objectURI); infoErr != nil {
@@ -111,6 +114,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	if err := client.ReleaseTransportWithTasks(ctx, t1); err != nil {
 		t.Fatalf("[2] ReleaseTransportWithTasks T1: %v", err)
 	}
+	released := false
 	for i := 0; i < 6; i++ {
 		info, err := client.GetTransportInfo(ctx, t1)
 		if err != nil {
@@ -118,10 +122,14 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		}
 		if info.Status == "L" || info.Status == "R" {
 			t.Logf("[2] T1 released (status=%s)", info.Status)
+			released = true
 			break
 		}
 		t.Logf("[2] T1 status=%q, waiting...", info.Status)
 		time.Sleep(10 * time.Second)
+	}
+	if !released {
+		t.Fatalf("[2] T1 not released after polling; last status unknown — aborting to avoid stale transport interference")
 	}
 
 	// ── Phase 3: Create T2, add object, write v2 source, activate ──────────
@@ -130,6 +138,17 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		t.Fatalf("[3] CreateTransport T2: %v", err)
 	}
 	t.Logf("[3] T2=%s", t2)
+	t.Cleanup(func() {
+		bgCtx := context.Background()
+		if lh, lockErr := client.LockObject(bgCtx, objectURI); lockErr == nil {
+			_ = client.DeleteObject(bgCtx, objectURI, lh, t2)
+			t.Logf("cleanup: deleted %s", objName)
+		} else {
+			t.Logf("cleanup: could not lock %s for deletion: %v", objName, lockErr)
+		}
+		_ = client.ReleaseTransportWithTasks(bgCtx, t2)
+		t.Logf("cleanup: released T2 (%s)", t2)
+	})
 
 	taskNr, err := client.CreateTransportTask(ctx, t2, "", "Rollback test task")
 	if err != nil {
@@ -200,17 +219,4 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		t.Errorf("[5] source after rollback still contains %q — rollback did not restore v1", v2Marker)
 	}
 	t.Logf("[5] source correctly restored to v1 (%d bytes)", len(after.Source))
-
-	// ── Cleanup: delete object, release T2 ─────────────────────────────────
-	t.Cleanup(func() {
-		bgCtx := context.Background()
-		if lh, lockErr := client.LockObject(bgCtx, objectURI); lockErr == nil {
-			_ = client.DeleteObject(bgCtx, objectURI, lh, t2)
-			t.Logf("cleanup: deleted %s", objName)
-		} else {
-			t.Logf("cleanup: could not lock %s for deletion: %v", objName, lockErr)
-		}
-		_ = client.ReleaseTransportWithTasks(bgCtx, t2)
-		t.Logf("cleanup: released T2 (%s)", t2)
-	})
 }
