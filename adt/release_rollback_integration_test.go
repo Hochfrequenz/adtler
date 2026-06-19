@@ -61,11 +61,13 @@ func TestReleaseTransportVerified_Integration(t *testing.T) {
 func TestRollbackTransport_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
+	// Clear any stale S/4 ESRDIRE session locks left by a previous failed run.
+	_ = client.Logout(ctx)
 
 	const (
-		objName  = "Z_ADT_MCP_ROLLBACK_TST"
-		v1Source = "REPORT Z_ADT_MCP_ROLLBACK_TST.\n\" v1 marker\n"
-		v2Source = "REPORT Z_ADT_MCP_ROLLBACK_TST.\n\" v2 marker\n"
+		objName  = "Z_ADT_MCP_ROLLBACK_B"
+		v1Source = "REPORT Z_ADT_MCP_ROLLBACK_B.\n\" v1 marker\n"
+		v2Source = "REPORT Z_ADT_MCP_ROLLBACK_B.\n\" v2 marker\n"
 	)
 	objectURI := "/sap/bc/adt/programs/programs/" + objName
 
@@ -116,6 +118,9 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	if err := client.ReleaseTransportWithTasks(ctx, t1); err != nil {
 		t.Fatalf("[2] ReleaseTransportWithTasks T1: %v", err)
 	}
+	// On S/4, ReleaseTransportWithTasks leaves a session-bound lock on the transport
+	// organizer. Logout clears it so the next CreateTransport can proceed.
+	_ = client.Logout(ctx)
 	t.Logf("[2] T1 released")
 
 	// ── Phase 3: Create T2, add object, write v2 source, activate ──────────
@@ -126,26 +131,27 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	t.Logf("[3] T2=%s", t2)
 	t.Cleanup(func() {
 		bgCtx := context.Background()
-		if lh, lockErr := client.LockObject(bgCtx, objectURI); lockErr == nil {
-			_ = client.DeleteObject(bgCtx, objectURI, lh, t2)
-			t.Logf("cleanup: deleted %s", objName)
-		} else {
-			t.Logf("cleanup: could not lock %s for deletion: %v", objName, lockErr)
+		// Remove the object from all of T2's tasks before releasing T2.
+		// On S/4, releasing a transport that contains an object permanently locks
+		// that object (until the transport is imported to a target system). By
+		// removing it from the task list first, we leave the object free for the
+		// next test run without deleting it.
+		if tasks, taskErr := client.GetTransportTasks(bgCtx, t2); taskErr == nil {
+			for _, task := range tasks {
+				if rmErr := client.RemoveFromTransport(bgCtx, task, t2, "R3TR", "PROG", objName, "PROG/P", ""); rmErr != nil {
+					t.Logf("cleanup: RemoveFromTransport(%s, %s, %s): %v", task, t2, objName, rmErr)
+				} else {
+					t.Logf("cleanup: removed %s from task %s", objName, task)
+				}
+			}
 		}
 		_ = client.ReleaseTransportWithTasks(bgCtx, t2)
 		t.Logf("cleanup: released T2 (%s)", t2)
+		_ = client.Logout(bgCtx)
 	})
 
-	taskNr, err := client.CreateTransportTask(ctx, t2, "", "Rollback test task")
-	if err != nil {
-		t.Fatalf("[3] CreateTransportTask: %v", err)
-	}
-	t.Logf("[3] task=%s", taskNr)
-
-	if err := client.AddToTransport(ctx, objectURI, taskNr); err != nil {
-		t.Fatalf("[3] AddToTransport: %v", err)
-	}
-
+	// No explicit AddToTransport needed: SetSource records the change in T2 automatically.
+	// (AddToTransport's /abaptransportcomponents path is not supported on S/4.)
 	lh, err = client.LockObject(ctx, objectURI)
 	if err != nil {
 		t.Fatalf("[3] LockObject v2: %v", err)

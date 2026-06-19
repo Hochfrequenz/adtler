@@ -45,6 +45,14 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 		return nil, fmt.Errorf("reading transport objects: %w", err)
 	}
 
+	// On S/4HANA, version history (VRSD) records the task number rather than the
+	// request number. Fetch all task numbers so findPreTransportVersion can match
+	// either the request or any of its tasks.
+	transports := []string{transport}
+	if tasks, taskErr := c.GetTransportTasks(ctx, transport); taskErr == nil {
+		transports = append(transports, tasks...)
+	}
+
 	result := &RollbackResult{}
 	for _, obj := range objects {
 		if obj.PgmID != "R3TR" {
@@ -66,7 +74,7 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 			})
 			continue
 		}
-		if err := c.rollbackObject(ctx, objectURI, transport); err != nil {
+		if err := c.rollbackObject(ctx, objectURI, transports); err != nil {
 			result.Failed = append(result.Failed, RollbackEntry{
 				Type: obj.Type, Name: obj.Name, Reason: err.Error(),
 			})
@@ -80,16 +88,24 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 }
 
 // findPreTransportVersion returns the ContentURI of the version immediately
-// preceding the given transport in the version history. The history is ordered
-// newest-first, so the entry after the transport's own version is the object's
-// state before the transport changed it. It errors if the transport is absent
-// from the history, or if no earlier version exists (the object was created by
-// this transport).
-func findPreTransportVersion(versions []VersionInfo, transport string) (string, error) {
+// preceding any of the given transport identifiers in the version history.
+// transports[0] is the request number; subsequent entries are its task numbers.
+// The history is ordered newest-first, so the entry after the transport's own
+// version is the object's state before the transport changed it. It errors if
+// none of the identifiers are found, or if no earlier version exists (the object
+// was created by this transport).
+//
+// S/4HANA records task numbers in VRSD rather than the request number, so callers
+// must pass both the request and its tasks to handle both R/3 and S/4.
+func findPreTransportVersion(versions []VersionInfo, transports []string) (string, error) {
+	set := make(map[string]bool, len(transports))
+	for _, t := range transports {
+		set[t] = true
+	}
 	seenTransport := false
 	restoreURI := ""
 	for _, v := range versions {
-		if v.Transport == transport {
+		if set[v.Transport] {
 			seenTransport = true
 			continue
 		}
@@ -99,23 +115,25 @@ func findPreTransportVersion(versions []VersionInfo, transport string) (string, 
 		}
 	}
 	if !seenTransport {
-		return "", fmt.Errorf("transport %s not found in version history", transport)
+		return "", fmt.Errorf("transport %s not found in version history", transports[0])
 	}
 	// An empty ContentURI is treated the same as no earlier version at all.
 	if restoreURI == "" {
-		return "", fmt.Errorf("no version before transport %s (object may have been created by this transport)", transport)
+		return "", fmt.Errorf("no version before transport %s (object may have been created by this transport)", transports[0])
 	}
 	return restoreURI, nil
 }
 
 // rollbackObject restores a single object's source to its pre-transport version.
-func (c *httpClient) rollbackObject(ctx context.Context, objectURI, transport string) error {
+// transports is the request number plus all its task numbers (to handle both R/3
+// and S/4, which record different identifiers in version history).
+func (c *httpClient) rollbackObject(ctx context.Context, objectURI string, transports []string) error {
 	versions, err := c.GetVersionHistory(ctx, objectURI)
 	if err != nil {
 		return fmt.Errorf("get version history: %w", err)
 	}
 
-	restoreURI, err := findPreTransportVersion(versions, transport)
+	restoreURI, err := findPreTransportVersion(versions, transports)
 	if err != nil {
 		return err
 	}
@@ -129,16 +147,22 @@ func (c *httpClient) rollbackObject(ctx context.Context, objectURI, transport st
 	if err != nil {
 		return fmt.Errorf("lock: %w", err)
 	}
-	defer func() { _ = c.UnlockObject(ctx, objectURI, lockHandle) }()
 
 	current, err := c.GetSource(ctx, objectURI)
 	if err != nil {
+		_ = c.UnlockObject(ctx, objectURI, lockHandle)
 		return fmt.Errorf("get current source: %w", err)
 	}
 
-	if _, err := c.SetSource(ctx, objectURI, oldSource, lockHandle, "", current.ETag); err != nil {
+	// transports[0] is the request number; pass it as corrNr so both R/3 and S/4
+	// accept the write (S/4 rejects SetSource when corrNr is absent).
+	if _, err := c.SetSource(ctx, objectURI, oldSource, lockHandle, transports[0], current.ETag); err != nil {
+		_ = c.UnlockObject(ctx, objectURI, lockHandle)
 		return fmt.Errorf("set source: %w", err)
 	}
+	// Unlock before activation: on S/4, the ESRDIRE session lock left by
+	// SetSource blocks ActivateObjects if not released first.
+	_ = c.UnlockObject(ctx, objectURI, lockHandle)
 
 	actResult, err := c.ActivateObjects(ctx, []string{objectURI})
 	if err != nil {
