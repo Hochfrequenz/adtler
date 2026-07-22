@@ -200,12 +200,24 @@ var ctsRequestRe = regexp.MustCompile(`\b[A-Z][A-Z0-9]{2}K[0-9]{6}\b`)
 // lock-conflict error (HTTP 409 / ExceptionResourceLockConflict) where the
 // object is registered in another open request — a lock domain distinct from
 // the runtime ENQUEUE; retargeting the write at the returned request typically
-// clears the conflict. The extraction keys on the request-ID format, not the
-// surrounding words, so it is robust to message localisation. Returns ("",
-// false) when no request ID is present. See mcp-server-abap#442.
+// clears the conflict. Returns ("", false) when no request ID is present.
+// See mcp-server-abap#442.
+//
+// Yes, scraping a transport ID out of a localised, human-readable error string
+// with a regex is ugly and brittle — but SAP gives us no choice: the 409
+// carries the blocking request only inside the free-text <message>, with no
+// structured field (no <exc:properties> entry, no header) exposing it. So we
+// make the parse as robust as it can be: we key on the request-ID *format*
+// rather than the surrounding words (survives translation), and we take the
+// LAST match. The message orders the object name before the request
+// ("Object <PGMID> <TYPE> <NAME> ... locked in request <TR> ..."), so if the
+// locked object's own name happens to match the <SID>K<6-digit> shape, the
+// first match would be the object name; the request ID is always the last CTS
+// ID in the string (English "... request <TR> of user X" and German
+// "... in Auftrag <TR> von Benutzer X gesperrt" both put it last).
 func (e *ADTError) LockingTransport() (string, bool) {
-	if tr := ctsRequestRe.FindString(e.Message); tr != "" {
-		return tr, true
+	if m := ctsRequestRe.FindAllString(e.Message, -1); len(m) > 0 {
+		return m[len(m)-1], true
 	}
 	return "", false
 }

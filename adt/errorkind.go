@@ -14,6 +14,13 @@ import "errors"
 // generic creation failure, or a "transport required" hidden inside a 400 —
 // are reported as their broad kind (ErrorCreationFailed, ErrorBadRequest);
 // callers wanting finer detail inspect the message themselves.
+//
+// One deliberate exception: a lock conflict is promoted to
+// ErrorObjectLockedInTransport when the message carries a CTS request ID. SAP
+// does not expose the blocking request in any structured field, only in the
+// localised message text, so this is the one place classification inspects the
+// message — and it keys on the language-independent request-ID format, not on
+// translated words. See refineLockConflict and ADTError.LockingTransport.
 type ErrorKind int
 
 const (

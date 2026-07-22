@@ -100,6 +100,15 @@ func TestADTError_LockingTransport(t *testing.T) {
 		{"no_request_id", "Object is already locked by another user", "", false},
 		{"object_name_not_matched", "Object R3TR DDLS /HFQ/DD_ADRESSE locked", "", false},
 		{"empty", "", "", false},
+		// Ordering hazard: the object name precedes the request in the message.
+		// If the name itself matches the <SID>K<6digit> shape, the FIRST match
+		// would be the name — the request ID is always LAST, so last-match wins.
+		{"object_name_matches_pattern", "Object R3TR PROG ABCK123456 is already locked in request S4UK901974 of user X", trFixture, true},
+		// Task + request both present (both share the <SID>K###### format); the
+		// request is named last.
+		{"task_and_request", "locked in task S4UK901975 request S4UK901974 of user X", trFixture, true},
+		{"lowercase_not_matched", "already locked in request s4uk901974", "", false},
+		{"non_K_category_not_matched", "already locked in request ABCT123456", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
