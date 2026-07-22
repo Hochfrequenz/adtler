@@ -2,8 +2,8 @@
 
 - **Date:** 2026-07-22
 - **Repo:** adtler
-- **Status:** Proposed
-- **Companion spec:** aibap.mcp `run_class` tool — `docs/superpowers/specs/2026-07-22-run-class-tool-design.md` (consumer of this endpoint; that PR is `blocked-by-adtler` until this ships in a tagged release).
+- **Status:** Proposed (revised after agent review)
+- **Companion spec:** aibap.mcp `run_class` tool — `<aibap.mcp>/docs/superpowers/specs/2026-07-22-run-class-tool-design.md` (consumer of this endpoint; that PR is `blocked-by-adtler` until this ships in a tagged release).
 
 ## Motivation
 
@@ -20,19 +20,19 @@ diagnostic/helper flows) possible. This spec covers **only** the generic
 endpoint client; no lock-specific logic lives here.
 
 Verified precondition (S4U, 2026-07-22): interface `IF_OO_ADT_CLASSRUN`
-(package `SEO_ADT`, "Implement this interface to execute an ABAP class
-(Classrun)") exists, so the classrun framework is present on the target system.
+(package `SEO_ADT`) exists, so the classrun framework is present on that system.
+Its presence on HFQ (ECC/R3) is **not yet verified** — see verification points.
 
 ## Scope
 
 **In scope:** a new `RunClass(ctx, className)` client method that POSTs to the
 classrun endpoint and returns the console output; a `ClassRunResult` type; a
-`ClassRunClient` interface; content-type negotiation via discovery; unit and
-integration tests.
+`ClassRunClient` interface **embedded into the aggregate `Client` interface**;
+unit and integration tests.
 
 **Out of scope:** any validation of whether the class exists / is active /
-implements the interface (the consumer performs those pre-checks using existing
-adtler reads — see the companion spec); creating or activating classes; any
+implements the interface (the consumer does the class-exists pre-check using
+existing adtler reads — see companion spec); creating or activating classes; any
 lock-specific behaviour.
 
 ## The classrun endpoint
@@ -47,16 +47,27 @@ Accept: text/plain                          console output (out->write(...))
 Notes / decisions:
 
 - **URI construction:** lower-case the class name and append to
-  `/sap/bc/adt/oo/classrun/`. Mirror the existing URI-escaping helper used for
-  other object paths (see `client.go` namespace/`%2f` handling) so
-  namespaced classes (`/foo/bar`) work.
-- **Content negotiation:** resolve the `Accept`/content type via
-  `NegotiateContentType` / discovery rather than hard-coding, per the repo
-  convention. `text/plain` is the expected default; the discovery document may
-  advertise a versioned type on some systems. Hard-coded `text/plain` remains
-  the fallback when discovery is empty.
+  `/sap/bc/adt/oo/classrun/` (mirrors `object.go` `endpoint + "/" +
+  strings.ToLower(name)`). No manual escaping call is needed: `doMutate`
+  applies `encodeNamespacePath` automatically (it triggers on `//`), so a
+  namespaced class built as `/sap/bc/adt/oo/classrun//na2/foo` is encoded to
+  `%2fna2%2ffoo` by the client. Just build the raw URI and let `doMutate` handle it.
+- **Content type:** hard-code `contentTypeTextPlain` for `Accept`. classrun
+  returns plain console text; a versioned content type is not expected, and
+  `NegotiateContentType` does an **exact** discovery-key lookup (`discovery.go`),
+  not the longest-prefix match `sourceContentType` uses — passing the per-object
+  URI would never match the collection-href key and would silently fall back to
+  `text/plain` anyway. Hard-coding is honest and avoids a misleading negotiation
+  call. (If discovery ever advertises a versioned classrun type, revisit.)
 - **Session:** stateless. No lock is acquired — classrun only executes. Any
   locking/commit the executed class performs is the class's own concern.
+- **Timeout:** use the standard `doMutate` (30 s) client. A diagnostic helper
+  could in principle run long, but `doMutateLong` (context-driven) is only
+  warranted if a concrete use case needs it; default to `doMutate` and note the
+  30 s ceiling. Large console outputs are read in full via `io.ReadAll` (same as
+  `GetSource`); no truncation client-side.
+- **Charset:** decode the body as `GetSource` does — `string(body)`, honouring
+  `text/plain; charset=utf-8` — so non-ASCII console output (Umlaute) survives.
 
 ## API design
 
@@ -74,57 +85,69 @@ type ClassRunClient interface {
 func (c *httpClient) RunClass(ctx context.Context, className string) (*ClassRunResult, error)
 ```
 
-`RunClass` builds the URI, POSTs with the negotiated `Accept`, runs
-`checkResponse`, and on success returns `ClassRunResult{ClassName: className,
-ConsoleOutput: <body>}`. Follows the shape of existing methods in
-`adt/activate.go` (`doMutate` → `checkResponse` → parse body).
+**`ClassRunClient` MUST be embedded in the aggregate `Client` interface**
+(`client.go`, alongside `ObjectClient`, `DependencyClient`, …). Every capability
+in adtler is reachable through `Client`; the integration test helper returns
+`adt.Client`, and the aibap.mcp consumer needs `RunClass` on the `adt.Client` it
+receives — without embedding it would only be reachable via a type assertion,
+breaking the established pattern.
+
+`RunClass` builds the URI, POSTs with `Accept: text/plain` and an empty body,
+runs `checkResponse`, and on success returns `ClassRunResult{ClassName: className,
+ConsoleOutput: string(body)}`. Follows `ActivateObjects` / `GetSource`
+(`doMutate` → `checkResponse` → parse body).
 
 ## Error handling
 
 - **HTTP errors** (403 auth, 404, 500, …): surface through `checkResponse` →
-  `ADTError`, **preserving the response body text** so the caller sees the SAP
-  message. No special casing beyond the existing error path.
+  `ADTError`, preserving the response body text so the caller sees the SAP
+  message. The existing 4-layer `parseADTError` already handles SAP HTML dump
+  pages — no new error class needed.
 - **Uncaught runtime exception in `main`** — OPEN VERIFICATION POINT. Two
-  possible behaviours; the integration test decides which holds on the target:
-  - (a) classrun returns a non-2xx status with the dump/exception text → it
-    lands as an `ADTError` (body preserved). No code change needed.
-  - (b) classrun returns `200` with the error text in the body → it is a
-    *successful run with error output*; `RunClassResult.ConsoleOutput` carries
-    the text and it is up to the caller to interpret. No code change needed.
-  Either way `RunClass` itself needs no exception-specific branch; the spec
-  records the expectation and the test pins the actual behaviour.
+  possible behaviours; the integration test decides which holds:
+  - (a) non-2xx status with the dump/exception text → lands as `ADTError`
+    (body preserved). No code change.
+  - (b) `200` with the error text in the body → a *successful run with error
+    output*; `ClassRunResult.ConsoleOutput` carries the text, caller interprets.
+    No code change.
+  `RunClass` needs no exception-specific branch either way; the test pins the
+  actual behaviour and this doc is updated to match.
 
 ## Testing
 
 **Unit (`httptest` mock, no build tag):**
-- Successful POST → `ConsoleOutput` parsed from a `200` `text/plain` body.
-- URI construction: lower-cased name, correct `/sap/bc/adt/oo/classrun/` path,
-  namespaced-name escaping.
-- Content negotiation: discovery present (versioned type) vs. empty (falls back
-  to `text/plain`).
+- Successful run → asserts request method is `POST`, body is empty, the
+  `X-CSRF-Token` header is set, and `ConsoleOutput` is parsed from a `200`
+  `text/plain` body.
+- URI construction: lower-cased name, correct `/sap/bc/adt/oo/classrun/` path.
+- UTF-8 console output (Umlaute) round-trips intact.
 - HTTP error (403 / 404 / 500) → `ADTError` with body text retained.
 
-**Integration (`//go:build integration`, live S4U):**
+**Integration (`//go:build integration`, via `eachSystem(t)` over R/3 **and**
+S/4, per the repo convention):**
 - `RunClass` against a real Z classrun class in package `Z_ADT_MCP_TEST`
   (e.g. `ZCL_ADT_MCP_CLASSRUN_TST`, implements `IF_OO_ADT_CLASSRUN`, writes a
   known string via `out->write`) → asserts the known string comes back.
-- A throwing variant of the fixture class → **resolves the open verification
-  point** above (records whether the runtime exception arrives as HTTP error or
-  200-with-text; adjust the doc + any test assertion to match).
-- Fixture class added to the [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST)
-  repo so CI and other consumers have it.
+- A **namespaced** class variant → exercises the `//`-encoding path against a
+  live system (HFQ `/NA2/` context relevant).
+- A **throwing** variant of the fixture class → **resolves the runtime-exception
+  verification point** (records whether it arrives as HTTP error or 200-with-text;
+  update this doc + any assertion to match).
+- `eachSystem(t)` also confirms whether the classrun framework
+  (`IF_OO_ADT_CLASSRUN`) exists on HFQ/ECC, not just S4U.
+- Fixture class added to [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST).
 
 ## Open verification points
 
-1. Runtime-exception signalling (HTTP error vs. 200-with-text) — see Error
-   handling.
-2. Exact `Accept`/content type the endpoint negotiates on S4U vs. ECC (HFQ) —
-   confirm `text/plain` and whether a versioned type is advertised.
-3. Whether classrun requires any specific session type or extra header on the
-   target systems (expected: plain stateless POST).
+1. Runtime-exception signalling (HTTP error vs. 200-with-text) — see Error handling.
+2. `IF_OO_ADT_CLASSRUN` / classrun endpoint availability on HFQ (ECC/R3) — only S4U verified so far.
+3. Whether classrun needs any specific session type or extra header (expected: plain stateless POST).
 
-## Downstream / linkage
+## Rollout / linkage
 
-Once released (target tag: next adtler minor), the aibap.mcp `run_class` tool
-consumes `ClassRunClient.RunClass`. The aibap.mcp tool PR references this PR and
-tag and carries the `blocked-by-adtler` label until the bump lands.
+- **Fixture first:** `ZCL_ADT_MCP_CLASSRUN_TST` (+ throwing + namespaced
+  variants) must be delivered to `Z_ADT_MCP_TEST` before the integration tests
+  can run — explicit ordering dependency.
+- Release `RunClass` in the next adtler minor tag. The aibap.mcp `run_class` tool
+  then consumes `adt.Client.RunClass`; that PR references this PR + tag and
+  carries `blocked-by-adtler` until the bump lands.
