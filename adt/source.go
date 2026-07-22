@@ -270,7 +270,17 @@ func (c *httpClient) SetIncludeSource(ctx context.Context, objectURI, include, s
 		"Accept":                ct,
 		"X-sap-adt-sessiontype": "stateful",
 	}
-	if etag != "" {
+	// aibap.mcp#436: class include write-preconditions validate against a
+	// class-level version ETag that no include-or-class GET exposes — the GET
+	// returns a stale / wrong-granularity ETag, so a GET-derived If-Match
+	// deterministically fails with 412 ExceptionPreconditionFailed. A held lock
+	// already guarantees exclusive edit access, so when a lock handle is present
+	// we omit If-Match and rely on the lock for concurrency, matching how the
+	// Eclipse ADT client writes includes. Verified live on S/4: with a lock
+	// handle, a no-If-Match write succeeds where both the include ETag and the
+	// class ETag return 412. Without a lock handle we keep If-Match as a
+	// best-effort optimistic-concurrency check.
+	if etag != "" && lockHandle == "" {
 		headers["If-Match"] = etag
 	}
 	// Include endpoints expect lockHandle as query parameter, not header.
