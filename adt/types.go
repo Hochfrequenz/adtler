@@ -3,6 +3,7 @@ package adt
 import (
 	"errors"
 	"fmt"
+	"regexp"
 )
 
 // Common constants used across ADT operations.
@@ -186,6 +187,27 @@ func (e *ADTError) Error() string {
 		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
 	}
 	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
+}
+
+// ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):
+// a 3-character system ID, the request-category letter 'K', then six digits.
+// This is a language-independent format, so it survives message localisation —
+// SAP's "locked in request <TR>" text is translated but the ID is not.
+var ctsRequestRe = regexp.MustCompile(`\b[A-Z][A-Z0-9]{2}K[0-9]{6}\b`)
+
+// LockingTransport returns the CTS transport request that a "locked in request
+// <TR>" conflict names, if the message contains one. It is meaningful for a
+// lock-conflict error (HTTP 409 / ExceptionResourceLockConflict) where the
+// object is registered in another open request — a lock domain distinct from
+// the runtime ENQUEUE; retargeting the write at the returned request typically
+// clears the conflict. The extraction keys on the request-ID format, not the
+// surrounding words, so it is robust to message localisation. Returns ("",
+// false) when no request ID is present. See mcp-server-abap#442.
+func (e *ADTError) LockingTransport() (string, bool) {
+	if tr := ctsRequestRe.FindString(e.Message); tr != "" {
+		return tr, true
+	}
+	return "", false
 }
 
 // isInvalidLockHandle returns true if the error is a 423
