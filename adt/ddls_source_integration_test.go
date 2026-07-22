@@ -19,15 +19,14 @@ func TestSetSource_DDLS_Integration(t *testing.T) {
 
 	const name = "Z_ADT_MCP_CDS383"
 	const uri = "/sap/bc/adt/ddic/ddl/sources/z_adt_mcp_cds383"
-	const pkg = "Z_ADT_MCP_TEST"
 	cds := "@EndUserText.label: 'aibap 383 regression'\n" +
 		"define root view entity Z_ADT_MCP_CDS383\n  as select from t000\n{\n  key mandt as Client\n}\n"
 
-	tr, err := client.CreateTransport(ctx, "K", "", "aibap #383 DDLS regression", pkg)
+	tr, err := client.CreateTransport(ctx, "K", "", "aibap #383 DDLS regression", testPackage)
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}
-	if err := client.CreateObject(ctx, "DDLS", name, pkg, "aibap #383 DDLS regression", tr); err != nil {
+	if err := client.CreateObject(ctx, "DDLS", name, testPackage, "aibap #383 DDLS regression", tr); err != nil {
 		if _, e := client.GetObjectInfo(ctx, uri); e != nil {
 			t.Fatalf("CreateObject(DDLS): %v", err)
 		}
