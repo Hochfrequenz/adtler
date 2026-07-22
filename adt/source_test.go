@@ -118,7 +118,11 @@ func TestSetIncludeSource(t *testing.T) {
 	}
 }
 
-func TestSetIncludeSource_NoETag(t *testing.T) {
+// captureIncludeIfMatch runs SetIncludeSource against a stub server that records
+// the If-Match request header, and returns what was sent. Shared by the
+// If-Match behaviour tests so they don't each repeat the stub-server boilerplate.
+func captureIncludeIfMatch(t *testing.T, lockHandle, etag string) string {
+	t.Helper()
 	var gotIfMatch string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -133,16 +137,18 @@ func TestSetIncludeSource_NoETag(t *testing.T) {
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
-
-	// Empty etag = initial write on empty include
-	_, err := client.SetIncludeSource(context.Background(),
+	if _, err := client.SetIncludeSource(context.Background(),
 		"/sap/bc/adt/oo/classes/zcl_test", "testclasses",
-		"CLASS lcl_test DEFINITION FOR TESTING.\nENDCLASS.", "", "", "")
-	if err != nil {
+		"CLASS lcl_test DEFINITION FOR TESTING.\nENDCLASS.", lockHandle, "", etag); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotIfMatch != "" {
-		t.Errorf("If-Match should be empty for initial write, got %q", gotIfMatch)
+	return gotIfMatch
+}
+
+func TestSetIncludeSource_NoETag(t *testing.T) {
+	// Empty etag (initial write on an empty include) → no If-Match.
+	if got := captureIncludeIfMatch(t, "", ""); got != "" {
+		t.Errorf("If-Match should be empty for initial write, got %q", got)
 	}
 }
 
@@ -190,31 +196,10 @@ func TestSetIncludeSource_OmitsIfMatchWhenLocked(t *testing.T) {
 }
 
 func TestSetIncludeSource_KeepsIfMatchWhenUnlocked(t *testing.T) {
-	// Without a lock handle, If-Match is still sent as a best-effort optimistic
-	// concurrency check (unchanged behavior).
-	var gotIfMatch string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == csrfEndpoint {
-			w.Header().Set("X-CSRF-Token", "token")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		gotIfMatch = r.Header.Get("If-Match")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	client := adt.NewClient(cfg)
-
-	_, err := client.SetIncludeSource(context.Background(),
-		"/sap/bc/adt/oo/classes/zcl_test", "testclasses",
-		"CLASS lcl_test DEFINITION FOR TESTING.\nENDCLASS.", "", "", `"etag-old"`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if gotIfMatch != `"etag-old"` {
-		t.Errorf("If-Match should be sent when unlocked, got %q", gotIfMatch)
+	// Without a lock handle there is no exclusivity guarantee, so If-Match is
+	// still sent as a best-effort optimistic-concurrency check (unchanged).
+	if got := captureIncludeIfMatch(t, "", `"etag-old"`); got != `"etag-old"` {
+		t.Errorf("If-Match should be sent when unlocked, got %q", got)
 	}
 }
 
