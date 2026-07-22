@@ -41,8 +41,9 @@ type ObjectClient interface {
 
 // LockClient handles object locking.
 //
-// UnlockObject caveat: SAP's UNLOCK endpoint (POST {uri}?_action=UNLOCK)
-// returns HTTP 200 with an empty body regardless of outcome — a real release,
+// UnlockObject caveat: SAP's UNLOCK endpoint
+// (POST {uri}?_action=UNLOCK&lockHandle=<handle>) returns HTTP 200 with an
+// empty body regardless of outcome — a real release,
 // a bogus/mismatched handle, and a double unlock are indistinguishable
 // (verified on ECC and S/4). The server-side dequeue (DEQUEUE_EADT_LOCK) is
 // handle-less and exception-less, so a 2xx from UnlockObject does NOT prove
