@@ -3,6 +3,7 @@ package adt
 import (
 	"errors"
 	"fmt"
+	"regexp"
 )
 
 // Common constants used across ADT operations.
@@ -186,6 +187,39 @@ func (e *ADTError) Error() string {
 		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
 	}
 	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
+}
+
+// ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):
+// a 3-character system ID, the request-category letter 'K', then six digits.
+// This is a language-independent format, so it survives message localisation —
+// SAP's "locked in request <TR>" text is translated but the ID is not.
+var ctsRequestRe = regexp.MustCompile(`\b[A-Z][A-Z0-9]{2}K[0-9]{6}\b`)
+
+// LockingTransport returns the CTS transport request that a "locked in request
+// <TR>" conflict names, if the message contains one. It is meaningful for a
+// lock-conflict error (HTTP 409 / ExceptionResourceLockConflict) where the
+// object is registered in another open request — a lock domain distinct from
+// the runtime ENQUEUE; retargeting the write at the returned request typically
+// clears the conflict. Returns ("", false) when no request ID is present.
+// See mcp-server-abap#442.
+//
+// Yes, scraping a transport ID out of a localised, human-readable error string
+// with a regex is ugly and brittle — but SAP gives us no choice: the 409
+// carries the blocking request only inside the free-text <message>, with no
+// structured field (no <exc:properties> entry, no header) exposing it. So we
+// make the parse as robust as it can be: we key on the request-ID *format*
+// rather than the surrounding words (survives translation), and we take the
+// LAST match. The message orders the object name before the request
+// ("Object <PGMID> <TYPE> <NAME> ... locked in request <TR> ..."), so if the
+// locked object's own name happens to match the <SID>K<6-digit> shape, the
+// first match would be the object name; the request ID is always the last CTS
+// ID in the string (English "... request <TR> of user X" and German
+// "... in Auftrag <TR> von Benutzer X gesperrt" both put it last).
+func (e *ADTError) LockingTransport() (string, bool) {
+	if m := ctsRequestRe.FindAllString(e.Message, -1); len(m) > 0 {
+		return m[len(m)-1], true
+	}
+	return "", false
 }
 
 // isInvalidLockHandle returns true if the error is a 423
