@@ -257,6 +257,87 @@ func TestSetSource(t *testing.T) {
 	}
 }
 
+func TestSetSource_DDLSUsesQueryLockDeliveryAndOmitsIfMatch(t *testing.T) {
+	// aibap.mcp#383: DDL sources need the lock handle as a ?lockHandle= query
+	// param (header delivery 400/403s and never triggers the 423 retry), and
+	// reject the GET-derived If-Match (#436-style), so it must be omitted when
+	// locked. Contrast the program path (TestSetSource), which keeps both.
+	var gotMethod, gotQuery, gotIfMatch, gotLockHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotMethod = r.Method
+		gotQuery = r.URL.RawQuery
+		gotIfMatch = r.Header.Get("If-Match")
+		gotLockHeader = r.Header.Get("X-SAP-Lock-Handle")
+		w.Header().Set("ETag", `"new-etag"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.SetSource(context.Background(),
+		"/sap/bc/adt/ddic/ddl/sources/zmycds",
+		"define root view entity ZMYCDS as select from t000 { key mandt as Client }",
+		"LOCKHANDLE1", "TR1", `"etag-from-get"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method: got %q, want PUT", gotMethod)
+	}
+	if !strings.Contains(gotQuery, "lockHandle=LOCKHANDLE1") {
+		t.Errorf("lock handle must be a query param for DDLS; query=%q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "corrNr=TR1") {
+		t.Errorf("corrNr must be a query param; query=%q", gotQuery)
+	}
+	if gotIfMatch != "" {
+		t.Errorf("If-Match must be omitted for a locked DDLS write, got %q", gotIfMatch)
+	}
+	if gotLockHeader != "" {
+		t.Errorf("X-SAP-Lock-Handle header must NOT be used for DDLS, got %q", gotLockHeader)
+	}
+}
+
+func TestSetSource_DDLSUnlockedKeepsIfMatch(t *testing.T) {
+	// Without a lock handle there is nothing enforcing exclusivity, so a DDLS
+	// write still sends the caller's If-Match as a best-effort check (and still
+	// uses query delivery — no lock header).
+	var gotIfMatch, gotLockHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotIfMatch = r.Header.Get("If-Match")
+		gotLockHeader = r.Header.Get("X-SAP-Lock-Handle")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.SetSource(context.Background(),
+		"/sap/bc/adt/ddic/ddl/sources/zmycds", "define ...", "", "", `"etag-x"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotIfMatch != `"etag-x"` {
+		t.Errorf("unlocked DDLS write should keep If-Match, got %q", gotIfMatch)
+	}
+	if gotLockHeader != "" {
+		t.Errorf("X-SAP-Lock-Handle header must NOT be used for DDLS, got %q", gotLockHeader)
+	}
+}
+
 func TestSourceContentType_DiscoveryEmpty_FallsBackToTextPlain(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Empty discovery response

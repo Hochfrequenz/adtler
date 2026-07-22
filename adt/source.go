@@ -361,9 +361,32 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 	return c.trySetSource(ctx, objectURI, source, lockHandle, transport, etag)
 }
 
+// isDDLSourceURI reports whether objectURI is a DDL source (CDS view / DDLS).
+func isDDLSourceURI(objectURI string) bool {
+	return strings.HasPrefix(objectURI, "/sap/bc/adt/ddic/ddl/sources/")
+}
+
 // trySetSource attempts SetSource with the lock handle retry
 // (header-first for R/3, query-param retry for S/4).
 func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	// DDL sources (CDS views) are S/4-only and behave like class includes, not
+	// like programs: the lock handle must be delivered as the ?lockHandle= query
+	// parameter, and the header-first attempt fails with 400/403 (not 423), so
+	// the generic retry-on-423 below never fires — every DDLS write is rejected
+	// as "currently editing" (aibap.mcp#383). The lock already guarantees
+	// exclusivity, so when locked we omit If-Match and rely on the lock — the
+	// shape proven to work. Verified live on S/4: a query-param write with no
+	// If-Match succeeds where header delivery returns 400/403. (Query delivery
+	// WITH a GET-derived If-Match was not separately probed; omitting is the
+	// proven-safe choice, consistent with the class-include fix for #436, where
+	// the GET ETag was shown not to be the write-precondition ETag.)
+	if isDDLSourceURI(objectURI) {
+		ddlsETag := etag
+		if lockHandle != "" {
+			ddlsETag = ""
+		}
+		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, ddlsETag)
+	}
 	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
 	if err != nil && lockHandle != "" && isInvalidLockHandle(err) {
 		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
@@ -376,8 +399,12 @@ func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, sou
 	headers := map[string]string{
 		"Content-Type":          ct,
 		"Accept":                ct,
-		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
+	}
+	// Only send If-Match when we actually have an ETag — never an empty one,
+	// which some SAP versions treat as a failing precondition.
+	if etag != "" {
+		headers["If-Match"] = etag
 	}
 	if lockHandle != "" {
 		headers["X-SAP-Lock-Handle"] = lockHandle
@@ -394,8 +421,12 @@ func (c *httpClient) setSourceWithLockParam(ctx context.Context, objectURI, sour
 	headers := map[string]string{
 		"Content-Type":          ct,
 		"Accept":                ct,
-		"If-Match":              etag,
 		"X-sap-adt-sessiontype": "stateful",
+	}
+	// Only send If-Match when we actually have an ETag — never an empty one.
+	// DDL sources deliberately pass "" when locked (see trySetSource).
+	if etag != "" {
+		headers["If-Match"] = etag
 	}
 	params := url.Values{}
 	if lockHandle != "" {
