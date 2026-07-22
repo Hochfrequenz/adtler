@@ -40,6 +40,18 @@ type ObjectClient interface {
 }
 
 // LockClient handles object locking.
+//
+// UnlockObject caveat: SAP's UNLOCK endpoint (POST {uri}?_action=UNLOCK)
+// returns HTTP 200 with an empty body regardless of outcome — a real release,
+// a bogus/mismatched handle, and a double unlock are indistinguishable
+// (verified on ECC and S/4). The server-side dequeue (DEQUEUE_EADT_LOCK) is
+// handle-less and exception-less, so a 2xx from UnlockObject does NOT prove
+// the enqueue was released. There is also no ADT endpoint to read enqueue
+// state, so a release cannot be verified over REST. Secondary auto-locks on
+// coupled objects (e.g. a RAP BDEF's implementation class) are not reachable
+// by handle at all. The only reliable recovery is dropping the stateful
+// session (Logout), which releases every enqueue held under it.
+// See mcp-server-abap#383 and #58.
 type LockClient interface {
 	LockObject(ctx context.Context, objectURI string) (string, error)
 	UnlockObject(ctx context.Context, objectURI, lockHandle string) error
