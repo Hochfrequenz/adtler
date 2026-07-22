@@ -570,3 +570,81 @@ func TestSetIncludeSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 		t.Errorf("Content-Type: got %q, want %q", capturedCT, want)
 	}
 }
+
+// #443: OO classes/interfaces reject header lock delivery with 403
+// ExceptionResourceNoAccess ("currently editing"); the write must retry with
+// ?lockHandle= query delivery. Verified live on S/4.
+func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
+	const ooURI = "/sap/bc/adt/oo/classes/zcl_oo_retry"
+	var attempts int
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		attempts++
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+			w.Header().Set("ETag", `"oo-new"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Header-delivery attempt → 403 "currently editing".
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZCL_OO_RETRY</message></exc:exception>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	etag, err := client.SetSource(context.Background(), ooURI, "CLASS zcl_oo_retry DEFINITION PUBLIC.\nENDCLASS.", "LOCKH1", "TR1", `"etag-old"`)
+	if err != nil {
+		t.Fatalf("SetSource should have retried with query delivery and succeeded: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("expected a query-delivery retry (2 write attempts), got %d", attempts)
+	}
+	if !sawQueryHandle {
+		t.Error("retry did not deliver the lock handle as a ?lockHandle= query parameter")
+	}
+	if etag != `"oo-new"` {
+		t.Errorf("returned ETag: got %q, want %q", etag, `"oo-new"`)
+	}
+}
+
+// A 403 "currently editing" without a lock handle must NOT trigger the retry
+// (nothing to re-deliver) — the error surfaces so a genuine denial isn't masked.
+func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
+	const ooURI = "/sap/bc/adt/oo/classes/zcl_oo_noretry"
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">no access</message></exc:exception>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	// No lock handle → the query-delivery retry must NOT fire (nothing to
+	// re-deliver); the 403 surfaces so a genuine denial isn't masked. (adtler's
+	// doMutate may do its own CSRF-refresh retry, so assert on delivery mode,
+	// not attempt count.)
+	if _, err := client.SetSource(context.Background(), ooURI, "CLASS x.", "", "TR1", `"e"`); err == nil {
+		t.Fatal("expected the 403 to surface (no lock handle → no retry)")
+	}
+	if sawQueryHandle {
+		t.Error("query-delivery retry fired without a lock handle — must not happen")
+	}
+}
