@@ -615,10 +615,14 @@ func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
 	}
 }
 
-// A 403 "currently editing" without a lock handle must NOT trigger the retry
-// (nothing to re-deliver) — the error surfaces so a genuine denial isn't masked.
-func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
-	const ooURI = "/sap/bc/adt/oo/classes/zcl_oo_noretry"
+// sawQueryRetryAfter403 drives SetSource against a stub whose write endpoint
+// always returns 403 (body403 controls whether it's a typed exception or bare),
+// and reports whether any request delivered the lock handle via ?lockHandle= —
+// i.e. whether the query-delivery retry fired. It asserts the 403 surfaces.
+// (adtler's doMutate may do its own CSRF-refresh retry, so we assert on delivery
+// mode, not attempt count.)
+func sawQueryRetryAfter403(t *testing.T, ooURI, lockHandle, body403 string) bool {
+	t.Helper()
 	var sawQueryHandle bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -630,21 +634,33 @@ func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
 			sawQueryHandle = true
 		}
 		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">no access</message></exc:exception>`))
+		_, _ = w.Write([]byte(body403))
 	}))
 	defer srv.Close()
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
-
-	// No lock handle → the query-delivery retry must NOT fire (nothing to
-	// re-deliver); the 403 surfaces so a genuine denial isn't masked. (adtler's
-	// doMutate may do its own CSRF-refresh retry, so assert on delivery mode,
-	// not attempt count.)
-	if _, err := client.SetSource(context.Background(), ooURI, "CLASS x.", "", "TR1", `"e"`); err == nil {
-		t.Fatal("expected the 403 to surface (no lock handle → no retry)")
+	if _, err := client.SetSource(context.Background(), ooURI, "CLASS x.", lockHandle, "TR1", `"e"`); err == nil {
+		t.Fatal("expected the 403 to surface")
 	}
-	if sawQueryHandle {
+	return sawQueryHandle
+}
+
+// A 403 "currently editing" without a lock handle must NOT trigger the retry
+// (nothing to re-deliver) — the error surfaces so a genuine denial isn't masked.
+func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
+	body := `<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">no access</message></exc:exception>`
+	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/classes/zcl_oo_noretry", "", body) {
 		t.Error("query-delivery retry fired without a lock handle — must not happen")
+	}
+}
+
+// A bare 403 with no typed exception (empty ADTError.Type) must NOT trigger the
+// query-delivery retry even when a lock handle is held — 403 is overloaded, and
+// on R/3 a query retry would mask the real error as a 423. Guards the decision
+// to match isCurrentlyEditing on Type only (#443 review).
+func TestSetSource_NoRetryOnBare403(t *testing.T) {
+	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/classes/zcl_oo_bare403", "LOCKH1", "Forbidden") {
+		t.Error("bare 403 (empty Type) wrongly triggered the query-delivery retry")
 	}
 }

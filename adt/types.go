@@ -208,24 +208,25 @@ func isInvalidLockHandle(err error) bool {
 	return adtErr.StatusCode == 423
 }
 
-// isCurrentlyEditing reports whether err is SAP's 403 "currently editing"
+// isCurrentlyEditing reports whether err is SAP's "currently editing"
 // (ExceptionResourceNoAccess). A source write returns this when the lock handle
 // was delivered where the object's ADT handler does not read it: OO classes /
 // interfaces (and other modern handlers) expect the ?lockHandle= query
 // parameter, so the header-first attempt is treated as unlocked even though we
 // hold a valid lock. Used by trySetSource to retry with query-param delivery.
-// See aibap.mcp#443 (and #383 for the DDLS sibling). This shares the 403 status
-// with a genuine authorization denial, so it is only acted on when a lock handle
-// is present (i.e. we successfully locked, so the write "no access" is a
-// delivery artefact, not an authz failure); a genuine denial simply fails the
-// retry too, costing one extra round-trip.
+// See aibap.mcp#443 (and #383 for the DDLS sibling).
+//
+// This matches on the TYPED exception only — never a bare 403. Unlike 423
+// (effectively monosemous → invalid lock handle), 403 is heavily overloaded
+// (generic authorization denial, transport-auth failure, HTML error pages). The
+// OO handler that triggers #443 always emits Type=ExceptionResourceNoAccess via
+// the modern exception envelope, so Type-matching covers the real case; a bare
+// 403 must NOT trigger a query retry, which on R/3 would "poison" the write into
+// a misleading 423 and hide the true 403.
 func isCurrentlyEditing(err error) bool {
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
 		return false
 	}
-	if adtErr.Type != "" {
-		return adtErr.Type == ExceptionTypeResourceNoAccess
-	}
-	return adtErr.StatusCode == 403
+	return adtErr.Type == ExceptionTypeResourceNoAccess
 }
