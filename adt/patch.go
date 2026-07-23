@@ -106,14 +106,44 @@ func ApplyPatchOps(source string, ops []PatchOp) (string, error) {
 
 	// Apply search_replace ops in order.
 	for _, op := range srOps {
-		if op.All {
-			result = strings.ReplaceAll(result, op.Search, op.Replace)
-		} else {
-			result = strings.Replace(result, op.Search, op.Replace, 1)
+		var err error
+		result, err = applySearchReplace(result, op)
+		if err != nil {
+			return "", err
 		}
 	}
 
 	return result, nil
+}
+
+// applySearchReplace performs one search_replace op against src.
+//
+// It tolerates a CRLF/LF line-ending mismatch — a common cause of silent
+// no-ops (adtler#69): SAP source is frequently stored with CRLF, but callers
+// naturally write bare-LF search strings, and an LF search never matches a
+// CRLF source. When src uses CRLF and the search uses bare LF, the search and
+// the replacement are realigned to CRLF so the match succeeds and inserted
+// text keeps the source's line-ending style.
+//
+// It returns an error when the search string is empty or is not present in
+// src, so a search_replace can never silently succeed while changing nothing
+// (the previous behaviour, which still issued a fresh ETag and misled callers).
+func applySearchReplace(src string, op PatchOp) (string, error) {
+	search, replace := op.Search, op.Replace
+	if search == "" {
+		return "", fmt.Errorf("search_replace: empty search string")
+	}
+	if strings.Contains(src, "\r\n") && strings.Contains(search, "\n") && !strings.Contains(search, "\r\n") {
+		search = strings.ReplaceAll(search, "\n", "\r\n")
+		replace = strings.ReplaceAll(replace, "\n", "\r\n")
+	}
+	if !strings.Contains(src, search) {
+		return "", fmt.Errorf("search_replace: search string not found in source (check that the text, whitespace and line endings match exactly)")
+	}
+	if op.All {
+		return strings.ReplaceAll(src, search, replace), nil
+	}
+	return strings.Replace(src, search, replace, 1), nil
 }
 
 func opStartLine(op PatchOp) int {

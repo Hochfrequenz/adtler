@@ -99,6 +99,71 @@ func TestApplyOpsSearchReplaceAll(t *testing.T) {
 	}
 }
 
+// adtler#69: a multi-line LF search must match a CRLF source (SAP stores CRLF),
+// and the replacement must be written back with CRLF so line endings stay
+// consistent. Previously this silently no-op'd while issuing a fresh ETag.
+func TestApplyOpsSearchReplace_CRLFSourceLFSearch(t *testing.T) {
+	source := "REPORT ZTEST.\r\nDATA: lv_x TYPE i.\r\nWRITE lv_x."
+	ops := []adt.PatchOp{
+		// search/replace use bare LF, as a caller would naturally write them.
+		{Type: "search_replace", Search: "DATA: lv_x TYPE i.\nWRITE lv_x.", Replace: "DATA: lv_y TYPE string.\nWRITE lv_y."},
+	}
+	got, err := adt.ApplyPatchOps(source, ops)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "REPORT ZTEST.\r\nDATA: lv_y TYPE string.\r\nWRITE lv_y."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\n") && !strings.Contains(got, "\r\n") {
+		t.Errorf("result lost CRLF line endings: %q", got)
+	}
+}
+
+// A single-line (newline-free) search must still match a CRLF source unchanged.
+func TestApplyOpsSearchReplace_CRLFSourceSingleLineSearch(t *testing.T) {
+	source := "REPORT ZTEST.\r\nDATA: lv_x TYPE i."
+	ops := []adt.PatchOp{
+		{Type: "search_replace", Search: "ZTEST", Replace: "ZNEW"},
+	}
+	got, err := adt.ApplyPatchOps(source, ops)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "REPORT ZNEW.\r\nDATA: lv_x TYPE i."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// adtler#69: a search string that is genuinely absent must ERROR, not silently
+// succeed with an unchanged source.
+func TestApplyOpsSearchReplace_NotFoundErrors(t *testing.T) {
+	source := "REPORT ZTEST.\nDATA: lv_x TYPE i."
+	ops := []adt.PatchOp{
+		{Type: "search_replace", Search: "DOES_NOT_EXIST", Replace: "x"},
+	}
+	got, err := adt.ApplyPatchOps(source, ops)
+	if err == nil {
+		t.Fatalf("expected error for a search string not present, got success with %q", got)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should explain the search was not found, got: %v", err)
+	}
+}
+
+// An empty search string is meaningless and must error rather than prepend the
+// replacement at offset 0.
+func TestApplyOpsSearchReplace_EmptySearchErrors(t *testing.T) {
+	_, err := adt.ApplyPatchOps("REPORT ZTEST.", []adt.PatchOp{
+		{Type: "search_replace", Search: "", Replace: "x"},
+	})
+	if err == nil {
+		t.Fatal("expected error for an empty search string")
+	}
+}
+
 func TestApplyOpsMultiple(t *testing.T) {
 	// Two inserts: ops should be sorted descending by after_line so bottom-up application works.
 	source := "line1\nline2\nline3"
