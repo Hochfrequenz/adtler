@@ -116,8 +116,10 @@ func TestApplyOpsSearchReplace_CRLFSourceLFSearch(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if strings.Contains(got, "\n") && !strings.Contains(got, "\r\n") {
-		t.Errorf("result lost CRLF line endings: %q", got)
+	// No bare LF may remain: strip every CRLF, then any leftover "\n" is a
+	// lone LF that escaped realignment (catches a mixed CRLF+LF result too).
+	if strings.Contains(strings.ReplaceAll(got, "\r\n", ""), "\n") {
+		t.Errorf("result has a bare LF (not fully CRLF): %q", got)
 	}
 }
 

@@ -126,8 +126,10 @@ func ApplyPatchOps(source string, ops []PatchOp) (string, error) {
 // text keeps the source's line-ending style.
 //
 // It returns an error when the search string is empty or is not present in
-// src, so a search_replace can never silently succeed while changing nothing
-// (the previous behaviour, which still issued a fresh ETag and misled callers).
+// src, so a search_replace can never silently no-op on a zero match — the
+// previous behaviour, which still issued a fresh ETag and misled callers. (A
+// search that is found but whose replacement is identical still succeeds with
+// unchanged output; only the zero-match case is guarded.)
 func applySearchReplace(src string, op PatchOp) (string, error) {
 	if op.Search == "" {
 		return "", fmt.Errorf("search_replace: empty search string")
