@@ -405,15 +405,19 @@ git commit -m "feat: add RunClass client for ADT classrun endpoint"
 - Create: `adt/classrun_integration_test.go`
 
 **Interfaces:**
-- Consumes: `eachSystem(t)` (`integration_helpers_test.go:161`), `adt.Client.RunClass` (from Task 1), `adt.ADTError`. The fixture classes live in `testPackage` (`Z_ADT_MCP_TEST`) but are referenced by name via the `classrunFixture`/`classrunThrowFixture` consts, not through the `testPackage` symbol.
-- Produces: nothing consumed by later tasks. This task also **resolves open verification point #1** (runtime-exception signalling) and **#2** (classrun availability on HFQ/ECC) by observing live behaviour and updating the spec doc.
+- Consumes: `eachSystem(t)` (`integration_helpers_test.go:161`), `adt.Client.RunClass` (from Task 1), `adt.Client.GetObjectInfo` (fixture-existence pre-check), `adt.ADTError`. The fixture classes live in `testPackage` (`Z_ADT_MCP_TEST`) but are referenced by name via the `classrunFixture`/`classrunThrowFixture` consts, not through the `testPackage` symbol.
+- Produces: nothing consumed by later tasks. Confirms live behaviour against the SAP handler; the spec's open verification points #1 and #2 were already resolved by reading `CL_OO_ADT_RES_CLASSRUN` on both HFQ and S4U (see the "Verified against the SAP handler" note below), and this task is the runtime confirmation of that reading.
+
+**Verified against the SAP handler (2026-07-23, HFQ + S4U):** The classrun request is served by `CL_OO_ADT_RES_CLASSRUN`, method `post`. Reading its source on both systems confirmed: POST; response `text/plain` (`if_rest_media_type=>gc_text_plain`); the class name is read as a URI attribute and `TRANSLATE ... TO UPPER CASE`d server-side (so client lower-casing is a convention, not a functional requirement); no request body is read. The handler wraps the `main()` call in a `TRY ... CATCH cx_sy_create_object_error` only, so:
+- **Uncaught runtime exception in `main()`** (e.g. `cx_sy_zerodivide`) → not caught → propagates → the ADT REST framework returns a **non-2xx HTTP error** → `*adt.ADTError`.
+- **"Soft" failures** — missing `S_DEVELOP` authorization, or a class that does not implement the interface / cannot be instantiated (`cx_sy_create_object_error`) — are written into the body and returned as **HTTP 200 with an error string**. A non-existent class therefore comes back as **200-with-text, NOT 404**. A 404 only happens if the classrun endpoint itself is absent — which it is not, on either system.
 
 **Precondition (ordering dependency):** The fixture classes must exist in `Z_ADT_MCP_TEST` before these tests can pass:
-- `ZCL_ADT_MCP_CLASSRUN_TST` — implements `IF_OO_ADT_CLASSRUN`; its `main` writes a known string (`out->write( 'CLASSRUN_OK' ).`).
-- A throwing variant, e.g. `ZCL_ADT_MCP_CLASSRUN_ERR` — its `main` raises an uncaught exception (`RAISE EXCEPTION TYPE cx_sy_zerodivide.` or similar).
+- `ZCL_ADT_MCP_CLASSRUN_TST` — implements `IF_OO_ADT_CLASSRUN`; its `main` writes a known string (`out->write( 'CLASSRUN_OK' ).`). Note: on HFQ the console-out interface differs (`IF_OO_ADT_CLASSRUN_OUT` is absent; the older handler uses `write_text`), so the fixture's `main` body may need a system-appropriate variant — a fixture concern, not a Go-client one.
+- A throwing variant, e.g. `ZCL_ADT_MCP_CLASSRUN_ERR` — its `main` raises an **uncaught** exception (`RAISE EXCEPTION TYPE cx_sy_zerodivide.` or similar). Per the handler analysis above this surfaces as an `*adt.ADTError` (HTTP 5xx), not 200-with-text.
 - (Optional, HFQ-specific) a namespaced variant `/NA2/CL_ADT_MCP_CLASSRUN` if the `/NA2/` namespace is available on the target system; otherwise the namespace encoding is already covered by the Task 1 unit test.
 
-These are delivered via the [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST) repo. If a fixture is missing on a system, the sub-test should `t.Skip` with a clear message rather than fail.
+These are delivered via the [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST) repo. Because a missing fixture returns 200-with-text (not 404), the sub-tests `t.Skip` by **pre-checking class existence with `GetObjectInfo`**, not by catching a 404.
 
 - [ ] **Step 1: Write the happy-path integration test**
 
@@ -426,12 +430,15 @@ package adt_test
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )
+
+// NOTE: `errors` is added to this import block in Step 3, when
+// TestRunClass_ThrowingClass first uses errors.As. Adding it now would be an
+// unused-import compile error and break Step 2's clean build.
 
 // classrunFixture is the global class in Z_ADT_MCP_TEST that implements
 // IF_OO_ADT_CLASSRUN and writes classrunFixtureOutput to the console.
@@ -441,23 +448,32 @@ const (
 	classrunThrowFixture  = "ZCL_ADT_MCP_CLASSRUN_ERR"
 )
 
+// classrunClassURI returns the ADT class URI for a classrun fixture name.
+func classrunClassURI(name string) string {
+	return "/sap/bc/adt/oo/classes/" + strings.ToLower(name)
+}
+
 // TestRunClass_Integration runs a real classrun class on every whitelisted
 // system (R/3 and S/4 via eachSystem) and asserts the known console string
-// comes back. This also confirms whether the classrun framework
-// (IF_OO_ADT_CLASSRUN) is available on each system — see spec open
-// verification point #2 (HFQ/ECC not previously verified).
+// comes back. This also exercises the classrun framework on each system —
+// the endpoint handler CL_OO_ADT_RES_CLASSRUN is present on both HFQ/ECC and
+// S4U (spec open verification point #2, resolved).
+//
+// The fixture-existence pre-check uses GetObjectInfo, NOT a 404 from RunClass:
+// the handler returns HTTP 200 with an error string for a missing/invalid
+// class (verified against CL_OO_ADT_RES_CLASSRUN), so a missing fixture would
+// otherwise fail the ConsoleOutput assertion instead of skipping cleanly.
 func TestRunClass_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
+			if _, err := sys.Client.GetObjectInfo(ctx, classrunClassURI(classrunFixture)); err != nil {
+				t.Skipf("classrun fixture %s not present on %s (deliver it to Z_ADT_MCP_TEST first): %v",
+					classrunFixture, sys.Name, err)
+			}
 			result, err := sys.Client.RunClass(ctx, classrunFixture)
 			if err != nil {
-				var adtErr *adt.ADTError
-				if errors.As(err, &adtErr) && adtErr.StatusCode == 404 {
-					t.Skipf("classrun fixture %s or endpoint not available on %s (404): %v",
-						classrunFixture, sys.Name, err)
-				}
 				t.Fatalf("RunClass on %s failed: %v", sys.Name, err)
 			}
 			if !strings.Contains(result.ConsoleOutput, classrunFixtureOutput) {
@@ -479,35 +495,48 @@ go vet -tags integration ./adt/...
 ```
 Expected: clean build. (The tests themselves only run when SAP credentials are configured; without them `eachSystem` calls `t.Skip`.)
 
-- [ ] **Step 3: Add the runtime-exception (throwing) test that resolves the open verification point**
+- [ ] **Step 3: Add the runtime-exception (throwing) test**
 
-Append to `adt/classrun_integration_test.go`:
+Add `"errors"` to the import block of `adt/classrun_integration_test.go` now (it was deferred in Step 1 to avoid an unused-import error). The final import block is `context`, `errors`, `strings`, `testing`, plus `adt` — all used. Then append:
 
 ```go
-// TestRunClass_ThrowingClass resolves spec open verification point #1: how an
-// uncaught runtime exception in main() is signalled. Two outcomes are valid;
-// the test records which one holds and does NOT hard-fail on either, because
-// the spec commits to updating the doc + assertion once the live behaviour is
-// known. Update this test to a strict assertion after the first green run.
+// TestRunClass_ThrowingClass confirms how an uncaught runtime exception in
+// main() is signalled — spec open verification point #1. Verified against
+// CL_OO_ADT_RES_CLASSRUN: main() runs inside a TRY that catches only
+// cx_sy_create_object_error, so a genuine uncaught runtime exception (e.g.
+// cx_sy_zerodivide) propagates and the ADT REST framework turns it into a
+// non-2xx HTTP error -> *adt.ADTError. "Soft" failures (missing S_DEVELOP
+// auth, class does not implement the interface) instead come back as HTTP 200
+// with the error text in the body.
+//
+// The test therefore EXPECTS an ADTError for the throwing fixture, and logs
+// the observed status/body so the exact status code can be pinned. If the
+// fixture instead returns 200, that means it failed "softly" rather than
+// throwing — adjust the fixture, not the client.
 func TestRunClass_ThrowingClass(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
+			if _, err := sys.Client.GetObjectInfo(ctx, classrunClassURI(classrunThrowFixture)); err != nil {
+				t.Skipf("throwing fixture %s not present on %s: %v",
+					classrunThrowFixture, sys.Name, err)
+			}
 			result, err := sys.Client.RunClass(ctx, classrunThrowFixture)
-			switch {
-			case err != nil:
-				var adtErr *adt.ADTError
-				if errors.As(err, &adtErr) && adtErr.StatusCode == 404 {
-					t.Skipf("throwing fixture %s not available on %s (404)",
-						classrunThrowFixture, sys.Name)
-				}
-				// Outcome (a): non-2xx with the dump/exception text -> ADTError.
-				t.Logf("%s: throwing class surfaced as HTTP error: %v", sys.Name, err)
-			case result != nil:
-				// Outcome (b): 200 with the error text in the console body.
-				t.Logf("%s: throwing class returned 200 with body: %q",
+			if err == nil {
+				t.Logf("%s: throwing class returned HTTP 200 (soft failure), body: %q",
 					sys.Name, result.ConsoleOutput)
+				return
+			}
+			var adtErr *adt.ADTError
+			if !errors.As(err, &adtErr) {
+				t.Fatalf("%s: expected *adt.ADTError, got %T: %v", sys.Name, err, err)
+			}
+			t.Logf("%s: throwing class surfaced as ADTError, status %d: %s",
+				sys.Name, adtErr.StatusCode, adtErr.Message)
+			if adtErr.StatusCode < 500 {
+				t.Logf("%s: NOTE status %d is below 5xx — record it and tighten this assertion",
+					sys.Name, adtErr.StatusCode)
 			}
 		})
 	}

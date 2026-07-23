@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-22
 - **Repo:** adtler
-- **Status:** Proposed (revised after agent review)
+- **Status:** Proposed (revised after agent review + live handler verification on HFQ and S4U, 2026-07-23)
 - **Companion spec:** aibap.mcp `run_class` tool — `<aibap.mcp>/docs/superpowers/specs/2026-07-22-run-class-tool-design.md` (consumer of this endpoint; that PR is `blocked-by-adtler` until this ships in a tagged release).
 
 ## Motivation
@@ -19,9 +19,14 @@ classrun. `RunClass` is the generic primitive that makes that (and other
 diagnostic/helper flows) possible. This spec covers **only** the generic
 endpoint client; no lock-specific logic lives here.
 
-Verified precondition (S4U, 2026-07-22): interface `IF_OO_ADT_CLASSRUN`
-(package `SEO_ADT`) exists, so the classrun framework is present on that system.
-Its presence on HFQ (ECC/R3) is **not yet verified** — see verification points.
+Verified precondition (2026-07-23, HFQ **and** S4U): the classrun framework is
+present on **both** systems. The request handler `CL_OO_ADT_RES_CLASSRUN`
+(package `SEO_ADT`) and interface `IF_OO_ADT_CLASSRUN` exist on each; its source
+was read on both to confirm the endpoint contract (see "The classrun endpoint"
+and "Error handling"). Note the HFQ (ECC) handler is an older variant:
+`IF_OO_ADT_CLASSRUN_OUT` is absent there and the console-out object uses
+`write_text`, and the ECC handler additionally accepts `PROG`/`DDLS` object
+types — none of which affects the `text/plain` client contract.
 
 ## Scope
 
@@ -52,6 +57,9 @@ Notes / decisions:
   applies `encodeNamespacePath` automatically (it triggers on `//`), so a
   namespaced class built as `/sap/bc/adt/oo/classrun//na2/foo` is encoded to
   `%2fna2%2ffoo` by the client. Just build the raw URI and let `doMutate` handle it.
+  (Verified 2026-07-23: the handler `TRANSLATE`s the class name `TO UPPER CASE`
+  server-side, so lower-casing is a convention/namespace-encoding requirement,
+  not a functional one — both forms resolve to the same class.)
 - **Content type:** hard-code `contentTypeTextPlain` for `Accept`. classrun
   returns plain console text; a versioned content type is not expected, and
   `NegotiateContentType` does an **exact** discovery-key lookup (`discovery.go`),
@@ -103,15 +111,25 @@ ConsoleOutput: string(body)}`. Follows `ActivateObjects` / `GetSource`
   `ADTError`, preserving the response body text so the caller sees the SAP
   message. The existing 4-layer `parseADTError` already handles SAP HTML dump
   pages — no new error class needed.
-- **Uncaught runtime exception in `main`** — OPEN VERIFICATION POINT. Two
-  possible behaviours; the integration test decides which holds:
-  - (a) non-2xx status with the dump/exception text → lands as `ADTError`
-    (body preserved). No code change.
-  - (b) `200` with the error text in the body → a *successful run with error
-    output*; `ClassRunResult.ConsoleOutput` carries the text, caller interprets.
-    No code change.
-  `RunClass` needs no exception-specific branch either way; the test pins the
-  actual behaviour and this doc is updated to match.
+- **Failure signalling — resolved (2026-07-23) by reading `CL_OO_ADT_RES_CLASSRUN`
+  on both systems.** The handler wraps the `main()` call in a `TRY ... CATCH
+  cx_sy_create_object_error` only. This produces a **split** contract:
+  - (a) **Uncaught runtime exception in `main`** (e.g. `cx_sy_zerodivide`) is
+    *not* caught → propagates → the ADT REST framework returns a **non-2xx**
+    HTTP error → lands as `ADTError` (body preserved). No code change.
+  - (b) **"Soft" failures return HTTP `200` with the error text in the body:**
+    missing `S_DEVELOP` authorization, a class that does not implement the
+    interface, or a class that cannot be instantiated (`cx_sy_create_object_error`)
+    are all written to the response body. **A non-existent class is 200-with-text,
+    NOT 404.** `ClassRunResult.ConsoleOutput` carries the text; the caller
+    interprets it.
+  `RunClass` needs no exception-specific branch either way — it returns an
+  `ADTError` for (a) and a `ClassRunResult` for (b). **Consumers (aibap.mcp
+  `run_class`) must not treat a successful `RunClass` return as "the class
+  succeeded": the console output may be an error string** (SAP `OO 755` auth
+  message, `"Error: Class does not implement..."`, etc.). Pre-checking class
+  existence/activeness before calling is the consumer's job (already in the
+  companion spec).
 
 ## Testing
 
@@ -137,11 +155,23 @@ S/4, per the repo convention):**
   (`IF_OO_ADT_CLASSRUN`) exists on HFQ/ECC, not just S4U.
 - Fixture class added to [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST).
 
-## Open verification points
+## Verification points
 
-1. Runtime-exception signalling (HTTP error vs. 200-with-text) — see Error handling.
-2. `IF_OO_ADT_CLASSRUN` / classrun endpoint availability on HFQ (ECC/R3) — only S4U verified so far.
-3. Whether classrun needs any specific session type or extra header (expected: plain stateless POST).
+1. **Resolved (2026-07-23).** Failure signalling is split: uncaught runtime
+   exception → non-2xx (`ADTError`); soft failures (auth, interface not
+   implemented, non-existent class) → HTTP 200 with an error string in the
+   body. See Error handling. Runtime confirmation lands with the integration
+   test (`TestRunClass_ThrowingClass`).
+2. **Resolved (2026-07-23).** The classrun endpoint is available on **both**
+   HFQ (ECC/R3) and S4U — handler `CL_OO_ADT_RES_CLASSRUN` and interface
+   `IF_OO_ADT_CLASSRUN` exist on each. The HFQ handler is an older variant (no
+   `IF_OO_ADT_CLASSRUN_OUT`, uses `write_text`, also serves `PROG`/`DDLS`), but
+   the `text/plain` client contract is identical.
+3. **Resolved (2026-07-23).** Plain stateless POST, no special session type or
+   extra header required. The handler reads only the `classname` URI attribute
+   (uppercased server-side), an optional `profilerId` query param, and two
+   optional `sap-adt-push-*` headers for async console streaming — none needed
+   for the synchronous `RunClass` path.
 
 ## Rollout / linkage
 
