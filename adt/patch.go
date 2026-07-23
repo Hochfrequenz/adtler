@@ -129,26 +129,26 @@ func ApplyPatchOps(source string, ops []PatchOp) (string, error) {
 // src, so a search_replace can never silently succeed while changing nothing
 // (the previous behaviour, which still issued a fresh ETag and misled callers).
 func applySearchReplace(src string, op PatchOp) (string, error) {
-	search, replace := op.Search, op.Replace
-	if search == "" {
+	if op.Search == "" {
 		return "", fmt.Errorf("search_replace: empty search string")
 	}
-	// When the source uses CRLF, align both the search and the replacement to
-	// CRLF so the match succeeds and inserted text keeps the source's
-	// line-ending style. toCRLF normalises first, so it is idempotent and never
-	// turns an existing \r\n into \r\r\n regardless of what mix the caller sent.
+	search, replace := op.Search, op.Replace
+	// Try the caller's search verbatim first. This matches a pure-LF source and
+	// also any bare-LF region within an otherwise-CRLF source — e.g. content a
+	// preceding line-op spliced in (joinLines uses \n) — so those keep working.
 	//
-	// Known limitation: a preceding line-op (insert/replace) splices its content
-	// with bare-LF boundaries (joinLines uses \n), so in an otherwise-CRLF file a
-	// search_replace whose search spans a just-inserted boundary will not match
-	// and returns the not-found error below rather than silently no-op'ing —
-	// split such edits into separate calls or use line-ops throughout.
-	if strings.Contains(src, "\r\n") {
-		search = toCRLF(search)
-		replace = toCRLF(replace)
-	}
+	// Only if that fails do we realign to CRLF and retry: SAP source is
+	// frequently stored with CRLF while callers naturally write bare-LF search
+	// strings, and an LF search never matches a CRLF source. When we match via
+	// the realigned search we also realign the replacement, so inserted text
+	// keeps the source's CRLF style. toCRLF normalises first, so it is
+	// idempotent and never turns an existing \r\n into \r\r\n.
 	if !strings.Contains(src, search) {
-		return "", fmt.Errorf("search_replace: search string not found in source (check that the text, whitespace and line endings match exactly)")
+		crlfSearch := toCRLF(search)
+		if crlfSearch == search || !strings.Contains(src, crlfSearch) {
+			return "", fmt.Errorf("search_replace: search string not found in source (check that the text, whitespace and line endings match exactly)")
+		}
+		search, replace = crlfSearch, toCRLF(replace)
 	}
 	if op.All {
 		return strings.ReplaceAll(src, search, replace), nil
