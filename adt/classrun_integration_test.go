@@ -38,10 +38,13 @@ func TestRunClass_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
-			ctx := context.Background()
 			if _, err := sys.Client.GetObjectInfo(ctx, classrunClassURI(classrunFixture)); err != nil {
-				t.Skipf("classrun fixture %s not present on %s (deliver it to Z_ADT_MCP_TEST first): %v",
-					classrunFixture, sys.Name, err)
+				var adtErr *adt.ADTError
+				if errors.As(err, &adtErr) && adtErr.StatusCode == 404 {
+					t.Skipf("classrun fixture %s not present on %s (deliver it to Z_ADT_MCP_TEST first): %v",
+						classrunFixture, sys.Name, err)
+				}
+				t.Fatalf("GetObjectInfo pre-check for %s on %s failed: %v", classrunFixture, sys.Name, err)
 			}
 			result, err := sys.Client.RunClass(ctx, classrunFixture)
 			if err != nil {
