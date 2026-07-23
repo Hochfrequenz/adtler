@@ -186,6 +186,7 @@ type Client interface {
 	DumpClient
 	SystemClient
 	DependencyClient
+	ClassRunClient
 }
 
 type httpClient struct {

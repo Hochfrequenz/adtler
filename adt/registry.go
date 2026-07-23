@@ -236,6 +236,9 @@ func (r *ClientRegistry) RunQuery(ctx context.Context, sql string, maxRows int) 
 func (r *ClientRegistry) GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error) {
 	return r.activeClient().GetObjectDependencies(ctx, objectType, objectName, maxResults, maxDepth)
 }
+func (r *ClientRegistry) RunClass(ctx context.Context, className string) (*ClassRunResult, error) {
+	return r.activeClient().RunClass(ctx, className)
+}
 func (r *ClientRegistry) GetEnhancementSpot(ctx context.Context, spotName string) (*EnhancementSpotInfo, error) {
 	return r.activeClient().GetEnhancementSpot(ctx, spotName)
 }
