@@ -133,9 +133,19 @@ func applySearchReplace(src string, op PatchOp) (string, error) {
 	if search == "" {
 		return "", fmt.Errorf("search_replace: empty search string")
 	}
-	if strings.Contains(src, "\r\n") && strings.Contains(search, "\n") && !strings.Contains(search, "\r\n") {
-		search = strings.ReplaceAll(search, "\n", "\r\n")
-		replace = strings.ReplaceAll(replace, "\n", "\r\n")
+	// When the source uses CRLF, align both the search and the replacement to
+	// CRLF so the match succeeds and inserted text keeps the source's
+	// line-ending style. toCRLF normalises first, so it is idempotent and never
+	// turns an existing \r\n into \r\r\n regardless of what mix the caller sent.
+	//
+	// Known limitation: a preceding line-op (insert/replace) splices its content
+	// with bare-LF boundaries (joinLines uses \n), so in an otherwise-CRLF file a
+	// search_replace whose search spans a just-inserted boundary will not match
+	// and returns the not-found error below rather than silently no-op'ing —
+	// split such edits into separate calls or use line-ops throughout.
+	if strings.Contains(src, "\r\n") {
+		search = toCRLF(search)
+		replace = toCRLF(replace)
 	}
 	if !strings.Contains(src, search) {
 		return "", fmt.Errorf("search_replace: search string not found in source (check that the text, whitespace and line endings match exactly)")
@@ -144,6 +154,13 @@ func applySearchReplace(src string, op PatchOp) (string, error) {
 		return strings.ReplaceAll(src, search, replace), nil
 	}
 	return strings.Replace(src, search, replace, 1), nil
+}
+
+// toCRLF rewrites all line endings in s to CRLF. It normalises any existing
+// CRLF back to LF first so the expansion is idempotent (no \r\r\n), and a lone
+// \r or newline-free string is left untouched.
+func toCRLF(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
 }
 
 func opStartLine(op PatchOp) int {

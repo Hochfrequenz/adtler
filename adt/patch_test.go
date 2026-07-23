@@ -164,6 +164,74 @@ func TestApplyOpsSearchReplace_EmptySearchErrors(t *testing.T) {
 	}
 }
 
+// All:true against a CRLF source with a multi-line LF search must replace every
+// occurrence and keep CRLF.
+func TestApplyOpsSearchReplace_CRLFAll(t *testing.T) {
+	source := "A\r\nx\r\nB\r\nA\r\nx\r\nB"
+	got, err := adt.ApplyPatchOps(source, []adt.PatchOp{
+		{Type: "search_replace", Search: "A\nx", Replace: "A\ny", All: true},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "A\r\ny\r\nB\r\nA\r\ny\r\nB"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A replacement that already contains CRLF must not be corrupted into \r\r\n
+// when the source is CRLF (regression guard for the realignment).
+func TestApplyOpsSearchReplace_CRLFReplaceNotDoubled(t *testing.T) {
+	source := "line1\r\nTARGET\r\nline3"
+	got, err := adt.ApplyPatchOps(source, []adt.PatchOp{
+		// replace already uses CRLF; search uses bare LF (single token here).
+		{Type: "search_replace", Search: "TARGET", Replace: "new1\r\nnew2"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "line1\r\nnew1\r\nnew2\r\nline3"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\r\r") {
+		t.Errorf("replacement CRLF got doubled to \\r\\r\\n: %q", got)
+	}
+}
+
+// Multiple search_replace ops in one call apply in order to the same result.
+func TestApplyOpsSearchReplace_MultipleOps(t *testing.T) {
+	source := "alpha beta gamma"
+	got, err := adt.ApplyPatchOps(source, []adt.PatchOp{
+		{Type: "search_replace", Search: "alpha", Replace: "ALPHA"},
+		{Type: "search_replace", Search: "gamma", Replace: "GAMMA"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "ALPHA beta GAMMA"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Known limitation (documented in applySearchReplace): a line-op splices content
+// with a bare-LF boundary, so in a CRLF source a following search_replace that
+// spans that boundary is realigned to CRLF and does not match — it errors
+// loudly rather than silently no-op'ing. This test pins that documented
+// behavior so a future change to it is deliberate.
+func TestApplyOpsSearchReplace_SpanningInsertedBoundaryErrors(t *testing.T) {
+	source := "a\r\nb"
+	_, err := adt.ApplyPatchOps(source, []adt.PatchOp{
+		{Type: "insert", AfterLine: 1, Content: "NEW"},                // -> "a\r\nNEW\nb"
+		{Type: "search_replace", Search: "NEW\nb", Replace: "NEW\nB"}, // realigned to "NEW\r\nb", not present
+	})
+	if err == nil {
+		t.Fatal("expected not-found error for a search spanning the bare-LF inserted boundary in a CRLF source")
+	}
+}
+
 func TestApplyOpsMultiple(t *testing.T) {
 	// Two inserts: ops should be sorted descending by after_line so bottom-up application works.
 	source := "line1\nline2\nline3"
