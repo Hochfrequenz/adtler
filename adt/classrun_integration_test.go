@@ -83,9 +83,8 @@ func TestRunClass_ThrowingClass(t *testing.T) {
 			}
 			result, err := sys.Client.RunClass(ctx, classrunThrowFixture)
 			if err == nil {
-				t.Logf("%s: throwing class returned HTTP 200 (soft failure), body: %q",
+				t.Fatalf("%s: expected RunClass to fail for throwing fixture, got HTTP 200 body: %q",
 					sys.Name, result.ConsoleOutput)
-				return
 			}
 			var adtErr *adt.ADTError
 			if !errors.As(err, &adtErr) {
