@@ -106,14 +106,63 @@ func ApplyPatchOps(source string, ops []PatchOp) (string, error) {
 
 	// Apply search_replace ops in order.
 	for _, op := range srOps {
-		if op.All {
-			result = strings.ReplaceAll(result, op.Search, op.Replace)
-		} else {
-			result = strings.Replace(result, op.Search, op.Replace, 1)
+		var err error
+		result, err = applySearchReplace(result, op)
+		if err != nil {
+			return "", err
 		}
 	}
 
 	return result, nil
+}
+
+// applySearchReplace performs one search_replace op against src.
+//
+// It tolerates a CRLF/LF line-ending mismatch — a common cause of silent
+// no-ops (adtler#69): SAP source is frequently stored with CRLF, but callers
+// naturally write bare-LF search strings, and an LF search never matches a
+// CRLF source. When src uses CRLF and the search uses bare LF, the search and
+// the replacement are realigned to CRLF so the match succeeds and inserted
+// text keeps the source's line-ending style.
+//
+// It returns an error when the search string is empty or is not present in
+// src, so a search_replace can never silently no-op on a zero match — the
+// previous behaviour, which still issued a fresh ETag and misled callers. (A
+// search that is found but whose replacement is identical still succeeds with
+// unchanged output; only the zero-match case is guarded.)
+func applySearchReplace(src string, op PatchOp) (string, error) {
+	if op.Search == "" {
+		return "", fmt.Errorf("search_replace: empty search string")
+	}
+	search, replace := op.Search, op.Replace
+	// Try the caller's search verbatim first. This matches a pure-LF source and
+	// also any bare-LF region within an otherwise-CRLF source — e.g. content a
+	// preceding line-op spliced in (joinLines uses \n) — so those keep working.
+	//
+	// Only if that fails do we realign to CRLF and retry: SAP source is
+	// frequently stored with CRLF while callers naturally write bare-LF search
+	// strings, and an LF search never matches a CRLF source. When we match via
+	// the realigned search we also realign the replacement, so inserted text
+	// keeps the source's CRLF style. toCRLF normalises first, so it is
+	// idempotent and never turns an existing \r\n into \r\r\n.
+	if !strings.Contains(src, search) {
+		crlfSearch := toCRLF(search)
+		if crlfSearch == search || !strings.Contains(src, crlfSearch) {
+			return "", fmt.Errorf("search_replace: search string not found in source (check that the text, whitespace and line endings match exactly)")
+		}
+		search, replace = crlfSearch, toCRLF(replace)
+	}
+	if op.All {
+		return strings.ReplaceAll(src, search, replace), nil
+	}
+	return strings.Replace(src, search, replace, 1), nil
+}
+
+// toCRLF rewrites all line endings in s to CRLF. It normalises any existing
+// CRLF back to LF first so the expansion is idempotent (no \r\r\n), and a lone
+// \r or newline-free string is left untouched.
+func toCRLF(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
 }
 
 func opStartLine(op PatchOp) int {
