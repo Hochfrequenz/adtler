@@ -68,6 +68,13 @@ Verified live on S4U (SAP_BASIS 758) 2026-07-24 and 2026-07-27, and on HFQ
   problem.
 - The `text/plain` soft-fail body is produced by the handler at HTTP 200; there
   is no structured error channel and no ST22 dump.
+- **The soft-fail string is cause-ambiguous** (verified 2026-07-27, S4U): a class
+  that does *not* implement `IF_OO_ADT_CLASSRUN` but *does* have a generated load
+  (load confirmed via a passing instantiating unit test) returns the **identical**
+  `Error: Class does not implement if_oo_adt_classrun~main method!`. So the same
+  body means load-not-generated *or* genuine non-implementer *or* not-instantiable
+  — the classification cannot attribute a single cause. Drives the error naming
+  and the Option-B implement-check (see Option A / Option B).
 - **A pure-ADT-REST path generates the load:** adding a (dummy) ABAP Unit test
   include to the class and **activating** it (without running the test) makes
   the subsequent `RunClass` return the real output. A plain re-activation without
@@ -103,29 +110,46 @@ succeeded"); this option moves that burden off the consumer.
 
 ### Behaviour
 
-When the console body is the known create-object soft-fail, return a typed error
-instead of a success result. Proposed error, following the established sentinel /
-typed-error pattern (cf. `ErrorObjectLockedInTransport`):
+When the console body is the known "does not implement …main…" soft-fail, return
+a typed error instead of a success result. Proposed error, following the
+established sentinel / typed-error pattern (cf. `ErrorObjectLockedInTransport`):
 
 ```go
 // adt/classrun.go
 
-// ErrClassLoadNotGenerated indicates the classrun handler returned its
-// create-object soft-failure ("does not implement ...main..."), which for a
-// class that provably implements IF_OO_ADT_CLASSRUN means the runtime load has
-// not been generated yet (see issue #106). It is a heuristic classification of
-// an HTTP 200 text/plain body: SAP exposes no structured error channel here.
-var ErrClassLoadNotGenerated = errors.New("classrun: runtime load not generated (class create-object soft-failure)")
+// ErrClassNotExecutable indicates the classrun handler returned its
+// "does not implement if_oo_adt_classrun~main method" soft-failure at HTTP 200
+// instead of real console output (see issue #106). This is a HEURISTIC
+// classification of a text/plain body — SAP exposes no structured error channel
+// here — and the message is CAUSE-AMBIGUOUS. The same body is produced by at
+// least: (a) the runtime load not being generated yet (issue #106 defect 1, S/4),
+// (b) a class that genuinely does not implement IF_OO_ADT_CLASSRUN, and
+// (c) a class that cannot be instantiated for other reasons (cx_sy_create_object_error).
+// RunClass performs no pre-check, so it cannot attribute a single cause; the name
+// is therefore the OBSERVABLE effect ("not executable via classrun"), not a
+// presumed cause. See Detection.
+var ErrClassNotExecutable = errors.New("classrun: class not executable via classrun (handler returned 'does not implement ...main...' at HTTP 200)")
 ```
 
-`RunClass` returns `fmt.Errorf("RunClass %s: %w", className, ErrClassLoadNotGenerated)`
+`RunClass` returns `fmt.Errorf("RunClass %s: %w", className, ErrClassNotExecutable)`
 when the body matches, so callers can `errors.Is` it while still seeing the class
 name.
 
+**Naming rationale (must-address from PR #107 review):** an earlier draft named
+this `ErrClassLoadNotGenerated`, which overclaims — the body cannot prove the load
+is the cause. **Verified live 2026-07-27 on S4U:** a class that does *not* implement
+`IF_OO_ADT_CLASSRUN` but *does* have a generated runtime load (load confirmed by a
+passing instantiating unit test) returns the **identical** string
+`Error: Class does not implement if_oo_adt_classrun~main method!`. So the string is
+demonstrably not load-specific; a cause-neutral name is required.
+
 ### Detection — the one real design question
 
-SAP gives no structured signal; matching is on the body text. Options, safest
-first:
+SAP gives no structured signal; matching is on the body text, and (per the
+verification above) the matched string is **cause-ambiguous**. Two questions
+follow: *what* to match, and *what the match is allowed to claim*.
+
+**What to match:**
 
 - **Exact/prefix match on the known handler string**
   `Error: Class does not implement if_oo_adt_classrun~main method!` (constant,
@@ -135,10 +159,26 @@ first:
 - Broaden later only if integration testing surfaces other create-object phrasings
   (e.g. the ECC handler variant). Keep the matched strings hoisted as constants.
 
-Note the auth soft-fail (`S_DEVELOP` / SAP `OO 755`) is a *different* condition
-and should **not** be folded into `ErrClassLoadNotGenerated`; if we classify it,
-it is a separate error. Recommended: leave auth as-is for this change (out of
-scope) to keep the classification narrow.
+**What the match may claim — the cause-ambiguity carve-outs.** The same HTTP-200
+body is emitted by several distinct conditions (original classrun spec §Error
+handling; item (b) below verified live 2026-07-27):
+
+| Condition | Body | Handled how |
+|---|---|---|
+| (a) Load not generated (S/4 defect 1) | `does not implement …main…` | → `ErrClassNotExecutable` |
+| (b) Class genuinely does not implement the interface (even with a load) | **identical** `does not implement …main…` | → `ErrClassNotExecutable` (indistinguishable — verified) |
+| (c) Not instantiable for other reasons (`cx_sy_create_object_error`) | `does not implement …main…` | → `ErrClassNotExecutable` |
+| (d) Non-existent class | 200-with-text, **not** 404 | consumer's existence pre-check catches this before `RunClass` (aibap.mcp already does `GetObjectInfo` first) |
+| (e) Missing `S_DEVELOP` auth (`OO 755`) | *different* auth text | **not** folded in — different string, leave as-is (out of scope); classify separately later if wanted |
+
+Because `RunClass` performs no pre-check, it must **not** attribute the cause: the
+error says "not executable via classrun", and callers decide what to do. In
+practice the S/4 caller that owns the lifecycle (created the class, knows it
+implements the interface and is active) can reasonably infer (a) and reach for
+load generation — but that inference lives in the caller, not in adtler's error
+name. This is also why **Option B must gate load generation on the class actually
+implementing the interface** (otherwise it generates a load for a class that will
+never run — condition (b)).
 
 ### Why baseline
 
@@ -153,7 +193,10 @@ the verified test-include-activate path, then retrying the run.
 
 ### Sequence (all existing adtler primitives)
 
-1. `RunClass` → detects `ErrClassLoadNotGenerated` (Option A must land first).
+1. `RunClass` → returns `ErrClassNotExecutable` (Option A must land first).
+   Gate load generation on the class actually implementing `IF_OO_ADT_CLASSRUN`
+   (a cheap metadata/where-used check), so condition (b) — a genuine
+   non-implementer — is not sent down the generate-and-retry path.
 2. `lock` → `create_test_include` → `set_include_source` (dummy
    `FOR TESTING` class doing `CREATE OBJECT`) → `activate`.
 3. Retry `RunClass` → returns the real output.
@@ -197,6 +240,15 @@ or gated behind an explicit "generate load" tool parameter).
 
 This keeps the mutation **visible and deliberate** and leaves `RunClass` pure.
 
+Adding `EnsureClassLoad` to the exported `ClassRunClient` interface is a breaking
+change for any external mock/implementer of that interface — another reason to
+treat it as a deliberate, versioned addition rather than folding it into `RunClass`.
+
+Cleanup safety for the dummy test include is supported by the investigation's own
+finding: no in-place ADT-REST operation evicts a generated load, so removing the
+include (activate again) after generation does not un-generate the load — the
+class stays runnable.
+
 ### Why blocked:design-needed
 
 The mutation, transport, lock, and cleanup semantics above need a human decision
@@ -218,12 +270,19 @@ becomes a documented SAP classrun limitation and Option A is the whole deliverab
   HTTP-error handling (`checkResponse` → `ADTError`) is unchanged.
 - The classification is explicitly heuristic (HTTP 200 text body); the godoc and
   this spec say so. If SAP ever adds a structured signal, revisit.
+- **Behavioural compatibility (call out at implementation):** Option A flips
+  `RunClass` from `(*ClassRunResult, nil)` to `(nil, error)` for the soft-fail
+  body. Any current consumer that reads the soft-fail out of `ConsoleOutput` (the
+  pre-fix contract the original classrun spec explicitly warned about) will now
+  get an error instead. This is the intended fix, but it is a behavioural change
+  and should ship in a minor tag with a changelog note; the aibap.mcp consumer
+  bump must adapt to the new error return.
 
 ## Testing
 
 **Unit (`httptest` mock, no build tag):**
 - 200 body = exact `Error: Class does not implement if_oo_adt_classrun~main method!`
-  → `RunClass` returns `ErrClassLoadNotGenerated` (assert `errors.Is`), not a
+  → `RunClass` returns `ErrClassNotExecutable` (assert `errors.Is`), not a
   success result.
 - 200 body = ordinary console output that merely *contains* the word `Error`
   elsewhere → still a success result (guards the matcher against over-broad
@@ -241,7 +300,7 @@ returns the soft-fail). Two viable shapes:
 - **Behaviour-detecting (preferred):** create + set source + activate a fresh
   classrun class purely over ADT REST, then `RunClass`. Accept **either** outcome
   per system: real output (ECC, load generated on activation) **or**
-  `ErrClassLoadNotGenerated` (S/4, defect 1 now surfaced as a typed error). Assert
+  `ErrClassNotExecutable` (S/4, defect 1 now surfaced as a typed error). Assert
   that the return is exactly one of those two — never a *success result carrying
   the soft-fail string* (that is the pre-fix bug the change removes). This keeps
   the test green on both systems while still pinning the fix.
