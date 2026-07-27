@@ -38,6 +38,7 @@ func TestRunClass_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
 			if _, err := sys.Client.GetObjectInfo(ctx, classrunClassURI(classrunFixture)); err != nil {
 				var adtErr *adt.ADTError
 				if errors.As(err, &adtErr) && adtErr.StatusCode == 404 {
