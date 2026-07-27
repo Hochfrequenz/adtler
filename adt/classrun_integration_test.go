@@ -152,7 +152,7 @@ func TestRunClass_FreshClass_Integration(t *testing.T) {
 			ctx := context.Background()
 			// A fresh, uniquely-named $TMP class so the run really exercises a
 			// never-executed class (defect-1 precondition).
-			name := fmt.Sprintf("ZCL_RC106_FRESH_%d", time.Now().Unix()%100000)
+			name := fmt.Sprintf("ZCL_RC106_FRESH_%d", time.Now().UnixNano()%10000000000000)
 			uri := createTmpClassrunClass(t, sys.Client, name)
 			setClassrunSourceAndActivate(t, sys.Client, uri, name, freshClassrunOutput)
 
@@ -186,7 +186,7 @@ func TestRunClass_ReactivatedClass_Integration(t *testing.T) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
-			name := fmt.Sprintf("ZCL_RC106_REACT_%d", time.Now().Unix()%100000)
+			name := fmt.Sprintf("ZCL_RC106_REACT_%d", time.Now().UnixNano()%10000000000000)
 			uri := createTmpClassrunClass(t, sys.Client, name)
 
 			// Change source + re-activate between runs, all on the same client.

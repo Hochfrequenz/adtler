@@ -246,11 +246,29 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // The returned client is not registered anywhere and holds no locks; discard it
 // after use. An OAuth token refreshed inside this single-use session is not
 // propagated back to the parent client — acceptable for a one-shot run.
+//
+// It reuses the parent's *http.Transport (preserving any caller-supplied
+// RoundTripper from NewClientWithTransport and the existing connection pool)
+// and only swaps in a fresh cookie jar: the empty jar is what makes SAP start a
+// clean session, independent of the TCP connection reuse.
 func (c *httpClient) freshSession() *httpClient {
-	fresh := NewClientWithPollInterval(c.cfg, c.pollInterval).(*httpClient)
-	fresh.accessToken = c.accessToken
-	fresh.onTokenRefresh = c.onTokenRefresh
-	return fresh
+	jar, _ := cookiejar.New(nil)
+	return &httpClient{
+		cfg: c.cfg,
+		http: &http.Client{
+			Timeout:   c.http.Timeout,
+			Transport: c.http.Transport,
+			Jar:       jar,
+		},
+		httpLong: &http.Client{
+			Timeout:   c.httpLong.Timeout,
+			Transport: c.httpLong.Transport,
+			Jar:       jar,
+		},
+		accessToken:    c.accessToken,
+		onTokenRefresh: c.onTokenRefresh,
+		pollInterval:   c.pollInterval,
+	}
 }
 
 // NewClientWithToken creates a Client using Bearer token auth.
