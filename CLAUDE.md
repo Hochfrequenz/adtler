@@ -92,6 +92,7 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 - **ESRDIRE enqueue after CreateObject**: S/4 leaves a session-bound enqueue. Workaround: `Logout()` after `CreateObject`.
 - **ETag charset**: SAP embeds the source Content-Type into the ETag, so `GetSource` and the validating PUT must agree on the Accept / Content-Type form. `sourceContentType` (discovery-driven, from #35) prefers `text/plain; charset=utf-8` when discovery advertises it; both sides therefore land on the same ETag form. The earlier 412 retry workaround was removed in #42 once the discovery path covered every supported system.
 - **DDIC endpoints**: DTEL/DOMA/TABL creation via `/sap/bc/adt/ddic/` requires S/4. R/3 returns 404 or 415.
+- **Runtime-load generation vs. session reuse (S/4)**: on S/4, an ADT session that just ran the create → set source → activate lifecycle **cannot generate a class's runtime load** when it then executes the class in that *same* session — classrun's `CREATE OBJECT` soft-fails as `Error: Class does not implement if_oo_adt_classrun~main method!` (issue #106 defect 1), and a changed + re-activated class serves the *stale* previously-generated load (defect 2). A **fresh** session generates the load from the current active source. `RunClass` works around this by running the classrun POST on an isolated single-use session (`freshSession` — own cookie jar + CSRF preflight), never the caller's worn session. R/3 (ECC) regenerates a persistent load on activation, so it is unaffected. **Generalises:** any operation that depends on SAP generating fresh state (a runtime load, etc.) right after a mutating lifecycle may hit this — reach for a fresh session rather than reusing the lifecycle session. Fixed in #106 / v0.3.13.
 
 ### ETag resolution
 
@@ -100,6 +101,8 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 ### Stateful sessions
 
 `X-sap-adt-sessiontype: stateful` pins requests to the same SAP work process. Used on `LockObject`, `SetSource`, `UnlockObject` to keep the lock handle valid across calls.
+
+The inverse also matters: some operations need a **fresh** session, not a reused one. `RunClass` runs on a single-use isolated session (`freshSession`) because a session that performed the create/set source/activate lifecycle cannot generate a class's runtime load on S/4 (see "Runtime-load generation vs. session reuse" under SAP system differences). If an operation depends on state SAP only generates in a clean session, give it a fresh session instead of reusing the caller's.
 
 ## Coding Pitfalls
 
