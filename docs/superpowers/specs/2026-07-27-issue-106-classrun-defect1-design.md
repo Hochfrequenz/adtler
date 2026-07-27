@@ -5,26 +5,32 @@
 - **Issue:** [Hochfrequenz/adtler#106](https://github.com/Hochfrequenz/adtler/issues/106)
 - **Consumer:** [Hochfrequenz/aibap.mcp#460](https://github.com/Hochfrequenz/aibap.mcp/issues/460) (`blocked-by-adtler`; removes its interim workaround note after the bump)
 - **Builds on:** `docs/superpowers/specs/2026-07-22-classrun-endpoint-design.md` (the original `RunClass` client)
-- **Status:** Proposed (system scope verified on HFQ **and** S4U, 2026-07-27)
+- **Status:** Proposed — **root cause identified and fix verified live on S4U** (2026-07-27); HFQ regression pending on the fix branch.
+
+## TL;DR — what changed in this revision
+
+The earlier revision assumed defect 1 was "the runtime load is never generated over ADT REST, so `RunClass` needs to mutate the class (add a test include + re-activate) to force generation." **Live re-verification on S4U disproved the premise.** The load *is* generated over pure HTTP — but only in a **fresh SAP session**. The real trigger is **HTTP session reuse**: the ADT session that performed `create → set source → activate` cannot then generate the runtime load when it runs the classrun in that *same* session; a brand-new session generates it cleanly and returns real output.
+
+Consequences:
+
+- **Defect 1 has a trivial, non-mutating fix (Option C):** run the classrun POST on an **isolated fresh HTTP session**. No test include, no transport, no lock, no object mutation.
+- **Option B (test-include-activate mutation) is superseded** by Option C and dropped from the recommendation.
+- **Option A (classify the soft-fail as a typed error) still stands** as an independent robustness improvement.
 
 ## Background
 
 `RunClass` (`POST /sap/bc/adt/oo/classrun/{name}`) executes a class's **generated
-runtime load** and does not itself trigger load generation. On S/4 (verified S4U),
-ADT activation does not (re)generate that load either; on ECC (verified HFQ) it
-does — so the defects below are S/4-specific (see "Both defects are S/4-specific").
-Issue #106 documents two user-visible defects when the whole lifecycle (create →
-set source → activate → run) happens over ADT REST with no execution-triggering
-step in between, on a system where activation does not generate the load:
+runtime load**. Issue #106 documents two user-visible defects when the whole
+lifecycle (create → set source → activate → run) happens over ADT REST:
 
 - **Defect 1 — fresh class, false "does not implement".** A class created +
-  activated purely over ADT REST that has never had its load generated returns,
-  from `CL_OO_ADT_RES_CLASSRUN`, **HTTP 200** with the body
+  activated purely over ADT REST returns, from `CL_OO_ADT_RES_CLASSRUN`,
+  **HTTP 200** with the body
   `Error: Class does not implement if_oo_adt_classrun~main method!` — even though
   it *does* implement the interface. The handler wraps `CREATE OBJECT` in
   `TRY ... CATCH cx_sy_create_object_error` and, because the runtime load is
-  absent, masks the create failure as the generic "does not implement main"
-  soft-failure.
+  absent **in that session**, masks the create failure as the generic "does not
+  implement main" soft-failure.
 - **Defect 2 — changed class, stale execution.** After changing the source and
   re-activating over ADT REST, `RunClass` keeps returning the previously
   generated version's output.
@@ -32,37 +38,71 @@ step in between, on a system where activation does not generate the load:
 **This spec covers defect 1 only.** Defect 2 is deliberately out of scope — see
 "Defect 2 is out of scope" below.
 
+### Root cause: HTTP session reuse (verified live 2026-07-27, S4U)
+
+The classrun handler runs `CREATE OBJECT` for the target class. In a **fresh**
+SAP session that never touched the class, `CREATE OBJECT` triggers implicit
+runtime-load generation and succeeds → real output. In the **same session that
+just created + activated the class**, that implicit generation does not happen
+and `CREATE OBJECT` raises `cx_sy_create_object_error`, which the handler masks
+as the "does not implement …main…" soft-fail.
+
+This was proven with a 2×2 experiment run through the **real adtler Go client**
+against S4U on freshly created + activated `$TMP` classrun classes:
+
+| Scenario | HTTP session | classrun result |
+|---|---|---|
+| **A** — fresh client, `RunClass` immediately (only the discovery CSRF GET precedes the POST) | fresh, never ran the lifecycle | **real output `V1`** ✅ |
+| **B** — fresh client, a class-scoped `GetSource` then `RunClass` | fresh | **real output `V1`** ✅ |
+| **L1** — one client does `create → set source → activate`, then `RunClass` in that same session | reused (worn) | **soft-fail** ❌ |
+| **L2** — same client as L1, but `Logout()` immediately before `RunClass` | fresh (jar + CSRF dropped) | **real output `V1`** ✅ |
+
+A/B prove adtler's HTTP request itself is correct — a fresh adtler session
+behaves exactly like the Eclipse F9 path and the raw-PowerShell counter-test
+(both return `V1`). L1 reproduces the bug; L2 shows that simply dropping the
+session (`Logout`) before the run fixes it. The differentiator is **session
+freshness, nothing else** — see "Ruled out" below.
+
 ### Both defects are S/4-specific (verified 2026-07-27)
 
-Running the identical create → set source → activate → run lifecycle on both
-connected systems shows the defects are **not** system-neutral:
+Running the identical create → set source → activate → run lifecycle **in a
+single reused session** on both connected systems:
 
-| Step (pure ADT REST) | HFQ (ECC/R3, older classrun handler) | S4U (S/4, SAP_BASIS 758) |
+| Step (pure ADT REST, reused session) | HFQ (ECC/R3) | S4U (S/4, SAP_BASIS 758) |
 |---|---|---|
-| Fresh class → `RunClass` | ✅ real output (`V1`) | ❌ `Error: Class does not implement...main...` (defect 1) |
-| Change source → activate → `RunClass` | ✅ new output (`V2`, `V3`) | ⚠️ stale previous output (defect 2) |
+| Fresh class → `RunClass` | ✅ real output (`V1`) | ❌ soft-fail (defect 1) |
+| Change source → activate → `RunClass` | ✅ new output | ⚠️ stale previous output (defect 2) |
 
-On **HFQ/ECC the activation (re)generates the runtime load**, so classrun runs
-correctly across the whole lifecycle — neither defect appears. On **S4U/S/4 the
-activation never (re)generates the load** in the classrun context, producing both
-defects. This is a known-shape R/3-vs-S/4 divergence (cf. CLAUDE.md "SAP system
-differences"). The two systems tested differ in both product (ECC vs S/4) and
-classrun-handler variant, so the claim is scoped to "S/4-specific on the tested
-systems", not a universal ECC-vs-S/4 law.
+On **HFQ/ECC the activation (re)generates a persistent runtime load**, so
+classrun runs correctly regardless of session freshness — neither defect
+appears. On **S4U/S/4 the activation does not**, so a reused session hits the
+missing-load path. The fix (fresh session, Option C) is a no-op on HFQ (the load
+is already persistent) and repairs S4U — so the `eachSystem` test can assert
+**real output on both systems**, with HFQ acting as the regression guard.
 
-**Consequence for this spec:** the fix targets the S/4 failure path; the
-`eachSystem` integration test must expect **different** behaviour per system (real
-output on ECC, the soft-fail / post-fix error on S/4) rather than asserting the
-defect uniformly. See Testing.
+### Ruled out as the trigger (each verified live)
+
+- **The debugger breakpoint-sync request** (`POST /sap/bc/adt/debugger/breakpoints`
+  that Eclipse fires on F9). Reproduced independently on S4U: a fresh session
+  with **no breakpoint-sync at all** returns `V1`, and a session where the
+  breakpoint-sync itself failed (HTTP 400/403) still returns `V1`. It is
+  debugger housekeeping, not a load generator.
+- **The warm-up GET target.** `compatibility/graph`, the class `source/main`,
+  and the `discovery` preflight all warm the session equally; the GET does not
+  even need to succeed (a 400 that still issues a CSRF token is enough). What
+  matters is that a *fresh* session performs the classrun, not what the GET was.
+- **`X-sap-adt-sessiontype: stateless`** — `V1` with and without it.
+- **`sap-client` delivery** (header vs. query param) — a fresh session returns
+  `V1` even with `sap-client` sent as adtler sends it (a header).
 
 ## Investigation summary (what constrains the design)
 
-Verified live on S4U (SAP_BASIS 758) 2026-07-24 and 2026-07-27, and on HFQ
+Verified live on S4U (SAP_BASIS 758) 2026-07-24 / 2026-07-27 and on HFQ
 (ECC/R3) 2026-07-27 (issue #106 comments). Relevant facts:
 
-- **Both defects reproduce on S4U (S/4) and on neither on HFQ (ECC/R3)** — see
-  "Both defects are S/4-specific" above. ECC's activation regenerates the load;
-  S/4's does not.
+- **Root cause is session reuse, not "REST cannot generate the load"** (2×2
+  above). A fresh session generates the load and returns real output on S4U over
+  pure HTTP.
 - Defect 1 is purely runtime-load-generation state — a trivial pure-`out->write`
   class with no DB/EML access reproduces it identically. It is **not** a DB/RAP
   problem.
@@ -70,64 +110,109 @@ Verified live on S4U (SAP_BASIS 758) 2026-07-24 and 2026-07-27, and on HFQ
   is no structured error channel and no ST22 dump.
 - **The soft-fail string is cause-ambiguous** (verified 2026-07-27, S4U): a class
   that does *not* implement `IF_OO_ADT_CLASSRUN` but *does* have a generated load
-  (load confirmed via a passing instantiating unit test) returns the **identical**
-  `Error: Class does not implement if_oo_adt_classrun~main method!`. So the same
-  body means load-not-generated *or* genuine non-implementer *or* not-instantiable
-  — the classification cannot attribute a single cause. Drives the error naming
-  and the Option-B implement-check (see Option A / Option B).
-- **A pure-ADT-REST path generates the load:** adding a (dummy) ABAP Unit test
-  include to the class and **activating** it (without running the test) makes
-  the subsequent `RunClass` return the real output. A plain re-activation without
-  a test include does not. Re-verified 2026-07-27.
-- No **in-place** ADT-REST operation busts a stale load (defect 2): not a second
-  activation, not a structural signature change, not re-running an instantiating
-  unit test. Only `DELETE` evicts the load — which destroys object identity and
-  is not a usable fix. This is why defect 2 needs the Eclipse F9 HTTP capture and
-  is out of scope here.
+  returns the **identical** `Error: Class does not implement …main…`. So the same
+  body means load-not-generated *or* genuine non-implementer *or* not-instantiable.
+  Drives the error naming in Option A.
+- **The load generated in a fresh session is session-local** (a subsequent run in
+  a *different* session on S/4 regenerates it). This is exactly what defect 1
+  needs — every `RunClass` on its own fresh session returns correct output — but
+  it does **not** produce a persistent load, so it does not by itself address
+  defect 2.
+- **The MCP consumer reuses one long-lived adtler client** across the whole
+  create → activate → run lifecycle, which is why `run_class` lands in the worn
+  session and soft-fails. (Confirmed by the fact that a fresh adtler client runs
+  the same class fine — scenario A.)
 
 ## Scope
 
-**In scope:** making `RunClass` behave correctly for a fresh, never-generated
-class driven purely over ADT REST. Two independent, composable changes:
+**In scope:** making `RunClass` behave correctly for a fresh class driven purely
+over ADT REST. Two independent, composable changes:
 
 1. **Option A — classify the masked soft-fail as a real error** (no object
-   mutation). Unblocked; recommended as the baseline fix.
-2. **Option B — generate the load on demand** so `RunClass` actually runs a fresh
-   class (mild object mutation). `blocked:design-needed`; recommended as an
-   opt-in, not default behaviour.
+   mutation, no session change). Robustness improvement; still recommended so a
+   genuinely non-executable class surfaces as an error rather than a fake success.
+2. **Option C — run the classrun on an isolated fresh HTTP session** so a fresh
+   class actually executes and returns real output. **Recommended primary fix
+   for defect 1.** No object mutation, no transport, no lock.
 
 **Out of scope:** defect 2 (stale load) in-place fix; any DDIC/RAP-specific
 behaviour; changing the classrun request contract (still stateless
-`POST … Accept: text/plain`).
+`POST … Accept: text/plain`). Option B (test-include mutation) is dropped.
 
-## Option A — surface the masked soft-fail as an error (recommended baseline)
+## Option C — run the classrun on an isolated fresh session (recommended primary fix)
 
-Today `RunClass` returns *any* HTTP 200 body as `ClassRunResult.ConsoleOutput`,
-so the create-object soft-fail arrives at the caller as a **success** whose
-output happens to be an error string. The original classrun spec already flagged
-this ("consumers must not treat a successful `RunClass` return as the class
-succeeded"); this option moves that burden off the consumer.
+Because the trigger is session reuse, the fix is to make `RunClass` never run
+the classrun in the caller's worn session. Instead it performs the classrun POST
+on a **single-use, isolated HTTP session** created just for the run:
 
-### Behaviour
+- a dedicated `*http.Client` with its **own fresh cookie jar** (not the shared
+  `c.http`/`c.httpLong` jar);
+- its **own CSRF preflight** (the fresh session fetches its own token);
+- the classrun `POST … Accept: text/plain` on that jar;
+- the session is discarded when `RunClass` returns.
 
-When the console body is the known "does not implement …main…" soft-fail, return
-a typed error instead of a success result. Proposed error, following the
-established sentinel / typed-error pattern (cf. `ErrorObjectLockedInTransport`):
+This is invisible to the caller: it touches **no** locks, no stateful session,
+no object, no transport. It is safe under concurrency (a private jar, not a
+mutation of the shared one). classrun is already documented as stateless, so an
+isolated session is consistent with the contract.
+
+### Why not just `Logout()` before the run?
+
+`Logout()` resets the shared client's jar and CSRF (verified to fix the bug —
+scenario L2), but as a side effect it **drops the caller's stateful session and
+any locks held under it**. A "run" call must not have that side effect. An
+isolated sub-session gives the same freshness surgically.
+
+### Sketch
 
 ```go
-// adt/classrun.go
+// freshSession returns a single-use *httpClient that shares cfg/auth but has a
+// brand-new cookie jar and no CSRF token, so its first request establishes a
+// clean SAP session. Used by RunClass so the classrun never runs in the
+// caller's worn session (issue #106 defect 1).
+func (c *httpClient) freshSession() *httpClient { /* new jar + clients, copy cfg/token */ }
 
+func (c *httpClient) RunClass(ctx context.Context, className string) (*ClassRunResult, error) {
+    fresh := c.freshSession()
+    uri := "/sap/bc/adt/oo/classrun/" + strings.ToLower(className)
+    resp, err := fresh.doMutate(ctx, http.MethodPost, uri, nil,
+        map[string]string{"Accept": contentTypeTextPlain})
+    // ... unchanged: checkResponse, read body, (Option A) classify soft-fail ...
+}
+```
+
+`freshSession` copies `cfg`, `accessToken`, `onTokenRefresh`, and `pollInterval`,
+builds a new transport from `cfg.TLSSkipVerify`, and installs a fresh
+`cookiejar`. (Caveat: an OAuth token refreshed inside the single-use session is
+not propagated back to the parent client — acceptable for a one-shot run; note
+it in the godoc.)
+
+### Interaction with Option A
+
+Option C makes a fresh class return real output. Option A still classifies the
+soft-fail body as `ErrClassNotExecutable` — which, after Option C, should only
+appear for a genuinely non-executable class (real non-implementer, not
+instantiable), not for the fresh-load case. Ship both: C fixes the common case,
+A gives a correct error for the residual real failures.
+
+## Option A — surface the masked soft-fail as an error (robustness, keep)
+
+Today `RunClass` returns *any* HTTP 200 body as `ClassRunResult.ConsoleOutput`,
+so a create-object soft-fail arrives at the caller as a **success** whose output
+happens to be an error string. When the console body is the known "does not
+implement …main…" soft-fail, return a typed error instead.
+
+```go
 // ErrClassNotExecutable indicates the classrun handler returned its
 // "does not implement if_oo_adt_classrun~main method" soft-failure at HTTP 200
 // instead of real console output (see issue #106). This is a HEURISTIC
 // classification of a text/plain body — SAP exposes no structured error channel
-// here — and the message is CAUSE-AMBIGUOUS. The same body is produced by at
-// least: (a) the runtime load not being generated yet (issue #106 defect 1, S/4),
-// (b) a class that genuinely does not implement IF_OO_ADT_CLASSRUN, and
-// (c) a class that cannot be instantiated for other reasons (cx_sy_create_object_error).
-// RunClass performs no pre-check, so it cannot attribute a single cause; the name
-// is therefore the OBSERVABLE effect ("not executable via classrun"), not a
-// presumed cause. See Detection.
+// here — and the message is CAUSE-AMBIGUOUS. After the Option-C fresh-session
+// fix, the load-not-generated cause should no longer produce it; the residual
+// causes are (a) a class that genuinely does not implement IF_OO_ADT_CLASSRUN
+// and (b) a class that cannot be instantiated for other reasons
+// (cx_sy_create_object_error). The name is therefore the OBSERVABLE effect
+// ("not executable via classrun"), not a presumed cause.
 var ErrClassNotExecutable = errors.New("classrun: class not executable via classrun (handler returned 'does not implement ...main...' at HTTP 200)")
 ```
 
@@ -135,192 +220,95 @@ var ErrClassNotExecutable = errors.New("classrun: class not executable via class
 when the body matches, so callers can `errors.Is` it while still seeing the class
 name.
 
-**Naming rationale (must-address from PR #107 review):** an earlier draft named
-this `ErrClassLoadNotGenerated`, which overclaims — the body cannot prove the load
-is the cause. **Verified live 2026-07-27 on S4U:** a class that does *not* implement
-`IF_OO_ADT_CLASSRUN` but *does* have a generated runtime load (load confirmed by a
-passing instantiating unit test) returns the **identical** string
-`Error: Class does not implement if_oo_adt_classrun~main method!`. So the string is
-demonstrably not load-specific; a cause-neutral name is required.
+### Detection
 
-### Detection — the one real design question
+Match on the exact/prefix handler string
+`Error: Class does not implement if_oo_adt_classrun~main method!` (emitted
+verbatim by `CL_OO_ADT_RES_CLASSRUN`). Narrow, low false-positive risk; a class
+that deliberately `out->write`s that exact string is a pathological, accepted
+edge case. Keep matched strings hoisted as constants.
 
-SAP gives no structured signal; matching is on the body text, and (per the
-verification above) the matched string is **cause-ambiguous**. Two questions
-follow: *what* to match, and *what the match is allowed to claim*.
-
-**What to match:**
-
-- **Exact/prefix match on the known handler string**
-  `Error: Class does not implement if_oo_adt_classrun~main method!` (constant,
-  emitted verbatim by `CL_OO_ADT_RES_CLASSRUN`). Narrow, low false-positive risk.
-  A class that deliberately `out->write`s that exact string is a pathological,
-  accepted edge case.
-- Broaden later only if integration testing surfaces other create-object phrasings
-  (e.g. the ECC handler variant). Keep the matched strings hoisted as constants.
-
-**What the match may claim — the cause-ambiguity carve-outs.** The same HTTP-200
-body is emitted by several distinct conditions (original classrun spec §Error
-handling; item (b) below verified live 2026-07-27):
-
-| Condition | Body | Handled how |
-|---|---|---|
-| (a) Load not generated (S/4 defect 1) | `does not implement …main…` | → `ErrClassNotExecutable` |
-| (b) Class genuinely does not implement the interface (even with a load) | **identical** `does not implement …main…` | → `ErrClassNotExecutable` (indistinguishable — verified) |
-| (c) Not instantiable for other reasons (`cx_sy_create_object_error`) | `does not implement …main…` | → `ErrClassNotExecutable` |
-| (d) Non-existent class | 200-with-text, **not** 404 | consumer's existence pre-check catches this before `RunClass` (aibap.mcp already does `GetObjectInfo` first) |
-| (e) Missing `S_DEVELOP` auth (`OO 755`) | *different* auth text | **not** folded in — different string, leave as-is (out of scope); classify separately later if wanted |
-
-Because `RunClass` performs no pre-check, it must **not** attribute the cause: the
-error says "not executable via classrun", and callers decide what to do. In
-practice the S/4 caller that owns the lifecycle (created the class, knows it
-implements the interface and is active) can reasonably infer (a) and reach for
-load generation — but that inference lives in the caller, not in adtler's error
-name. This is also why **Option B must gate load generation on the class actually
-implementing the interface** (otherwise it generates a load for a class that will
-never run — condition (b)).
-
-### Why baseline
-
-No object mutation, no transport, no extra round-trips; purely a
-response-classification change local to `RunClass`. It removes the "does not
-implement" red herring regardless of whether Option B ships. Unblocked.
-
-## Option B — generate the load on demand (opt-in, `blocked:design-needed`)
-
-Make a fresh class actually *run* over pure ADT REST by generating its load via
-the verified test-include-activate path, then retrying the run.
-
-### Sequence (all existing adtler primitives)
-
-1. `RunClass` → returns `ErrClassNotExecutable` (Option A must land first).
-   Gate load generation on the class actually implementing `IF_OO_ADT_CLASSRUN`
-   (a cheap metadata/where-used check), so condition (b) — a genuine
-   non-implementer — is not sent down the generate-and-retry path.
-2. `lock` → `create_test_include` → `set_include_source` (dummy
-   `FOR TESTING` class doing `CREATE OBJECT`) → `activate`.
-3. Retry `RunClass` → returns the real output.
-
-### Design decision: explicit method, not silent mutation
-
-**Do not** bury this in `RunClass` as an automatic side effect. `RunClass` is a
-read-like "execute" primitive; silently adding a CCAU include and re-activating
-the caller's class violates least-surprise and has real consequences:
-
-- **Object mutation:** a test include appears on the class that the author never
-  wrote. Whether to remove it afterward (another activate) or leave it is itself
-  an unresolved question — leaving it pollutes the class; removing it adds
-  fragility and more round-trips.
-- **Transport:** for non-`$TMP` objects, `create_test_include` /
-  `set_include_source` / `activate` require a transport. A pure "run" call
-  suddenly needing a transport is a surprising contract change.
-- **Concurrency / locks:** acquiring an edit lock on someone else's active class
-  to run it can collide with real editing sessions.
-
-**Recommendation:** expose a dedicated, explicitly-named method the consumer opts
-into — e.g.
-
-```go
-type ClassRunClient interface {
-    RunClass(ctx context.Context, className string) (*ClassRunResult, error)
-    // EnsureClassLoad generates the runtime load for className via the
-    // test-include-activate path so a subsequent RunClass on a fresh,
-    // never-executed class returns real output instead of the create-object
-    // soft-failure (issue #106, defect 1). It MUTATES the class (adds a dummy
-    // test include and re-activates) and, for transported objects, requires a
-    // transport. Caller opts in deliberately.
-    EnsureClassLoad(ctx context.Context, className string, opts EnsureClassLoadOptions) error
-}
-```
-
-`EnsureClassLoadOptions` carries at least the transport number and a flag for
-whether to remove the generated test include afterward. The consumer
-(aibap.mcp `run_class`) decides when to call it (e.g. only for `$TMP` fixtures,
-or gated behind an explicit "generate load" tool parameter).
-
-This keeps the mutation **visible and deliberate** and leaves `RunClass` pure.
-
-Adding `EnsureClassLoad` to the exported `ClassRunClient` interface is a breaking
-change for any external mock/implementer of that interface — another reason to
-treat it as a deliberate, versioned addition rather than folding it into `RunClass`.
-
-Cleanup safety for the dummy test include is supported by the investigation's own
-finding: no in-place ADT-REST operation evicts a generated load, so removing the
-include (activate again) after generation does not un-generate the load — the
-class stays runnable.
-
-### Why blocked:design-needed
-
-The mutation, transport, lock, and cleanup semantics above need a human decision
-before implementation. Option A is independent and should not wait on it.
+Cause-ambiguity carve-outs (unchanged from the prior revision): the same body is
+emitted by a genuine non-implementer, a non-instantiable class, and — before
+Option C — the missing-load case. A non-existent class returns 200-with-text
+(not 404); the consumer's existence pre-check (`GetObjectInfo`) catches that
+before `RunClass`. Missing `S_DEVELOP` auth returns a *different* string and is
+left as-is.
 
 ## Defect 2 is out of scope
 
-No in-place ADT-REST operation invalidates the stale PXA load (investigation
-2026-07-27; only `DELETE` evicts it, destroying object identity). A durable
-defect-2 fix needs the load-generation/invalidation call Eclipse issues on F9,
-which is only knowable from an HTTP capture — tracked under
-`blocked:eclipse-capture` on issue #106. Attempting a defect-2 fix here would be
-guessing. If the capture shows Eclipse has no in-place trigger either, defect 2
-becomes a documented SAP classrun limitation and Option A is the whole deliverable.
+The fresh-session load is **session-local**, so Option C does not create a
+persistent load and does not fix defect 2 (a re-activated class still serving a
+stale persistent load to sessions that already hold one). A durable defect-2 fix
+needs whatever in-place invalidation Eclipse triggers on F9; only `DELETE` was
+observed to evict a persistent load over REST (destroying object identity, so
+not usable). Tracked under `blocked:eclipse-capture` on issue #106.
 
 ## Error handling
 
 - Option A adds one classification branch before returning success; all existing
   HTTP-error handling (`checkResponse` → `ADTError`) is unchanged.
-- The classification is explicitly heuristic (HTTP 200 text body); the godoc and
-  this spec say so. If SAP ever adds a structured signal, revisit.
-- **Behavioural compatibility (call out at implementation):** Option A flips
-  `RunClass` from `(*ClassRunResult, nil)` to `(nil, error)` for the soft-fail
-  body. Any current consumer that reads the soft-fail out of `ConsoleOutput` (the
-  pre-fix contract the original classrun spec explicitly warned about) will now
-  get an error instead. This is the intended fix, but it is a behavioural change
-  and should ship in a minor tag with a changelog note; the aibap.mcp consumer
-  bump must adapt to the new error return.
+- Option C changes only the transport/session the classrun runs on; the request
+  contract (`POST … Accept: text/plain`, empty body) is unchanged.
+- **Behavioural compatibility:** Option A flips `RunClass` from
+  `(*ClassRunResult, nil)` to `(nil, error)` for the soft-fail body. With Option
+  C shipped, S/4 fresh classes now return real output instead of the soft-fail,
+  so the error path is hit far less often. Ship in a minor tag with a changelog
+  note; the aibap.mcp consumer bump adapts to the new error return.
 
 ## Testing
 
 **Unit (`httptest` mock, no build tag):**
-- 200 body = exact `Error: Class does not implement if_oo_adt_classrun~main method!`
-  → `RunClass` returns `ErrClassNotExecutable` (assert `errors.Is`), not a
-  success result.
-- 200 body = ordinary console output that merely *contains* the word `Error`
-  elsewhere → still a success result (guards the matcher against over-broad
-  matching).
+- **Option C isolation:** after the client has an established session (a prior
+  request set `SAP_SESSIONID=PARENT` and cached a CSRF token), `RunClass` must
+  perform its **own** CSRF preflight on a **fresh jar** — assert the classrun
+  POST does **not** carry the parent session cookie, and that a fresh CSRF Fetch
+  GET was issued for the run. Server returns `V1`; assert success.
+- **Option A:** 200 body = exact
+  `Error: Class does not implement if_oo_adt_classrun~main method!` →
+  `RunClass` returns `ErrClassNotExecutable` (assert `errors.Is`), not a success.
+- 200 body containing the word `Error` elsewhere → still a success result
+  (guards the matcher against over-broad matching).
 - Existing success / UTF-8 / HTTP-error cases stay green.
-- (Option B, if it lands) `EnsureClassLoad` happy path over mocked
-  lock/create-test-include/set-include-source/activate calls.
 
 **Integration (`//go:build integration`, `eachSystem(t)` over R/3 **and** S/4):**
 
-The bug failure path is S/4-only, so the test **must branch on system behaviour**,
-not assert the defect uniformly (verified 2026-07-27: ECC returns real output, S/4
-returns the soft-fail). Two viable shapes:
+Create + set source + activate a fresh classrun class purely over ADT REST **in
+one long-lived client** (reproducing the worn-session lifecycle), then
+`RunClass` on that same client. With Option C, assert **real output on both
+systems**:
 
-- **Behaviour-detecting (preferred):** create + set source + activate a fresh
-  classrun class purely over ADT REST, then `RunClass`. Accept **either** outcome
-  per system: real output (ECC, load generated on activation) **or**
-  `ErrClassNotExecutable` (S/4, defect 1 now surfaced as a typed error). Assert
-  that the return is exactly one of those two — never a *success result carrying
-  the soft-fail string* (that is the pre-fix bug the change removes). This keeps
-  the test green on both systems while still pinning the fix.
-- If a strict per-system assertion is wanted, gate it on a capability/known-system
-  check rather than hard-coding system keys.
-- (Option B, if it lands) after `EnsureClassLoad` on S/4, `RunClass` returns the
-  real output; on ECC `EnsureClassLoad` is a no-op-equivalent (load already
-  present) and `RunClass` still returns real output.
-- Fixtures in `Z_ADT_MCP_TEST`, `$TMP` scratch classes cleaned up (all probe
-  classes from this investigation were deleted; no `$TMP` leftovers on either
-  system).
+- **HFQ (ECC) — regression guard.** classrun already worked here (activation
+  regenerates a persistent load); the fresh-session fix must not break it.
+  Assert real output.
+- **S4U (S/4) — the fix.** Pre-fix this soft-fails in the reused session;
+  post-fix Option C runs the classrun on a fresh session and returns real
+  output. Assert real output.
+
+Asserting identical correct behaviour on both systems is the point: HFQ proves
+no regression, S4U proves the fix. (A pre-fix run of the same test would fail
+only on S4U, which is the bug this closes.)
+
+Fixtures in `Z_ADT_MCP_TEST`; `$TMP` scratch classes cleaned up.
 
 ## Rollout / linkage
 
-- **Phase 1 (unblocked):** ship Option A in the next adtler minor tag. This alone
-  lets aibap.mcp#460 replace "silently returns a stale/false success" with a real
-  error, though the interim workaround note stays until load generation is solved.
-- **Phase 2 (`blocked:design-needed`):** implement Option B as `EnsureClassLoad`
-  after human sign-off on the mutation/transport/cleanup semantics.
+- **Phase 1:** ship Option A **and** Option C together in the next adtler minor
+  tag. Option C makes `run_class` return real output for fresh S/4 classes;
+  Option A turns any residual soft-fail into a real error instead of a fake
+  success.
+- The aibap.mcp `run_class` consumer references the adtler tag, drops its interim
+  workaround note, and no longer needs to reuse-or-refresh a session itself.
 - **Defect 2 (`blocked:eclipse-capture`):** separate work item; not gated on the
   above.
-- The aibap.mcp `run_class` PR references the adtler tag and removes its interim
-  workaround note once the bump lands.
+
+## Note: broken integration build (separate issue)
+
+While verifying the fix, the `-tags=integration` build of package `adt_test` was
+found broken since the classrun merge (#100): `classrun_integration_test.go`
+references a package-level `ctx` that is declared nowhere, so
+`go build -tags integration ./adt/...` and `go vet -tags integration ./adt/...`
+fail on `main`. CI does not build the integration suite (needs SAP), so it went
+unnoticed. Fixed under a separate small issue/PR (add
+`var ctx = context.Background()` in an integration-tagged file); the defect-1
+integration test above depends on that build compiling.
