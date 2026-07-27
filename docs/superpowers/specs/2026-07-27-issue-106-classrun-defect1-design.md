@@ -5,15 +5,17 @@
 - **Issue:** [Hochfrequenz/adtler#106](https://github.com/Hochfrequenz/adtler/issues/106)
 - **Consumer:** [Hochfrequenz/aibap.mcp#460](https://github.com/Hochfrequenz/aibap.mcp/issues/460) (`blocked-by-adtler`; removes its interim workaround note after the bump)
 - **Builds on:** `docs/superpowers/specs/2026-07-22-classrun-endpoint-design.md` (the original `RunClass` client)
-- **Status:** Proposed
+- **Status:** Proposed (system scope verified on HFQ **and** S4U, 2026-07-27)
 
 ## Background
 
 `RunClass` (`POST /sap/bc/adt/oo/classrun/{name}`) executes a class's **generated
-runtime load** and does not itself trigger load generation; ADT activation does
-not (re)generate that load either. Issue #106 documents two user-visible defects
-when the whole lifecycle (create → set source → activate → run) happens over ADT
-REST with no execution-triggering step in between:
+runtime load** and does not itself trigger load generation. On S/4 (verified S4U),
+ADT activation does not (re)generate that load either; on ECC (verified HFQ) it
+does — so the defects below are S/4-specific (see "Both defects are S/4-specific").
+Issue #106 documents two user-visible defects when the whole lifecycle (create →
+set source → activate → run) happens over ADT REST with no execution-triggering
+step in between, on a system where activation does not generate the load:
 
 - **Defect 1 — fresh class, false "does not implement".** A class created +
   activated purely over ADT REST that has never had its load generated returns,
@@ -30,11 +32,37 @@ REST with no execution-triggering step in between:
 **This spec covers defect 1 only.** Defect 2 is deliberately out of scope — see
 "Defect 2 is out of scope" below.
 
+### Both defects are S/4-specific (verified 2026-07-27)
+
+Running the identical create → set source → activate → run lifecycle on both
+connected systems shows the defects are **not** system-neutral:
+
+| Step (pure ADT REST) | HFQ (ECC/R3, older classrun handler) | S4U (S/4, SAP_BASIS 758) |
+|---|---|---|
+| Fresh class → `RunClass` | ✅ real output (`V1`) | ❌ `Error: Class does not implement...main...` (defect 1) |
+| Change source → activate → `RunClass` | ✅ new output (`V2`, `V3`) | ⚠️ stale previous output (defect 2) |
+
+On **HFQ/ECC the activation (re)generates the runtime load**, so classrun runs
+correctly across the whole lifecycle — neither defect appears. On **S4U/S/4 the
+activation never (re)generates the load** in the classrun context, producing both
+defects. This is a known-shape R/3-vs-S/4 divergence (cf. CLAUDE.md "SAP system
+differences"). The two systems tested differ in both product (ECC vs S/4) and
+classrun-handler variant, so the claim is scoped to "S/4-specific on the tested
+systems", not a universal ECC-vs-S/4 law.
+
+**Consequence for this spec:** the fix targets the S/4 failure path; the
+`eachSystem` integration test must expect **different** behaviour per system (real
+output on ECC, the soft-fail / post-fix error on S/4) rather than asserting the
+defect uniformly. See Testing.
+
 ## Investigation summary (what constrains the design)
 
-Verified live on S4U (SAP_BASIS 758), 2026-07-24 and 2026-07-27 (issue #106
-comments). Relevant facts:
+Verified live on S4U (SAP_BASIS 758) 2026-07-24 and 2026-07-27, and on HFQ
+(ECC/R3) 2026-07-27 (issue #106 comments). Relevant facts:
 
+- **Both defects reproduce on S4U (S/4) and on neither on HFQ (ECC/R3)** — see
+  "Both defects are S/4-specific" above. ECC's activation regenerates the load;
+  S/4's does not.
 - Defect 1 is purely runtime-load-generation state — a trivial pure-`out->write`
   class with no DB/EML access reproduces it identically. It is **not** a DB/RAP
   problem.
@@ -205,13 +233,26 @@ becomes a documented SAP classrun limitation and Option A is the whole deliverab
   lock/create-test-include/set-include-source/activate calls.
 
 **Integration (`//go:build integration`, `eachSystem(t)` over R/3 **and** S/4):**
-- Create + set source + activate a fresh classrun class purely over ADT REST,
-  then `RunClass` → asserts `ErrClassLoadNotGenerated` (defect 1 reproduced and
-  now surfaced as an error). This is the exact bug failure path per the workflow
-  convention.
-- (Option B, if it lands) after `EnsureClassLoad`, `RunClass` returns the real
-  output on both systems; verify the ECC handler variant behaves the same.
-- Fixtures in `Z_ADT_MCP_TEST`, `$TMP` scratch classes cleaned up.
+
+The bug failure path is S/4-only, so the test **must branch on system behaviour**,
+not assert the defect uniformly (verified 2026-07-27: ECC returns real output, S/4
+returns the soft-fail). Two viable shapes:
+
+- **Behaviour-detecting (preferred):** create + set source + activate a fresh
+  classrun class purely over ADT REST, then `RunClass`. Accept **either** outcome
+  per system: real output (ECC, load generated on activation) **or**
+  `ErrClassLoadNotGenerated` (S/4, defect 1 now surfaced as a typed error). Assert
+  that the return is exactly one of those two — never a *success result carrying
+  the soft-fail string* (that is the pre-fix bug the change removes). This keeps
+  the test green on both systems while still pinning the fix.
+- If a strict per-system assertion is wanted, gate it on a capability/known-system
+  check rather than hard-coding system keys.
+- (Option B, if it lands) after `EnsureClassLoad` on S/4, `RunClass` returns the
+  real output; on ECC `EnsureClassLoad` is a no-op-equivalent (load already
+  present) and `RunClass` still returns real output.
+- Fixtures in `Z_ADT_MCP_TEST`, `$TMP` scratch classes cleaned up (all probe
+  classes from this investigation were deleted; no `$TMP` leftovers on either
+  system).
 
 ## Rollout / linkage
 
