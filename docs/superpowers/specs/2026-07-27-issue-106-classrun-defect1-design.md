@@ -5,7 +5,7 @@
 - **Issue:** [Hochfrequenz/adtler#106](https://github.com/Hochfrequenz/adtler/issues/106)
 - **Consumer:** [Hochfrequenz/aibap.mcp#460](https://github.com/Hochfrequenz/aibap.mcp/issues/460) (`blocked-by-adtler`; removes its interim workaround note after the bump)
 - **Builds on:** `docs/superpowers/specs/2026-07-22-classrun-endpoint-design.md` (the original `RunClass` client)
-- **Status:** Proposed — **root cause identified and fix verified live on S4U** (2026-07-27); HFQ regression pending on the fix branch.
+- **Status:** Implemented — **root cause identified and fix verified live on S4U + HFQ** (2026-07-27). Option C resolves **both** defect 1 and defect 2; shipped in PR #107.
 
 ## TL;DR — what changed in this revision
 
@@ -14,8 +14,9 @@ The earlier revision assumed defect 1 was "the runtime load is never generated o
 Consequences:
 
 - **Defect 1 has a trivial, non-mutating fix (Option C):** run the classrun POST on an **isolated fresh HTTP session**. No test include, no transport, no lock, no object mutation.
+- **Defect 2 (stale output after re-activation) is resolved by the same fix.** Because each `RunClass` now runs on its own fresh session, it always compiles the currently-active source — a re-activated class returns its new output, never a stale one. Verified live on S4U + HFQ; it was **not** a separate `blocked:eclipse-capture` problem.
 - **Option B (test-include-activate mutation) is superseded** by Option C and dropped from the recommendation.
-- **Option A (classify the soft-fail as a typed error) still stands** as an independent robustness improvement.
+- **Option A (classify the soft-fail as a typed error) still stands** as an independent robustness improvement (separate follow-up PR).
 
 ## Background
 
@@ -35,8 +36,10 @@ lifecycle (create → set source → activate → run) happens over ADT REST:
   re-activating over ADT REST, `RunClass` keeps returning the previously
   generated version's output.
 
-**This spec covers defect 1 only.** Defect 2 is deliberately out of scope — see
-"Defect 2 is out of scope" below.
+**Both defects share the session-reuse root cause and are fixed by the same
+change (Option C).** The spec is defect-1-centric for historical reasons, but the
+fresh-session fix resolves defect 2 as well — see "Defect 2 is also resolved by
+Option C" below.
 
 ### Root cause: HTTP session reuse (verified live 2026-07-27, S4U)
 
@@ -114,10 +117,13 @@ Verified live on S4U (SAP_BASIS 758) 2026-07-24 / 2026-07-27 and on HFQ
   body means load-not-generated *or* genuine non-implementer *or* not-instantiable.
   Drives the error naming in Option A.
 - **The load generated in a fresh session is session-local** (a subsequent run in
-  a *different* session on S/4 regenerates it). This is exactly what defect 1
-  needs — every `RunClass` on its own fresh session returns correct output — but
-  it does **not** produce a persistent load, so it does not by itself address
-  defect 2.
+  a *different* session on S/4 regenerates it from the current active source).
+  Because Option C runs **every** `RunClass` on its own fresh session, each
+  execution compiles the currently-active version — which resolves **both**
+  defect 1 (a fresh class runs) **and** defect 2 (a re-activated class returns its
+  new output, never a stale one). Verified live on S4U + HFQ (see Testing).
+  Option C does not create a *persistent* load, but the RunClass path never needs
+  one because it never reuses a session that could hold a stale one.
 - **The MCP consumer reuses one long-lived adtler client** across the whole
   create → activate → run lifecycle, which is why `run_class` lands in the worn
   session and soft-fails. (Confirmed by the fact that a fresh adtler client runs
@@ -125,19 +131,22 @@ Verified live on S4U (SAP_BASIS 758) 2026-07-24 / 2026-07-27 and on HFQ
 
 ## Scope
 
-**In scope:** making `RunClass` behave correctly for a fresh class driven purely
-over ADT REST. Two independent, composable changes:
+**In scope:** making `RunClass` behave correctly for classes driven purely over
+ADT REST — both a **fresh** class (defect 1) and a **re-activated** class
+(defect 2). Two independent, composable changes:
 
 1. **Option A — classify the masked soft-fail as a real error** (no object
    mutation, no session change). Robustness improvement; still recommended so a
    genuinely non-executable class surfaces as an error rather than a fake success.
-2. **Option C — run the classrun on an isolated fresh HTTP session** so a fresh
-   class actually executes and returns real output. **Recommended primary fix
-   for defect 1.** No object mutation, no transport, no lock.
+2. **Option C — run the classrun on an isolated fresh HTTP session** so the class
+   actually executes and returns the current version's real output. **Recommended
+   primary fix; resolves both defect 1 and defect 2.** No object mutation, no
+   transport, no lock.
 
-**Out of scope:** defect 2 (stale load) in-place fix; any DDIC/RAP-specific
-behaviour; changing the classrun request contract (still stateless
-`POST … Accept: text/plain`). Option B (test-include mutation) is dropped.
+**Out of scope:** any DDIC/RAP-specific behaviour; changing the classrun request
+contract (still stateless `POST … Accept: text/plain`). Option B (test-include
+mutation) is dropped. Defect 2 is **in** scope — Option C resolves it (see
+below), it is no longer deferred to `blocked:eclipse-capture`.
 
 ## Option C — run the classrun on an isolated fresh session (recommended primary fix)
 
@@ -235,14 +244,28 @@ Option C — the missing-load case. A non-existent class returns 200-with-text
 before `RunClass`. Missing `S_DEVELOP` auth returns a *different* string and is
 left as-is.
 
-## Defect 2 is out of scope
+## Defect 2 is also resolved by Option C
 
-The fresh-session load is **session-local**, so Option C does not create a
-persistent load and does not fix defect 2 (a re-activated class still serving a
-stale persistent load to sessions that already hold one). A durable defect-2 fix
-needs whatever in-place invalidation Eclipse triggers on F9; only `DELETE` was
-observed to evict a persistent load over REST (destroying object identity, so
-not usable). Tracked under `blocked:eclipse-capture` on issue #106.
+Once every `RunClass` runs on its own fresh session, defect 2 disappears with
+defect 1. A fresh session holds no prior load, so its `CREATE OBJECT` compiles
+the **currently active** source — never a stale previously-generated version.
+
+**Verified live 2026-07-27 on S4U and HFQ:** over one reused client, cycling
+`set source (V1) → activate → run → set source (V2) → activate → run → (V3)…`
+returns `V1`, then `V2`, then `V3` on **both** systems. Pre-fix, S/4 kept serving
+the first version to the reused session (the reported defect 2); post-fix each
+run reflects the latest activation. Covered by
+`TestRunClass_ReactivatedClass_Integration` (see Testing).
+
+**Caveat / scope of the claim.** This resolves defect 2 **as observed through
+`RunClass`** — the user-visible "change source, re-activate, run again" path.
+Option C does **not** bust a *persistent* PXA load, and this verification did not
+reconstruct the exact original poisoned-session state some other client might
+hold; it exercised the realistic reused-client lifecycle. The `RunClass` path
+never depends on a persistent load because it never reuses a session, so no
+`blocked:eclipse-capture` in-place invalidation is needed for classrun. (Only
+`DELETE` was ever observed to evict a persistent load over REST — destroying
+object identity, so unusable — but that is now moot for classrun.)
 
 ## Error handling
 
@@ -289,7 +312,14 @@ Asserting identical correct behaviour on both systems is the point: HFQ proves
 no regression, S4U proves the fix. (A pre-fix run of the same test would fail
 only on S4U, which is the bug this closes.)
 
-Fixtures in `Z_ADT_MCP_TEST`; `$TMP` scratch classes cleaned up.
+**Defect 2 —** `TestRunClass_ReactivatedClass_Integration`: over one reused
+client, `set source → activate → RunClass` is cycled through three markers
+(`…ONE/…TWO/…THREE`) and each run must return the just-activated version. Pre-fix
+S/4 returns the stale first version on the 2nd/3rd cycle; post-fix both systems
+return the current version every time. Both regression tests verified live on
+HFQ + S4U 2026-07-27.
+
+`$TMP` scratch classes are created fresh per run and cleaned up.
 
 ## Rollout / linkage
 
@@ -299,8 +329,10 @@ Fixtures in `Z_ADT_MCP_TEST`; `$TMP` scratch classes cleaned up.
   success.
 - The aibap.mcp `run_class` consumer references the adtler tag, drops its interim
   workaround note, and no longer needs to reuse-or-refresh a session itself.
-- **Defect 2 (`blocked:eclipse-capture`):** separate work item; not gated on the
-  above.
+- **Both defects close with this fix.** Option C resolves defect 1 (fresh class)
+  and defect 2 (re-activated class) together; issue #106 can be closed once the
+  tag ships and the consumer bumps. The `blocked:eclipse-capture` label no longer
+  applies to the classrun path.
 
 ## Note: broken integration build (separate issue)
 
