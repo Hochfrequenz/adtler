@@ -232,6 +232,27 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 	}
 }
 
+// freshSession returns a single-use *httpClient that shares this client's
+// configuration and credentials but has a brand-new cookie jar and no cached
+// CSRF token, so its first request establishes a clean SAP session.
+//
+// It exists for RunClass: on S/4 the ADT session that performed
+// create -> set source -> activate cannot generate the target class's runtime
+// load when it runs the classrun in that same session (issue #106, defect 1),
+// but a fresh session generates it and returns real output. classrun is
+// stateless, so running it on an isolated session is consistent with its
+// contract and leaves the caller's session and any locks untouched.
+//
+// The returned client is not registered anywhere and holds no locks; discard it
+// after use. An OAuth token refreshed inside this single-use session is not
+// propagated back to the parent client — acceptable for a one-shot run.
+func (c *httpClient) freshSession() *httpClient {
+	fresh := NewClientWithPollInterval(c.cfg, c.pollInterval).(*httpClient)
+	fresh.accessToken = c.accessToken
+	fresh.onTokenRefresh = c.onTokenRefresh
+	return fresh
+}
+
 // NewClientWithToken creates a Client using Bearer token auth.
 // onRefresh is called with the current access token when a 401 occurs; it should return a new access token.
 func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefresh func(string) (string, error)) Client {

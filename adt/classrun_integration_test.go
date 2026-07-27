@@ -5,8 +5,10 @@ package adt_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )
@@ -56,6 +58,102 @@ func TestRunClass_Integration(t *testing.T) {
 					sys.Name, result.ConsoleOutput, classrunFixtureOutput)
 			}
 			t.Logf("%s classrun output: %q", sys.Name, result.ConsoleOutput)
+		})
+	}
+}
+
+// freshClassrunOutput is the marker a freshly created probe class writes.
+const freshClassrunOutput = "RC106_FRESH_OK"
+
+// freshClassrunSource returns a minimal IF_OO_ADT_CLASSRUN implementation that
+// writes freshClassrunOutput. Built with double-quoted strings (not a Go
+// backtick literal) per the CLAUDE.md ABAP-fixture rule.
+func freshClassrunSource(className string) string {
+	l := strings.ToLower(className)
+	return "CLASS " + l + " DEFINITION PUBLIC FINAL CREATE PUBLIC.\n" +
+		"  PUBLIC SECTION.\n" +
+		"    INTERFACES if_oo_adt_classrun.\n" +
+		"ENDCLASS.\n\n" +
+		"CLASS " + l + " IMPLEMENTATION.\n" +
+		"  METHOD if_oo_adt_classrun~main.\n" +
+		"    out->write( '" + freshClassrunOutput + "' ).\n" +
+		"  ENDMETHOD.\n" +
+		"ENDCLASS.\n"
+}
+
+// TestRunClass_FreshClass_Integration is the issue #106 defect-1 regression
+// test. It drives the whole create -> set source -> activate -> run lifecycle
+// over pure ADT REST in ONE long-lived client (the worn-session path that MCP
+// takes), then RunClass, and asserts the class's REAL output comes back on
+// BOTH systems:
+//
+//   - HFQ (ECC/R3): classrun always worked here because activation regenerates
+//     a persistent runtime load. This arm is the REGRESSION GUARD — the
+//     fresh-session fix must not break the system that was already fine.
+//   - S4U (S/4): activation does not regenerate the load, so pre-fix RunClass
+//     in the reused session soft-failed with "does not implement ...main...".
+//     Post-fix RunClass runs the classrun on an isolated fresh session and
+//     returns the real output. This arm is the FIX.
+//
+// Asserting identical correct output on both systems is the point: same
+// lifecycle, same assertion, green everywhere only once the fix is in.
+func TestRunClass_FreshClass_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+			// A fresh, uniquely-named $TMP class so the run really exercises a
+			// never-executed class (defect-1 precondition), not a fixture whose
+			// load some earlier run already generated.
+			name := fmt.Sprintf("ZCL_RC106_FRESH_%d", time.Now().Unix()%100000)
+			uri := classrunClassURI(name)
+
+			if err := sys.Client.CreateObject(ctx, "CLAS", name, "$TMP",
+				"issue106 defect-1 regression probe", ""); err != nil {
+				if _, ie := sys.Client.GetObjectInfo(ctx, uri); ie != nil {
+					t.Fatalf("CreateObject %s on %s: %v", name, sys.Name, err)
+				}
+			}
+			t.Cleanup(func() {
+				if err := sys.Client.DeleteObject(context.Background(), uri, "", ""); err != nil {
+					t.Logf("%s: cleanup delete %s failed: %v", sys.Name, name, err)
+				}
+			})
+
+			lock, err := sys.Client.LockObject(ctx, uri)
+			if err != nil {
+				t.Fatalf("LockObject %s on %s: %v", name, sys.Name, err)
+			}
+			src, err := sys.Client.GetSource(ctx, uri)
+			if err != nil {
+				_ = sys.Client.UnlockObject(ctx, uri, lock)
+				t.Fatalf("GetSource %s on %s: %v", name, sys.Name, err)
+			}
+			if _, err := sys.Client.SetSource(ctx, uri, freshClassrunSource(name), lock, "", src.ETag); err != nil {
+				_ = sys.Client.UnlockObject(ctx, uri, lock)
+				t.Fatalf("SetSource %s on %s: %v", name, sys.Name, err)
+			}
+			_ = sys.Client.UnlockObject(ctx, uri, lock)
+
+			res, err := sys.Client.ActivateObjects(ctx, []string{uri})
+			if err != nil {
+				t.Fatalf("ActivateObjects %s on %s: %v", name, sys.Name, err)
+			}
+			if !res.Success {
+				t.Fatalf("%s: activation of %s failed: %d messages", sys.Name, name, len(res.Messages))
+			}
+
+			// Same client that just created + activated the class. Pre-fix this
+			// soft-fails on S/4; post-fix RunClass uses a fresh session.
+			result, err := sys.Client.RunClass(ctx, name)
+			if err != nil {
+				t.Fatalf("RunClass %s on %s failed: %v", name, sys.Name, err)
+			}
+			if !strings.Contains(result.ConsoleOutput, freshClassrunOutput) {
+				t.Errorf("%s: RunClass output %q does not contain %q — the fresh-session fix did not generate the load",
+					sys.Name, result.ConsoleOutput, freshClassrunOutput)
+			}
+			t.Logf("%s: fresh-class RunClass output: %q", sys.Name, result.ConsoleOutput)
 		})
 	}
 }
