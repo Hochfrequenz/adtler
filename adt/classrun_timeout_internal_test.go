@@ -23,6 +23,10 @@ import (
 // without sleeping past 30 s of real time is to shrink the short client's
 // timeout to milliseconds and check whether the request survives. A request that
 // survives a 30-ms short-client cap cannot be running on the short client.
+//
+// Several tests here temporarily swap the package-level defaultLongRunTimeout
+// and restore it in a defer, so they must NOT call t.Parallel() (nothing in
+// package adt does today).
 const (
 	// discoveryPath is the CSRF preflight endpoint (fast in these tests).
 	discoveryPath = "/sap/bc/adt/discovery"
@@ -33,6 +37,12 @@ const (
 	// slowResponse is comfortably longer than tinyShortTimeout but short enough
 	// to keep the unit suite fast. It stands in for a 45 s classrun.
 	slowResponse = 250 * time.Millisecond
+	// stalledResponse stands in for a classrun that never returns in time — any
+	// value far past tinyDeadline does; slowServer releases the sleeping handler
+	// at teardown, so this delay is not paid in wall-clock time.
+	stalledResponse = 30 * time.Second
+	// tinyDeadline is the caller/default deadline used against stalledResponse.
+	tinyDeadline = 150 * time.Millisecond
 	// emptyTableData is a minimal, parseable data preview response for RunQuery.
 	emptyTableData = `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<tableData><totalRows>0</totalRows><queryExecutionTime>1.0</queryExecutionTime></tableData>`
@@ -42,8 +52,18 @@ const (
 // delay. The classrun endpoint answers text/plain, the data preview endpoint
 // answers a minimal tableData document, so the same server drives both RunClass
 // and RunQuery.
-func slowServer(delay time.Duration) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//
+// Shutdown is registered with t.Cleanup and closes a stop channel BEFORE
+// srv.Close(): httptest.Server.Close waits for in-flight handlers, and a handler
+// aborted mid-sleep cannot be relied on to observe r.Context() cancellation
+// (net/http only notices the closed connection via its background read, which a
+// sleeping handler may outlive). Without the stop channel, teardown blocks for
+// the remaining delay — measurably so, and Go prints "httptest.Server blocked in
+// Close after 5 seconds". Callers must therefore NOT defer srv.Close() themselves.
+func slowServer(t *testing.T, delay time.Duration) *httptest.Server {
+	t.Helper()
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == discoveryPath {
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
@@ -52,6 +72,8 @@ func slowServer(delay time.Duration) *httptest.Server {
 		select {
 		case <-time.After(delay):
 		case <-r.Context().Done():
+			return
+		case <-stop:
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, dataPreviewPath) {
@@ -62,6 +84,11 @@ func slowServer(delay time.Duration) *httptest.Server {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("elapsed 45.00 s\n"))
 	}))
+	t.Cleanup(func() {
+		close(stop)
+		srv.Close()
+	})
+	return srv
 }
 
 // shortCappedClient returns a client whose SHORT http client is capped at
@@ -84,8 +111,7 @@ func shortCappedClient(t *testing.T, host string) *httpClient {
 // (doMutate) fails with "Client.Timeout exceeded"; the fixed code (doMutateLong)
 // returns the console output.
 func TestRunClass_NotCappedByShortClient(t *testing.T) {
-	srv := slowServer(slowResponse)
-	defer srv.Close()
+	srv := slowServer(t, slowResponse)
 	c := shortCappedClient(t, srv.URL)
 
 	result, err := c.RunClass(context.Background(), "ZCL_SLOW")
@@ -102,18 +128,17 @@ func TestRunClass_NotCappedByShortClient(t *testing.T) {
 // deadline shorter than the server's response time must abort the run, and the
 // caller's deadline must win over defaultLongRunTimeout.
 func TestRunClass_HonoursCallerDeadline(t *testing.T) {
-	srv := slowServer(3 * time.Second)
-	defer srv.Close()
+	srv := slowServer(t, stalledResponse)
 	c := shortCappedClient(t, srv.URL)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), tinyDeadline)
 	defer cancel()
 
 	start := time.Now()
 	_, err := c.RunClass(ctx, "ZCL_SLOW")
 	elapsed := time.Since(start)
 	if err == nil {
-		t.Fatal("expected the caller's 100 ms deadline to abort RunClass, got nil error")
+		t.Fatalf("expected the caller's %v deadline to abort RunClass, got nil error", tinyDeadline)
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("error: got %v, want a context.DeadlineExceeded", err)
@@ -127,12 +152,11 @@ func TestRunClass_HonoursCallerDeadline(t *testing.T) {
 // still gets one. The long HTTP client has no timeout of its own, so without the
 // default a runaway classrun would hang the caller forever.
 func TestRunClass_DefaultDeadlineApplies(t *testing.T) {
-	srv := slowServer(10 * time.Second)
-	defer srv.Close()
+	srv := slowServer(t, stalledResponse)
 	c := shortCappedClient(t, srv.URL)
 
 	restore := defaultLongRunTimeout
-	defaultLongRunTimeout = 150 * time.Millisecond
+	defaultLongRunTimeout = tinyDeadline
 	defer func() { defaultLongRunTimeout = restore }()
 
 	start := time.Now()
@@ -144,7 +168,7 @@ func TestRunClass_DefaultDeadlineApplies(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("error: got %v, want a context.DeadlineExceeded", err)
 	}
-	if elapsed > 3*time.Second {
+	if elapsed > time.Second {
 		t.Errorf("RunClass ran for %v — the default deadline was not applied", elapsed)
 	}
 }
@@ -227,8 +251,7 @@ func TestRunQueryAndRunClass_ShareLongPath(t *testing.T) {
 	}
 
 	t.Run("both bypass the short client cap", func(t *testing.T) {
-		srv := slowServer(slowResponse)
-		defer srv.Close()
+		srv := slowServer(t, slowResponse)
 		classErr, queryErr := run(t, shortCappedClient(t, srv.URL))
 		if classErr != nil {
 			t.Errorf("RunClass ran on the short client: %v", classErr)
@@ -239,10 +262,9 @@ func TestRunQueryAndRunClass_ShareLongPath(t *testing.T) {
 	})
 
 	t.Run("both apply the same default deadline", func(t *testing.T) {
-		srv := slowServer(10 * time.Second)
-		defer srv.Close()
+		srv := slowServer(t, stalledResponse)
 		restore := defaultLongRunTimeout
-		defaultLongRunTimeout = 150 * time.Millisecond
+		defaultLongRunTimeout = tinyDeadline
 		defer func() { defaultLongRunTimeout = restore }()
 
 		classErr, queryErr := run(t, shortCappedClient(t, srv.URL))
