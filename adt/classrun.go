@@ -21,6 +21,10 @@ type ClassRunClient interface {
 	// endpoint and returns whatever the class writes to the console handler
 	// (out->write(...)). It does not validate that the class exists, is
 	// active, or implements IF_OO_ADT_CLASSRUN — the caller pre-checks that.
+	//
+	// Executing a class is open-ended ABAP, so the run is not capped by the
+	// short HTTP client's 30-second timeout. Pass a context deadline to bound
+	// it; without one, defaultLongRunTimeout applies.
 	RunClass(ctx context.Context, className string) (*ClassRunResult, error)
 }
 
@@ -36,13 +40,24 @@ type ClassRunClient interface {
 // own concern — so an isolated session is consistent with its contract and
 // leaves the caller's session and locks untouched.
 //
+// The POST goes through the LONG-TIMEOUT HTTP client (doMutateLong): running an
+// IF_OO_ADT_CLASSRUN class is arbitrary user-authored ABAP and routinely takes
+// longer than the short client's 30-second cap, which consumers cannot raise
+// (http.Client.Timeout and the context deadline combine as min(...), issue
+// #114). Because that client imposes no limit of its own, a default deadline is
+// applied when the caller supplies none — otherwise a runaway class would hang
+// the caller indefinitely. Both halves are required; see defaultLongRunTimeout.
+//
 // Namespace slashes in className are percent-encoded automatically by
-// doMutate → encodeNamespacePath (triggered by the "//" that results from
+// doMutateLong → encodeNamespacePath (triggered by the "//" that results from
 // appending "/na2/foo" to the base).
 func (c *httpClient) RunClass(ctx context.Context, className string) (*ClassRunResult, error) {
+	ctx, cancel := withDefaultDeadline(ctx)
+	defer cancel()
+
 	fresh := c.freshSession()
 	uri := "/sap/bc/adt/oo/classrun/" + strings.ToLower(className)
-	resp, err := fresh.doMutate(ctx, http.MethodPost, uri, nil,
+	resp, err := fresh.doMutateLong(ctx, http.MethodPost, uri, nil,
 		map[string]string{"Accept": contentTypeTextPlain})
 	if err != nil {
 		return nil, fmt.Errorf("RunClass: %w", err)
