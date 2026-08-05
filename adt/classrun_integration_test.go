@@ -206,6 +206,112 @@ func TestRunClass_ReactivatedClass_Integration(t *testing.T) {
 	}
 }
 
+// longRunCapSeconds is how long the issue #114 probe class busy-loops before it
+// exits on its own — comfortably past the 30-second short-HTTP-client cap that
+// used to abort RunClass, and short enough to stay well inside the SAP dialog
+// work-process limit.
+const longRunCapSeconds = 45
+
+// longRunClassrunSource returns an IF_OO_ADT_CLASSRUN implementation that busy-
+// loops for capSeconds and then writes "elapsed <n> s". The hard cap means the
+// class terminates by itself even if the client goes away. Built from double-
+// quoted strings (not a Go backtick literal) per the CLAUDE.md ABAP-fixture rule.
+func longRunClassrunSource(className string, capSeconds int) string {
+	l := strings.ToLower(className)
+	return "CLASS " + l + " DEFINITION PUBLIC FINAL CREATE PUBLIC.\n" +
+		"  PUBLIC SECTION.\n" +
+		"    INTERFACES if_oo_adt_classrun.\n" +
+		"  PRIVATE SECTION.\n" +
+		"    CONSTANTS mc_cap_seconds TYPE i VALUE " + fmt.Sprint(capSeconds) + ".\n" +
+		"ENDCLASS.\n\n" +
+		"CLASS " + l + " IMPLEMENTATION.\n" +
+		"  METHOD if_oo_adt_classrun~main.\n" +
+		"    DATA lv_counter TYPE int8.\n" +
+		"    DATA lv_elapsed TYPE p LENGTH 8 DECIMALS 2.\n" +
+		"    GET TIME STAMP FIELD DATA(lv_start).\n" +
+		"    DO.\n" +
+		"      lv_counter = lv_counter + 1.\n" +
+		"      IF lv_counter MOD 5000000 = 0.\n" +
+		"        GET TIME STAMP FIELD DATA(lv_now).\n" +
+		"        lv_elapsed = cl_abap_tstmp=>subtract( tstmp1 = lv_now tstmp2 = lv_start ).\n" +
+		"        IF lv_elapsed >= mc_cap_seconds.\n" +
+		"          EXIT.\n" +
+		"        ENDIF.\n" +
+		"      ENDIF.\n" +
+		"    ENDDO.\n" +
+		"    out->write( |elapsed { lv_elapsed } s| ).\n" +
+		"  ENDMETHOD.\n" +
+		"ENDCLASS.\n"
+}
+
+// TestRunClass_LongRunning_Integration is the issue #114 regression test: a
+// classrun that runs for longRunCapSeconds (45 s) must come back with its
+// console output instead of dying at the 30-second short-HTTP-client cap.
+//
+// Pre-fix, RunClass POSTed through the 30 s client and failed with
+//
+//	Post ".../oo/classrun/...": context deadline exceeded
+//	(Client.Timeout exceeded while awaiting headers)
+//
+// after ~30 s wall clock, while the ABAP work process kept running. Post-fix the
+// POST goes through the long client with the default deadline, so the run
+// completes. The elapsed-time assertion is the actual proof: a pass in under
+// 30 s would mean the class did not really run long, making the test vacuous.
+//
+// The caller passes a plain context.Background() on purpose — the default
+// deadline must be what carries the run.
+func TestRunClass_LongRunning_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+			name := fmt.Sprintf("ZCL_RC114_SLOW_%d", time.Now().UnixNano()%10000000000000)
+			uri := createTmpClassrunClass(t, sys.Client, name)
+
+			lock, err := sys.Client.LockObject(ctx, uri)
+			if err != nil {
+				t.Fatalf("LockObject %s: %v", name, err)
+			}
+			src, err := sys.Client.GetSource(ctx, uri)
+			if err != nil {
+				_ = sys.Client.UnlockObject(ctx, uri, lock)
+				t.Fatalf("GetSource %s: %v", name, err)
+			}
+			if _, err := sys.Client.SetSource(ctx, uri,
+				longRunClassrunSource(name, longRunCapSeconds), lock, "", src.ETag); err != nil {
+				_ = sys.Client.UnlockObject(ctx, uri, lock)
+				t.Fatalf("SetSource %s: %v", name, err)
+			}
+			_ = sys.Client.UnlockObject(ctx, uri, lock)
+			res, err := sys.Client.ActivateObjects(ctx, []string{uri})
+			if err != nil {
+				t.Fatalf("ActivateObjects %s: %v", name, err)
+			}
+			if !res.Success {
+				t.Fatalf("activation of %s failed: %d messages", name, len(res.Messages))
+			}
+
+			start := time.Now()
+			result, err := sys.Client.RunClass(ctx, name)
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatalf("%s: RunClass of the %d s class failed after %v (issue #114 — capped by the short HTTP client?): %v",
+					sys.Name, longRunCapSeconds, elapsed, err)
+			}
+			if !strings.Contains(result.ConsoleOutput, "elapsed") {
+				t.Errorf("%s: console output %q does not contain the expected \"elapsed ... s\" line",
+					sys.Name, strings.TrimSpace(result.ConsoleOutput))
+			}
+			if elapsed < 30*time.Second {
+				t.Errorf("%s: RunClass returned after only %v — the class did not run past the old 30 s cap, so this test proves nothing",
+					sys.Name, elapsed)
+			}
+			t.Logf("%s: %d s classrun returned after %v: %q",
+				sys.Name, longRunCapSeconds, elapsed, strings.TrimSpace(result.ConsoleOutput))
+		})
+	}
+}
+
 // TestRunClass_ThrowingClass confirms how an uncaught runtime exception in
 // main() is signalled — spec open verification point #1. Verified against
 // CL_OO_ADT_RES_CLASSRUN: main() runs inside a TRY that catches only

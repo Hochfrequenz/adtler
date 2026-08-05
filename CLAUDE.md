@@ -104,6 +104,17 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 
 The inverse also matters: some operations need a **fresh** session, not a reused one. `RunClass` runs on a single-use isolated session (`freshSession`) because a session that performed the create/set source/activate lifecycle cannot generate a class's runtime load on S/4 (see "Runtime-load generation vs. session reuse" under SAP system differences). If an operation depends on state SAP only generates in a clean session, give it a fresh session instead of reusing the caller's.
 
+### Long-running ABAP execution (two HTTP clients)
+
+The client holds two `*http.Client`s: `http` with a 30-second timeout for ordinary ADT calls, and `httpLong` with no timeout of its own, where the deadline comes from the context (`doReadLong`, `doMutateLong`).
+
+Any endpoint that executes **open-ended ABAP** — currently `RunQuery` (data preview) and `RunClass` (classrun) — must use both halves of the long path:
+
+1. `doMutateLong` / `doReadLong`, because 30 seconds is arbitrary for user-authored ABAP and consumers cannot raise it (`http.Client.Timeout` and the context deadline combine as `min(...)`, and the client fields are unexported), and
+2. `withDefaultDeadline(ctx)`, because the long client imposes no limit at all — without a default deadline a runaway statement hangs the caller forever.
+
+Doing only (1) trades a wrong limit for no limit. The shared default lives in `defaultLongRunTimeout` (5 minutes, just past the usual SAP dialog work-process limit so SAP aborts the step and returns a diagnosable error first); both endpoints reference it so they cannot drift apart. Fixed for `RunClass` in #114.
+
 ## Coding Pitfalls
 
 - **Never use Go backtick (raw) string literals for ABAP source code** in test fixtures. Backtick strings preserve tab indentation from the Go source file.

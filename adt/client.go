@@ -513,6 +513,30 @@ func (c *httpClient) doMutate(ctx context.Context, method, path string, body io.
 	return c.doMutateWith(ctx, c.http, method, path, body, headers)
 }
 
+// defaultLongRunTimeout is the deadline applied by withDefaultDeadline to
+// open-ended ABAP execution (RunQuery, RunClass) when the caller's context
+// carries none. The long-timeout HTTP client imposes no limit of its own, so
+// without this a runaway statement would hang the calling goroutine forever.
+//
+// Five minutes is chosen to sit just past the SAP dialog work-process limit
+// (rdisp/max_wprun_time, commonly 300-600 s): SAP aborts the step itself and
+// returns a diagnosable error, which is more useful than the client giving up
+// first. Both RunQuery and RunClass share this value deliberately — one default
+// for "open-ended ABAP" keeps the two endpoints from drifting apart.
+//
+// A variable rather than a constant so tests can shorten it.
+var defaultLongRunTimeout = 5 * time.Minute
+
+// withDefaultDeadline returns ctx and a cancel func to defer. If ctx already
+// carries a deadline, the caller's deadline wins and cancel is a no-op;
+// otherwise defaultLongRunTimeout is applied.
+func withDefaultDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultLongRunTimeout)
+}
+
 // doMutateLong is like doMutate but uses the long-timeout HTTP client (httpLong).
 // Intended for long-running queries where the caller controls the deadline via context.
 func (c *httpClient) doMutateLong(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (*http.Response, error) {
