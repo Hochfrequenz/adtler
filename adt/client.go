@@ -40,6 +40,19 @@ type ObjectClient interface {
 }
 
 // LockClient handles object locking.
+//
+// UnlockObject caveat: SAP's UNLOCK endpoint
+// (POST {uri}?_action=UNLOCK&lockHandle=<handle>) returns HTTP 200 with an
+// empty body regardless of outcome — a real release,
+// a bogus/mismatched handle, and a double unlock are indistinguishable
+// (verified on ECC and S/4). The server-side dequeue (DEQUEUE_EADT_LOCK) is
+// handle-less and exception-less, so a 2xx from UnlockObject does NOT prove
+// the enqueue was released. There is also no ADT endpoint to read enqueue
+// state, so a release cannot be verified over REST. Secondary auto-locks on
+// coupled objects (e.g. a RAP BDEF's implementation class) are not reachable
+// by handle at all. The only reliable recovery is dropping the stateful
+// session (Logout), which releases every enqueue held under it.
+// See mcp-server-abap#383 and #58.
 type LockClient interface {
 	LockObject(ctx context.Context, objectURI string) (string, error)
 	UnlockObject(ctx context.Context, objectURI, lockHandle string) error
@@ -173,6 +186,7 @@ type Client interface {
 	DumpClient
 	SystemClient
 	DependencyClient
+	ClassRunClient
 }
 
 type httpClient struct {
@@ -215,6 +229,45 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 			Jar:       jar,
 		},
 		pollInterval: pollInterval,
+	}
+}
+
+// freshSession returns a single-use *httpClient that shares this client's
+// configuration and credentials but has a brand-new cookie jar and no cached
+// CSRF token, so its first request establishes a clean SAP session.
+//
+// It exists for RunClass: on S/4 the ADT session that performed
+// create -> set source -> activate cannot generate the target class's runtime
+// load when it runs the classrun in that same session (issue #106, defect 1),
+// but a fresh session generates it and returns real output. classrun is
+// stateless, so running it on an isolated session is consistent with its
+// contract and leaves the caller's session and any locks untouched.
+//
+// The returned client is not registered anywhere and holds no locks; discard it
+// after use. An OAuth token refreshed inside this single-use session is not
+// propagated back to the parent client — acceptable for a one-shot run.
+//
+// It reuses the parent's *http.Transport (preserving any caller-supplied
+// RoundTripper from NewClientWithTransport and the existing connection pool)
+// and only swaps in a fresh cookie jar: the empty jar is what makes SAP start a
+// clean session, independent of the TCP connection reuse.
+func (c *httpClient) freshSession() *httpClient {
+	jar, _ := cookiejar.New(nil)
+	return &httpClient{
+		cfg: c.cfg,
+		http: &http.Client{
+			Timeout:   c.http.Timeout,
+			Transport: c.http.Transport,
+			Jar:       jar,
+		},
+		httpLong: &http.Client{
+			Timeout:   c.httpLong.Timeout,
+			Transport: c.httpLong.Transport,
+			Jar:       jar,
+		},
+		accessToken:    c.accessToken,
+		onTokenRefresh: c.onTokenRefresh,
+		pollInterval:   c.pollInterval,
 	}
 }
 
@@ -458,6 +511,30 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 // Uses the default HTTP client (30-second timeout).
 func (c *httpClient) doMutate(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (*http.Response, error) {
 	return c.doMutateWith(ctx, c.http, method, path, body, headers)
+}
+
+// defaultLongRunTimeout is the deadline applied by withDefaultDeadline to
+// open-ended ABAP execution (RunQuery, RunClass) when the caller's context
+// carries none. The long-timeout HTTP client imposes no limit of its own, so
+// without this a runaway statement would hang the calling goroutine forever.
+//
+// Five minutes is chosen to sit just past the SAP dialog work-process limit
+// (rdisp/max_wprun_time, commonly 300-600 s): SAP aborts the step itself and
+// returns a diagnosable error, which is more useful than the client giving up
+// first. Both RunQuery and RunClass share this value deliberately — one default
+// for "open-ended ABAP" keeps the two endpoints from drifting apart.
+//
+// A variable rather than a constant so tests can shorten it.
+var defaultLongRunTimeout = 5 * time.Minute
+
+// withDefaultDeadline returns ctx and a cancel func to defer. If ctx already
+// carries a deadline, the caller's deadline wins and cancel is a no-op;
+// otherwise defaultLongRunTimeout is applied.
+func withDefaultDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultLongRunTimeout)
 }
 
 // doMutateLong is like doMutate but uses the long-timeout HTTP client (httpLong).

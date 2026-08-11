@@ -118,7 +118,11 @@ func TestSetIncludeSource(t *testing.T) {
 	}
 }
 
-func TestSetIncludeSource_NoETag(t *testing.T) {
+// captureIncludeIfMatch runs SetIncludeSource against a stub server that records
+// the If-Match request header, and returns what was sent. Shared by the
+// If-Match behaviour tests so they don't each repeat the stub-server boilerplate.
+func captureIncludeIfMatch(t *testing.T, lockHandle, etag string) string {
+	t.Helper()
 	var gotIfMatch string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -133,16 +137,69 @@ func TestSetIncludeSource_NoETag(t *testing.T) {
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
-
-	// Empty etag = initial write on empty include
-	_, err := client.SetIncludeSource(context.Background(),
+	if _, err := client.SetIncludeSource(context.Background(),
 		"/sap/bc/adt/oo/classes/zcl_test", "testclasses",
-		"CLASS lcl_test DEFINITION FOR TESTING.\nENDCLASS.", "", "", "")
+		"CLASS lcl_test DEFINITION FOR TESTING.\nENDCLASS.", lockHandle, "", etag); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return gotIfMatch
+}
+
+func TestSetIncludeSource_NoETag(t *testing.T) {
+	// Empty etag (initial write on an empty include) → no If-Match.
+	if got := captureIncludeIfMatch(t, "", ""); got != "" {
+		t.Errorf("If-Match should be empty for initial write, got %q", got)
+	}
+}
+
+func TestSetIncludeSource_OmitsIfMatchWhenLocked(t *testing.T) {
+	// aibap.mcp#436: with a lock handle, SetIncludeSource must NOT send If-Match
+	// (the GET-derived ETag never matches SAP's class-level write precondition,
+	// causing 412). The lock query parameter must still be sent.
+	var gotIfMatch, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotIfMatch = r.Header.Get("If-Match")
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("ETag", `"etag-new"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	// Locked write WITH a transport — the full real-world shape. If-Match must be
+	// omitted, and both lockHandle and corrNr must ride the query string.
+	newETag, err := client.SetIncludeSource(context.Background(),
+		"/sap/bc/adt/oo/classes/zcl_test", "testclasses",
+		"CLASS lcl_test DEFINITION FOR TESTING.\nENDCLASS.", "LOCKHANDLE123", "TR123", `"etag-old"`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotIfMatch != "" {
-		t.Errorf("If-Match should be empty for initial write, got %q", gotIfMatch)
+		t.Errorf("If-Match should be omitted when a lock handle is present, got %q", gotIfMatch)
+	}
+	if !strings.Contains(gotQuery, "lockHandle=LOCKHANDLE123") {
+		t.Errorf("lockHandle query param missing, got query %q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "corrNr=TR123") {
+		t.Errorf("corrNr query param missing, got query %q", gotQuery)
+	}
+	if newETag != `"etag-new"` {
+		t.Errorf("returned ETag: got %q, want %q", newETag, `"etag-new"`)
+	}
+}
+
+func TestSetIncludeSource_KeepsIfMatchWhenUnlocked(t *testing.T) {
+	// Without a lock handle there is no exclusivity guarantee, so If-Match is
+	// still sent as a best-effort optimistic-concurrency check (unchanged).
+	if got := captureIncludeIfMatch(t, "", `"etag-old"`); got != `"etag-old"` {
+		t.Errorf("If-Match should be sent when unlocked, got %q", got)
 	}
 }
 
@@ -197,6 +254,87 @@ func TestSetSource(t *testing.T) {
 	}
 	if gotBody != "REPORT ZTEST.\nNEW CODE." {
 		t.Errorf("body: got %q", gotBody)
+	}
+}
+
+func TestSetSource_DDLSUsesQueryLockDeliveryAndOmitsIfMatch(t *testing.T) {
+	// aibap.mcp#383: DDL sources need the lock handle as a ?lockHandle= query
+	// param (header delivery 400/403s and never triggers the 423 retry), and
+	// reject the GET-derived If-Match (#436-style), so it must be omitted when
+	// locked. Contrast the program path (TestSetSource), which keeps both.
+	var gotMethod, gotQuery, gotIfMatch, gotLockHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotMethod = r.Method
+		gotQuery = r.URL.RawQuery
+		gotIfMatch = r.Header.Get("If-Match")
+		gotLockHeader = r.Header.Get("X-SAP-Lock-Handle")
+		w.Header().Set("ETag", `"new-etag"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.SetSource(context.Background(),
+		"/sap/bc/adt/ddic/ddl/sources/zmycds",
+		"define root view entity ZMYCDS as select from t000 { key mandt as Client }",
+		"LOCKHANDLE1", "TR1", `"etag-from-get"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method: got %q, want PUT", gotMethod)
+	}
+	if !strings.Contains(gotQuery, "lockHandle=LOCKHANDLE1") {
+		t.Errorf("lock handle must be a query param for DDLS; query=%q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "corrNr=TR1") {
+		t.Errorf("corrNr must be a query param; query=%q", gotQuery)
+	}
+	if gotIfMatch != "" {
+		t.Errorf("If-Match must be omitted for a locked DDLS write, got %q", gotIfMatch)
+	}
+	if gotLockHeader != "" {
+		t.Errorf("X-SAP-Lock-Handle header must NOT be used for DDLS, got %q", gotLockHeader)
+	}
+}
+
+func TestSetSource_DDLSUnlockedKeepsIfMatch(t *testing.T) {
+	// Without a lock handle there is nothing enforcing exclusivity, so a DDLS
+	// write still sends the caller's If-Match as a best-effort check (and still
+	// uses query delivery — no lock header).
+	var gotIfMatch, gotLockHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotIfMatch = r.Header.Get("If-Match")
+		gotLockHeader = r.Header.Get("X-SAP-Lock-Handle")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	_, err := client.SetSource(context.Background(),
+		"/sap/bc/adt/ddic/ddl/sources/zmycds", "define ...", "", "", `"etag-x"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotIfMatch != `"etag-x"` {
+		t.Errorf("unlocked DDLS write should keep If-Match, got %q", gotIfMatch)
+	}
+	if gotLockHeader != "" {
+		t.Errorf("X-SAP-Lock-Handle header must NOT be used for DDLS, got %q", gotLockHeader)
 	}
 }
 
@@ -430,5 +568,99 @@ func TestSetIncludeSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 	want := testCTTextPlain
 	if capturedCT != want {
 		t.Errorf("Content-Type: got %q, want %q", capturedCT, want)
+	}
+}
+
+// #443: OO classes/interfaces reject header lock delivery with 403
+// ExceptionResourceNoAccess ("currently editing"); the write must retry with
+// ?lockHandle= query delivery. Verified live on S/4.
+func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
+	const ooURI = "/sap/bc/adt/oo/classes/zcl_oo_retry"
+	var attempts int
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		attempts++
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+			w.Header().Set("ETag", `"oo-new"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Header-delivery attempt → 403 "currently editing".
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZCL_OO_RETRY</message></exc:exception>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	etag, err := client.SetSource(context.Background(), ooURI, "CLASS zcl_oo_retry DEFINITION PUBLIC.\nENDCLASS.", "LOCKH1", "TR1", `"etag-old"`)
+	if err != nil {
+		t.Fatalf("SetSource should have retried with query delivery and succeeded: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("expected a query-delivery retry (2 write attempts), got %d", attempts)
+	}
+	if !sawQueryHandle {
+		t.Error("retry did not deliver the lock handle as a ?lockHandle= query parameter")
+	}
+	if etag != `"oo-new"` {
+		t.Errorf("returned ETag: got %q, want %q", etag, `"oo-new"`)
+	}
+}
+
+// sawQueryRetryAfter403 drives SetSource against a stub whose write endpoint
+// always returns 403 (body403 controls whether it's a typed exception or bare),
+// and reports whether any request delivered the lock handle via ?lockHandle= —
+// i.e. whether the query-delivery retry fired. It asserts the 403 surfaces.
+// (adtler's doMutate may do its own CSRF-refresh retry, so we assert on delivery
+// mode, not attempt count.)
+func sawQueryRetryAfter403(t *testing.T, ooURI, lockHandle, body403 string) bool {
+	t.Helper()
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(body403))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+	if _, err := client.SetSource(context.Background(), ooURI, "CLASS x.", lockHandle, "TR1", `"e"`); err == nil {
+		t.Fatal("expected the 403 to surface")
+	}
+	return sawQueryHandle
+}
+
+// A 403 "currently editing" without a lock handle must NOT trigger the retry
+// (nothing to re-deliver) — the error surfaces so a genuine denial isn't masked.
+func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
+	body := `<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">no access</message></exc:exception>`
+	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/classes/zcl_oo_noretry", "", body) {
+		t.Error("query-delivery retry fired without a lock handle — must not happen")
+	}
+}
+
+// A bare 403 with no typed exception (empty ADTError.Type) must NOT trigger the
+// query-delivery retry even when a lock handle is held — 403 is overloaded, and
+// on R/3 a query retry would mask the real error as a 423. Guards the decision
+// to match isCurrentlyEditing on Type only (#443 review).
+func TestSetSource_NoRetryOnBare403(t *testing.T) {
+	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/classes/zcl_oo_bare403", "LOCKH1", "Forbidden") {
+		t.Error("bare 403 (empty Type) wrongly triggered the query-delivery retry")
 	}
 }

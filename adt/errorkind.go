@@ -14,6 +14,13 @@ import "errors"
 // generic creation failure, or a "transport required" hidden inside a 400 —
 // are reported as their broad kind (ErrorCreationFailed, ErrorBadRequest);
 // callers wanting finer detail inspect the message themselves.
+//
+// One deliberate exception: a lock conflict is promoted to
+// ErrorObjectLockedInTransport when the message carries a CTS request ID. SAP
+// does not expose the blocking request in any structured field, only in the
+// localised message text, so this is the one place classification inspects the
+// message — and it keys on the language-independent request-ID format, not on
+// translated words. See refineLockConflict and ADTError.LockingTransport.
 type ErrorKind int
 
 const (
@@ -34,6 +41,12 @@ const (
 	ErrorForbidden                   // authorization error
 	ErrorBadRequest                  // the request was malformed
 	ErrorServerError                 // SAP server error (HTTP 500)
+	// ErrorObjectLockedInTransport is a refinement of ErrorLockConflict: the
+	// object is registered in another open CTS request (a "locked in request
+	// <TR>" 409), a different lock domain from the runtime ENQUEUE. The blocking
+	// request is recoverable via ADTError.LockingTransport(); retargeting the
+	// write at it typically succeeds. See mcp-server-abap#442.
+	ErrorObjectLockedInTransport
 )
 
 // String returns a stable, lowercase identifier for the kind (handy for logs
@@ -68,6 +81,8 @@ func (k ErrorKind) String() string {
 		return "bad_request"
 	case ErrorServerError:
 		return "server_error"
+	case ErrorObjectLockedInTransport:
+		return "object_locked_in_transport"
 	default:
 		return "unknown"
 	}
@@ -88,9 +103,24 @@ func ClassifyError(err error) ErrorKind {
 		return ErrorUnknown
 	}
 	if k := classifyByExceptionType(adtErr.Type); k != ErrorUnknown {
+		return refineLockConflict(adtErr, k)
+	}
+	return refineLockConflict(adtErr, classifyByStatusCode(adtErr.StatusCode))
+}
+
+// refineLockConflict promotes a generic ErrorLockConflict to
+// ErrorObjectLockedInTransport when the message names a CTS request — the
+// object is registered in another open request (a different lock domain from
+// the runtime ENQUEUE), which the caller can recover from by retargeting the
+// write at that request. Any other kind is returned unchanged.
+func refineLockConflict(adtErr *ADTError, k ErrorKind) ErrorKind {
+	if k != ErrorLockConflict {
 		return k
 	}
-	return classifyByStatusCode(adtErr.StatusCode)
+	if _, ok := adtErr.LockingTransport(); ok {
+		return ErrorObjectLockedInTransport
+	}
+	return k
 }
 
 // classifyByExceptionType maps a SAP <exc:exception> Type id to a kind, or

@@ -109,21 +109,22 @@ func TestClassifyError_WrappedADTError(t *testing.T) {
 
 func TestErrorKind_String(t *testing.T) {
 	cases := map[adt.ErrorKind]string{
-		adt.ErrorUnknown:           "unknown",
-		adt.ErrorAlreadyExists:     "already_exists",
-		adt.ErrorLocked:            "locked",
-		adt.ErrorLockConflict:      "lock_conflict",
-		adt.ErrorInvalidLockHandle: "invalid_lock_handle",
-		adt.ErrorEtagMismatch:      "etag_mismatch",
-		adt.ErrorNotAcceptable:     "not_acceptable",
-		adt.ErrorUnsupportedMedia:  "unsupported_media",
-		adt.ErrorUnprocessable:     "unprocessable",
-		adt.ErrorMethodNotAllowed:  "method_not_allowed",
-		adt.ErrorCreationFailed:    "creation_failed",
-		adt.ErrorNotFound:          "not_found",
-		adt.ErrorForbidden:         "forbidden",
-		adt.ErrorBadRequest:        "bad_request",
-		adt.ErrorServerError:       "server_error",
+		adt.ErrorUnknown:                 "unknown",
+		adt.ErrorAlreadyExists:           "already_exists",
+		adt.ErrorLocked:                  "locked",
+		adt.ErrorLockConflict:            "lock_conflict",
+		adt.ErrorInvalidLockHandle:       "invalid_lock_handle",
+		adt.ErrorEtagMismatch:            "etag_mismatch",
+		adt.ErrorNotAcceptable:           "not_acceptable",
+		adt.ErrorUnsupportedMedia:        "unsupported_media",
+		adt.ErrorUnprocessable:           "unprocessable",
+		adt.ErrorMethodNotAllowed:        "method_not_allowed",
+		adt.ErrorCreationFailed:          "creation_failed",
+		adt.ErrorNotFound:                "not_found",
+		adt.ErrorForbidden:               "forbidden",
+		adt.ErrorBadRequest:              "bad_request",
+		adt.ErrorServerError:             "server_error",
+		adt.ErrorObjectLockedInTransport: "object_locked_in_transport",
 	}
 	// Guard against an unhandled kind silently returning "unknown": a bogus
 	// value must map to "unknown", but every named kind above must not.
