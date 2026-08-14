@@ -3,7 +3,7 @@ module github.com/Hochfrequenz/adtler
 go 1.25.0
 
 require (
-	github.com/Hochfrequenz/sap-mcp-config v1.0.1
+	github.com/Hochfrequenz/sap-mcp-config v1.1.0
 	modernc.org/sqlite v1.56.0
 )
 
