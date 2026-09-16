@@ -303,6 +303,8 @@ func isCurrentlyEditing(err error) bool {
 // let this match structurally (see #378's ADTError.Properties follow-up), so
 // this checks the literal English parameter name in the message — the same
 // last-resort, documented trade-off as LockingTransport's message scraping.
+// Case-insensitive: SAP's own message casing for this parameter name isn't
+// guaranteed stable across releases/locales the way the Type string is.
 func isLockHandleParameterNotFound(err error) bool {
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
@@ -311,5 +313,5 @@ func isLockHandleParameterNotFound(err error) bool {
 	if adtErr.Type != ExceptionTypeParameterNotFound {
 		return false
 	}
-	return strings.Contains(adtErr.Message, "lockHandle")
+	return strings.Contains(strings.ToLower(adtErr.Message), "lockhandle")
 }

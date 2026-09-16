@@ -716,6 +716,39 @@ func TestSetSource_RetriesQueryDeliveryOnLockHandleParameterNotFound(t *testing.
 	}
 }
 
+// The parameter-name match is case-insensitive: SAP's own casing for this
+// message isn't guaranteed stable across releases/locales.
+func TestSetSource_RetriesQueryDeliveryOnLockHandleParameterNotFound_CaseInsensitive(t *testing.T) {
+	const progURI = "/sap/bc/adt/programs/programs/z_lockhandle_494_case"
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+			w.Header().Set("ETag", `"prog-new"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionParameterNotFound"/><message lang="EN">Parameter LOCKHANDLE could not be found</message></exc:exception>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	if _, err := client.SetSource(context.Background(), progURI, "REPORT z.", "LOCKH1", "TR1", `"etag-old"`); err != nil {
+		t.Fatalf("SetSource should have retried with query delivery and succeeded: %v", err)
+	}
+	if !sawQueryHandle {
+		t.Error("retry did not fire for a differently-cased parameter name")
+	}
+}
+
 // A 400 ExceptionParameterNotFound naming a DIFFERENT parameter (the classic
 // "missing transport" case, #378 finding 1) must NOT trigger the
 // lock-handle-delivery retry — retrying with query-param delivery would not
