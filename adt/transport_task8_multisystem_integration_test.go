@@ -37,17 +37,33 @@ func objectSetKey(objs []adt.TransportObject) string {
 
 // maxTransportProbe caps how many modifiable requests selectTwoDifferingTransports
 // will pull object lists for. Each GetTransportObjects call fetches a full
-// transport-organizer body — up to 10.3 MB measured on S/4 (see task-8-brief.md)
-// against a 30s HTTP timeout — so this walks a bounded prefix of the
-// modifiable worklist rather than the whole thing.
+// transport-organizer body — up to 10.3 MB measured on S/4 (see
+// task-1-brief.md) against a 30s HTTP timeout — so this walks a bounded
+// prefix of the modifiable worklist rather than the whole thing.
 const maxTransportProbe = 25
 
 // selectTwoDifferingTransports enumerates GetTransportRequests(ctx, "", "D")
-// and walks the result (bounded by maxTransportProbe) until it finds two
-// requests whose GetTransportObjects results are both non-empty and differ
-// from each other. It t.Skips with a clear reason if fewer than two such
-// requests exist among the probed prefix — this is a live-data dependent
-// selection, not an assumption, per the Task 8 brief.
+// and walks the result (bounded by maxTransportProbe), grouping every
+// non-empty GetTransportObjects result by its objectSetKey fingerprint.
+//
+// Two outcomes are NOT the same thing, and this function tells them apart
+// rather than collapsing both into a skip:
+//
+//   - Sparse data: fewer than two distinct non-empty fingerprints turn up
+//     among the probed prefix (e.g. only one modifiable request has any
+//     objects at all, or the rest happened to be empty). This is a property
+//     of the target system's current data, not a bug — t.Skip with a clear
+//     reason.
+//   - A broken filter: two or more DIFFERENT request numbers return the
+//     identical non-empty fingerprint. This is the exact shape of the
+//     adtler#125 regression — GetTransportObjects ignoring which transport
+//     number it was asked for and returning the same body regardless — and
+//     must never be reported as "ok" via a skip. t.Fatal, naming the
+//     offending request numbers and the shared fingerprint.
+//
+// On success it returns two requests whose object sets are guaranteed to
+// differ by construction (they are the first two distinct fingerprints
+// found), so callers do not need to re-verify that themselves.
 func selectTwoDifferingTransports(t *testing.T, ctx context.Context, client adt.Client) (req1, req2 adt.TransportRequest, objs1, objs2 []adt.TransportObject) {
 	t.Helper()
 
@@ -60,7 +76,11 @@ func selectTwoDifferingTransports(t *testing.T, ctx context.Context, client adt.
 		req     adt.TransportRequest
 		objects []adt.TransportObject
 	}
-	var found []candidate
+	// byKey groups every non-empty candidate probed so far by its
+	// object-set fingerprint. A key claimed by two or more candidates is
+	// the failure signature described above, not a "duplicate to skip".
+	byKey := make(map[string][]candidate)
+	var order []string // fingerprints in first-seen order
 
 	probeLimit := len(requests)
 	if probeLimit > maxTransportProbe {
@@ -77,34 +97,62 @@ func selectTwoDifferingTransports(t *testing.T, ctx context.Context, client adt.
 			continue
 		}
 		key := objectSetKey(objects)
-		isDup := false
-		for _, c := range found {
-			if objectSetKey(c.objects) == key {
-				isDup = true
-				break
-			}
+		if _, seen := byKey[key]; !seen {
+			order = append(order, key)
 		}
-		if isDup {
-			continue
-		}
-		found = append(found, candidate{req: r, objects: objects})
-		if len(found) == 2 {
-			return found[0].req, found[1].req, found[0].objects, found[1].objects
+		byKey[key] = append(byKey[key], candidate{req: r, objects: objects})
+
+		// Stop once two DISTINCT fingerprints exist — that's all this test
+		// needs. A duplicate landing on an already-seen key does not count
+		// toward this and keeps the loop going (see the fatal check below,
+		// which needs to see every duplicate, not just the first).
+		if len(order) >= 2 {
+			break
 		}
 	}
 
-	t.Skipf("fewer than two modifiable requests with differing, non-empty object lists among the first %d of %d modifiable requests", probeLimit, len(requests))
-	return adt.TransportRequest{}, adt.TransportRequest{}, nil, nil
+	for _, key := range order {
+		group := byKey[key]
+		if len(group) < 2 {
+			continue
+		}
+		numbers := make([]string, len(group))
+		for i, c := range group {
+			numbers[i] = c.req.Number
+		}
+		t.Fatalf("GetTransportObjects returned the identical non-empty object set (fingerprint %q) for %d different requests (%s) — "+
+			"this is the adtler#125 regression shape (the object list does not depend on which transport number was requested), not sparse test data",
+			key, len(group), strings.Join(numbers, ", "))
+	}
+
+	if len(order) < 2 {
+		t.Skipf("fewer than two modifiable requests with differing, non-empty object lists among the first %d of %d modifiable requests", probeLimit, len(requests))
+	}
+
+	c1, c2 := byKey[order[0]][0], byKey[order[1]][0]
+	return c1.req, c2.req, c1.objects, c2.objects
 }
 
 // TestGetTransportObjects_TwoRequestsDiffer_Integration is the regression
-// guard for adtler#125 on R/3: it asserts that GetTransportObjects, run
-// against two different modifiable requests on the same system, returns
-// results that actually differ per request rather than a stuck/cached/
-// misparsed identical list. On S/4 the request may resolve via the E070
-// fallback (adt/transport.go:444-447 in GetTransportRequests) and hand back
-// requests with empty object lists, which selectTwoDifferingTransports
-// accounts for by skipping empty results rather than failing on them.
+// guard for adtler#125 on R/3: GetTransportObjects, run against two
+// different modifiable requests on the same system, must return results
+// that actually depend on the request number rather than a
+// stuck/cached/misparsed identical list.
+//
+// What this test enforces, precisely: selectTwoDifferingTransports either
+// (a) returns two requests it has already confirmed have distinct,
+// non-empty object sets — in which case there is nothing left to
+// re-verify here, so this test body does not re-check that equality, or
+// (b) fails the test itself (t.Fatal) if it instead finds several
+// different request numbers collapsing onto the same non-empty
+// fingerprint — the regression's actual shape — or (c) skips if the
+// system's current data is simply too sparse to tell (fewer than two
+// non-empty results at all). See selectTwoDifferingTransports' doc comment
+// for why those three cases are kept distinct rather than folded into one
+// skip. On S/4 a request may resolve via the E070 fallback
+// (adt/transport.go:444-447 in GetTransportRequests) and hand back an
+// empty object list, which selectTwoDifferingTransports treats as sparse
+// data (case c), not as a fingerprint collision.
 func TestGetTransportObjects_TwoRequestsDiffer_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
@@ -121,11 +169,6 @@ func TestGetTransportObjects_TwoRequestsDiffer_Integration(t *testing.T) {
 			for _, o := range objs2 {
 				t.Logf("  [%s] pgmid=%s type=%s name=%s wbtype=%s pos=%s task=%s",
 					req2.Number, o.PgmID, o.Type, o.Name, o.WBType, o.Position, o.Task)
-			}
-
-			if objectSetKey(objs1) == objectSetKey(objs2) {
-				t.Fatalf("%s: requests %s and %s were selected as differing but compare equal — selection bug",
-					sys.Name, req1.Number, req2.Number)
 			}
 		})
 	}
