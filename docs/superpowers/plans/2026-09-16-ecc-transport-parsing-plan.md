@@ -144,6 +144,12 @@ it has not been determined.
 
 Delete the probe before committing. Commit only the fixture file.
 
+Fixtures that cannot be captured are hand-built; say so in a comment on each such constant,
+naming what was inferred. Task 1 recorded two: `eccCustomizingXML`'s customizing-group
+wrapper is inferred by symmetry with the captured workbench group (the probed worklist held
+no customizing entries), and `s4ObjectAtBothLevelsXML` is constructed because no live
+response showed one object at both levels.
+
 **Acceptance:** the constants exist and each is well-formed XML; and assertions prove the
 structural properties the later tasks rely on, not merely well-formedness —
 `eccWorklistXML` contains at least two distinct request numbers and **zero** occurrences of
@@ -154,6 +160,29 @@ contains the same object at both levels. `go test ./...` passes.
 ## Task 2 — Filter the object list by transport number, and bind the whole document
 
 Three changes in one task, because they touch the same struct and the same walk.
+
+**(a0) Bind `<tm:all_objects>`.** Task 1's capture established that a real S/4 response
+nests request-level objects one level deeper than the current structs assume:
+
+```
+<tm:request>
+  <tm:all_objects>
+    <tm:abap_object/>      <- request-level objects, WRAPPED
+  </tm:all_objects>
+  <tm:task>
+    <tm:abap_object/>      <- task-level objects, direct children
+  </tm:task>
+</tm:request>
+```
+
+`xmlRequest` (`adt/transport.go:742-746`) binds `xml:"abap_object"` as a direct child, so
+**request-level objects are silently dropped on S/4 today** — which is the state a request
+is left in by sort-and-compress, and the state of a released request. Task-level objects
+parse because they really are direct children of `<tm:task>`, which is why the defect has
+gone unnoticed. Bind the wrapper at both levels (accept objects either wrapped or direct,
+at request and at task level) so neither shape is lost. This is a live bug outside the
+scope adtler#125 describes; fixing it here is deliberate, and it must be called out in the
+commit message so it is not mistaken for a refactor.
 
 **(a) Hoist the document struct.** `parseTransportTaskNumbers` (`adt/transport.go:691-700`)
 and `parseTransportObjectsXML` (`:749-758`) each declare their own anonymous struct for the
@@ -306,17 +335,31 @@ is unprefixed; `encoding/xml` matches on local name, so namespace prefixes are i
 here) and derive whether the server offers
 `http://www.sap.com/cts/relations/removeobject`.
 
-**The derivation rule, stated exactly, because the obvious rule is wrong:** the relation is
-emitted **per `abap_object`**, not once per request. So:
+**The derivation rule, stated exactly, because two obvious rules are both wrong.** Task 1
+measured the real relation sets, and they do not differ merely by level — ECC does not emit
+the S/4 action relations at all, at any level. Its `abap_object` elements are self-closing
+and carry no links; its four relations (`consistencycheck`, `releasejobs`, `modify`,
+`newtask`) sit on requests and tasks and are administrative. So "an object with links but no
+`removeobject`" never matches on ECC, and plain "no `removeobject` anywhere" cannot tell ECC
+apart from an S/4 request that happens to hold no objects.
 
-- A response containing **at least one `abap_object` that carries atom links**, none of
-  which is `removeobject` → **unsupported**.
-- A response containing **no object-level atom links** — no objects at all, or objects
-  without links → **unknown**.
+The discriminator that does work, from the captured fixtures, is `addobject` — present on
+every S/4 response including the one with no objects, absent from every ECC response:
 
-A rule that keys on request-level relations would classify an S/4 request with zero recorded
-objects as unsupported and cache that for the life of the client, blocking removal on a
-system that supports it. `s4RequestNoObjectsXML` exists to catch that.
+- Response advertises `removeobject` **or** `addobject` (at any level) → **supported**.
+- Response advertises at least one atom relation but neither of those → **unsupported**.
+- Response advertises no atom relations at all → **unknown**.
+
+Checked against the fixtures: `eccWorklistXML` (consistencycheck, releasejobs, modify,
+newtask) → unsupported; `eccCustomizingXML` (modify) → unsupported; `s4SingleRequestXML` and
+`s4ObjectAtBothLevelsXML` (both markers) → supported; `s4RequestNoObjectsXML` (addobject, no
+removeobject) → supported. Assert all five.
+
+`addobject` is a proxy for the post-1808 action set rather than a direct statement about
+removal. If some release were to advertise `addobject` without `removeobject`, the rule says
+supported, the gate fails open, and the caller gets today's behaviour — the safe direction,
+consistent with Task 7's fail-open rule. Say so in a comment on the function so the next
+reader knows it is a deliberate proxy.
 
 Store the result on `httpClient` as a tri-state (unknown / supported / unsupported), guarded
 by the existing mutex, in the spirit of the cached discovery document. The capability is a
