@@ -205,6 +205,53 @@ const s4ObjectAtBothLevelsXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`</tm:request>` +
 	`</tm:root>`
 
+// s4ObjectDivergentPositionAndTaskXML is hand-built (per task-3 fix round 1
+// review feedback on 2026-09-16 — see task-3-report.md's fix-report section)
+// from s4ObjectAtBothLevelsXML's shape. In every other fixture in this file
+// that duplicates an object across levels, every occurrence carries the
+// identical tm:position (and, where a task is involved, the same single
+// task), so a test asserting "kept the first-seen value" cannot actually
+// distinguish that from "last occurrence overwrote the whole entry" or "last
+// task wins" — the values just happen to agree either way. This fixture
+// breaks that coincidence on purpose: the bare, direct-child-of-<tm:request>
+// occurrence of R3TR/DEVC/Z_WINBACK carries position 000001 and no task; it
+// recurs under two different tasks (S4UK904439 at position 000002, then the
+// hand-added S4UK904440 at position 000003). A correct parse keeps position
+// 000001 and attributes the object to S4UK904439 — the first task to record
+// it — never to S4UK904440.
+const s4ObjectDivergentPositionAndTaskXML = `<?xml version="1.0" encoding="utf-8"?>` +
+	`<tm:root tm:object_type="R" adtcore:responsible="MANNN" adtcore:name="S4UK904438" adtcore:type="RQRQ" adtcore:changedAt="2026-09-11T16:31:58Z" adtcore:changedBy="MANNN" adtcore:description="dummy transportschicht" xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core">` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904438" rel="http://www.sap.com/cts/relations/adturi" type="application/vnd.sap.adt.transportrequests.v1+xml" title="Transport Organizer ADT URI" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	`<tm:request tm:number="S4UK904438" tm:parent="" tm:owner="MANNN" tm:desc="dummy transportschicht" tm:type="K" tm:status="D" tm:status_text="Modifiable" tm:target="" tm:target_desc="No target system" tm:cts_project="" tm:cts_project_desc="" tm:source_client="100" tm:lastchanged_timestamp="20260911163158" tm:uri="/sap/bc/adt/cts/transportrequests/S4UK904438">` +
+	`<tm:long_desc/>` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904438" rel="http://www.sap.com/cts/relations/modify" type="application/xml" title="Transport Organizer Request/Modify" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	// Bare, direct child of <tm:request>: the first-seen occurrence — position
+	// 000001, no task.
+	`<tm:abap_object tm:pgmid="R3TR" tm:type="DEVC" tm:name="Z_WINBACK" tm:wbtype="DEVC/K" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=Z_WINBACK&amp;obj_wbtype=DEVC&amp;pgmid=R3TR" tm:obj_info="Package" tm:obj_desc="Winback - Entwicklungen zur Kundenrückgewinnung" tm:position="000001" tm:lock_status="X" tm:img_activity="">` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904439" rel="http://www.sap.com/cts/relations/removeobject" type="application/xml" title="Transport Organizer Remove Locked Object" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	`</tm:abap_object>` +
+	// First task: the same object again, at a *different* position (000002)
+	// from the request-level occurrence above.
+	`<tm:task tm:number="S4UK904439" tm:parent="S4UK904438" tm:owner="MANNN" tm:desc="dummy transportschicht" tm:type="Development/Correction" tm:status="D" tm:status_text="Modifiable" tm:target="" tm:target_desc="" tm:cts_project="" tm:cts_project_desc="" tm:source_client="100" tm:lastchanged_timestamp="20260911163202" tm:uri="/sap/bc/adt/cts/transportrequests/S4UK904439">` +
+	`<tm:long_desc/>` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904439" rel="http://www.sap.com/cts/relations/modify" type="application/xml" title="Transport Organizer Request/Modify" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	`<tm:abap_object tm:pgmid="R3TR" tm:type="DEVC" tm:name="Z_WINBACK" tm:wbtype="DEVC/K" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=Z_WINBACK&amp;obj_wbtype=DEVC&amp;pgmid=R3TR" tm:obj_info="Package" tm:obj_desc="Winback - Entwicklungen zur Kundenrückgewinnung" tm:position="000002" tm:lock_status="X" tm:img_activity="">` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904439" rel="http://www.sap.com/cts/relations/removeobject" type="application/xml" title="Transport Organizer Remove Locked Object" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	`</tm:abap_object>` +
+	`</tm:task>` +
+	// Second task: hand-added. The same object once more, under a different
+	// task number (S4UK904440) and yet another position (000003) — no other
+	// fixture in this file attributes one object to two different tasks.
+	`<tm:task tm:number="S4UK904440" tm:parent="S4UK904438" tm:owner="MANNN" tm:desc="dummy transportschicht" tm:type="Development/Correction" tm:status="D" tm:status_text="Modifiable" tm:target="" tm:target_desc="" tm:cts_project="" tm:cts_project_desc="" tm:source_client="100" tm:lastchanged_timestamp="20260911163203" tm:uri="/sap/bc/adt/cts/transportrequests/S4UK904440">` +
+	`<tm:long_desc/>` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904440" rel="http://www.sap.com/cts/relations/modify" type="application/xml" title="Transport Organizer Request/Modify" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	`<tm:abap_object tm:pgmid="R3TR" tm:type="DEVC" tm:name="Z_WINBACK" tm:wbtype="DEVC/K" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=Z_WINBACK&amp;obj_wbtype=DEVC&amp;pgmid=R3TR" tm:obj_info="Package" tm:obj_desc="Winback - Entwicklungen zur Kundenrückgewinnung" tm:position="000003" tm:lock_status="X" tm:img_activity="">` +
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904440" rel="http://www.sap.com/cts/relations/removeobject" type="application/xml" title="Transport Organizer Remove Locked Object" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
+	`</tm:abap_object>` +
+	`</tm:task>` +
+	`</tm:request>` +
+	`</tm:root>`
+
 // assertWellFormed fails the test if data does not parse as XML.
 func assertWellFormed(t *testing.T, name, data string) {
 	t.Helper()
@@ -216,12 +263,13 @@ func assertWellFormed(t *testing.T, name, data string) {
 
 func TestTransportECCFixtures_WellFormed(t *testing.T) {
 	fixtures := map[string]string{
-		"eccWorklistXML":            eccWorklistXML,
-		"eccWorklistEmptyNumberXML": eccWorklistEmptyNumberXML,
-		"eccCustomizingXML":         eccCustomizingXML,
-		"s4SingleRequestXML":        s4SingleRequestXML,
-		"s4RequestNoObjectsXML":     s4RequestNoObjectsXML,
-		"s4ObjectAtBothLevelsXML":   s4ObjectAtBothLevelsXML,
+		"eccWorklistXML":                      eccWorklistXML,
+		"eccWorklistEmptyNumberXML":           eccWorklistEmptyNumberXML,
+		"eccCustomizingXML":                   eccCustomizingXML,
+		"s4SingleRequestXML":                  s4SingleRequestXML,
+		"s4RequestNoObjectsXML":               s4RequestNoObjectsXML,
+		"s4ObjectAtBothLevelsXML":             s4ObjectAtBothLevelsXML,
+		"s4ObjectDivergentPositionAndTaskXML": s4ObjectDivergentPositionAndTaskXML,
 	}
 	for name, data := range fixtures {
 		t.Run(name, func(t *testing.T) {

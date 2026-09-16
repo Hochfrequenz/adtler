@@ -18,6 +18,12 @@ const (
 	eccLockReproObjName    = "ZCL_LOCKREPRO_2"
 )
 
+// s4WinbackFirstTaskNumber is the first task number recording
+// R3TR/DEVC/Z_WINBACK in s4SingleRequestXML, s4ObjectAtBothLevelsXML, and
+// s4ObjectDivergentPositionAndTaskXML — referenced repeatedly across the
+// dedup/attribution tests below.
+const s4WinbackFirstTaskNumber = "S4UK904439"
+
 // newFixtureClient returns a client whose transportrequests/<transport>
 // endpoint always answers with body, regardless of which transport number is
 // requested — mirroring the ECC worklist bug where a GET for one transport
@@ -244,8 +250,8 @@ func TestGetTransportObjects_S4SingleRequest_DedupUpgradesTask(t *testing.T) {
 	if len(objs) != 1 {
 		t.Fatalf("got %d objects, want 1 (deduped): %+v", len(objs), objs)
 	}
-	if objs[0].Task != "S4UK904439" {
-		t.Errorf("got Task %q, want S4UK904439 (upgraded from the task-level duplicate)", objs[0].Task)
+	if objs[0].Task != s4WinbackFirstTaskNumber {
+		t.Errorf("got Task %q, want %s (upgraded from the task-level duplicate)", objs[0].Task, s4WinbackFirstTaskNumber)
 	}
 }
 
@@ -269,10 +275,56 @@ func TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPo
 	if got.Name != "Z_WINBACK" || got.Type != "DEVC" || got.PgmID != "R3TR" {
 		t.Errorf("got %+v, want R3TR/DEVC/Z_WINBACK", got)
 	}
-	if got.Task != "S4UK904439" {
-		t.Errorf("got Task %q, want S4UK904439", got.Task)
+	if got.Task != s4WinbackFirstTaskNumber {
+		t.Errorf("got Task %q, want %s", got.Task, s4WinbackFirstTaskNumber)
 	}
 	if got.Position != "000001" {
 		t.Errorf("got Position %q, want the first-seen position 000001", got.Position)
+	}
+}
+
+// TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstSeenPosition uses
+// s4ObjectDivergentPositionAndTaskXML, where the duplicated object carries a
+// different tm:position at every occurrence (000001 bare-request, 000002
+// under the first task, 000003 under the second task). Unlike
+// s4ObjectAtBothLevelsXML (every occurrence there shares the same position,
+// so it cannot tell "kept first-seen" apart from "last occurrence overwrote
+// the whole entry"), this fixture actually discriminates: only keeping the
+// first-seen Position produces 000001 here.
+func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstSeenPosition(t *testing.T) {
+	client := newFixtureClient(t, s4ObjectDivergentPositionAndTaskXML)
+
+	objs, err := client.GetTransportObjects(context.Background(), "S4UK904438")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("got %d objects, want exactly 1 (deduped across all three occurrences): %+v", len(objs), objs)
+	}
+	if got := objs[0].Position; got != "000001" {
+		t.Errorf("got Position %q, want the first-seen (bare, request-level) position 000001, not a later occurrence's 000002/000003", got)
+	}
+}
+
+// TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstAttributedTask
+// uses the same fixture to pin the other half of the upgrade rule: once an
+// entry has been attributed to a task (S4UK904439, the first task to record
+// the object), a second, different task recording the same object
+// (S4UK904440) must not overwrite that attribution. No other fixture in this
+// package attributes one object to two different tasks, so nothing else
+// catches an unconditional "last task wins" simplification of the
+// Task=="" upgrade guard.
+func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstAttributedTask(t *testing.T) {
+	client := newFixtureClient(t, s4ObjectDivergentPositionAndTaskXML)
+
+	objs, err := client.GetTransportObjects(context.Background(), "S4UK904438")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("got %d objects, want exactly 1 (deduped across all three occurrences): %+v", len(objs), objs)
+	}
+	if got := objs[0].Task; got != s4WinbackFirstTaskNumber {
+		t.Errorf("got Task %q, want the first task to record the object (%s), not the second (S4UK904440)", got, s4WinbackFirstTaskNumber)
 	}
 }
