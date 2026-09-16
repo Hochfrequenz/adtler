@@ -184,6 +184,81 @@ func TestGetTransportObjects_AbsentFromWorklist_ResolvesViaE071(t *testing.T) {
 	if !strings.Contains(queries[1], "ORDER BY TRKORR, AS4POS") {
 		t.Errorf("E071 query should order by TRKORR, AS4POS: %q", queries[1])
 	}
+	// The release-marker exclusion must live in the statement, where it is
+	// visible, and must cover the whole TRKORR disjunction rather than only
+	// its last alternative.
+	if !strings.Contains(queries[1], "AND PGMID <> 'CORR'") {
+		t.Errorf("E071 query should exclude release markers: %q", queries[1])
+	}
+	if !strings.Contains(queries[1], "WHERE ( TRKORR = '") || !strings.Contains(queries[1], "' ) AND PGMID") {
+		t.Errorf("E071 query should parenthesise the TRKORR disjunction: %q", queries[1])
+	}
+	// The data preview endpoint rejects a descending sort, so neither query
+	// may acquire one.
+	for i, sql := range queries {
+		if strings.Contains(sql, "DESC") {
+			t.Errorf("query %d uses DESC, which the data preview endpoint rejects: %q", i, sql)
+		}
+	}
+}
+
+// TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow reproduces the
+// shape a genuinely released request has in E071: its tasks are dissolved, so
+// the E070 task query returns nothing and every object row sits on the request
+// itself — including a PGMID CORR / OBJECT RELE release marker whose OBJ_NAME
+// is a packed audit string rather than an object name. That row must never
+// reach a caller. The query excludes it; this test additionally proves the
+// result is clean even when a server hands it over regardless.
+func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T) {
+	const releasedNumber = "E20K928233"
+
+	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			// A released request has no tasks left.
+			return http.StatusOK, dataPreviewXML([]string{"TRKORR"}, nil)
+		}
+		return http.StatusOK, dataPreviewXML(
+			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
+			[][]string{
+				{releasedNumber, "000001", "CORR", "RELE", "E20K928234 20160702 143007 U13409"},
+				{releasedNumber, "000002", "LIMU", "METH", "ZCL_EDM_MIG_GINF              GET_GT_DATA"},
+			},
+		)
+	})
+
+	objs, err := client.GetTransportObjects(context.Background(), releasedNumber)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, o := range objs {
+		if o.PgmID == "CORR" || o.Type == "RELE" {
+			t.Errorf("release marker leaked into the object list: %+v", o)
+		}
+	}
+	if len(objs) != 1 {
+		t.Fatalf("got %d objects, want only the LIMU METH row: %+v", len(objs), objs)
+	}
+	// E071's sub-object granularity is reported as-is, not folded up to the
+	// R3TR entry the ADT path would show.
+	want := adt.TransportObject{
+		PgmID:    "LIMU",
+		Type:     "METH",
+		Name:     "ZCL_EDM_MIG_GINF              GET_GT_DATA",
+		Position: "000002",
+	}
+	if objs[0] != want {
+		t.Errorf("got %+v, want %+v", objs[0], want)
+	}
+
+	queries := probe.all()
+	if len(queries) != 2 {
+		t.Fatalf("expected 2 queries, got %v", queries)
+	}
+	// A task-less request addresses only itself, and the parentheses must
+	// still be there so the exclusion binds correctly.
+	if !strings.Contains(queries[1], "WHERE ( TRKORR = '"+releasedNumber+"' ) AND PGMID <> 'CORR'") {
+		t.Errorf("E071 query for a task-less request: %q", queries[1])
+	}
 }
 
 // TestGetTransportObjects_NamespacedNumber_ReachesTheQuery pins that a

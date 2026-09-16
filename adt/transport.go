@@ -708,23 +708,52 @@ func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber st
 // a validated value cannot terminate or escape the literal it goes into.
 var transportNumberRe = regexp.MustCompile(`^[A-Za-z0-9_/.\-]{1,20}$`)
 
+// pgmIDReleaseMarker is the E071 PGMID of a release marker row (paired with
+// OBJECT "RELE"). Such a row is bookkeeping, not a repository object: its
+// OBJ_NAME is a packed audit string like "E20K928234 20160702 143007 U13409".
+// Released requests always carry one, so the E071 fallback must not hand it
+// to callers as if it were transported content.
+const pgmIDReleaseMarker = "CORR"
+
 // getTransportObjectsViaQuery reads a transport request's objects straight
 // out of E071 via the ADT data preview endpoint. It is the fallback for
 // GetTransportObjects when the transport-organizer response does not contain
 // the addressed request — on ECC that is every released request, and
 // RollbackTransport exists precisely for released, imported transports.
 //
-// Two queries, because a request's object entries live on its task rows as
-// well as on its own: E070 yields the task numbers, then one E071 query
-// covers the request and all of its tasks. Both are single-table (the data
-// preview endpoint rejects JOINs on some S/4HANA releases) and address their
-// result columns by name. The second query combines the numbers with OR
-// rather than IN, which is not verified as accepted on both system families.
+// Two queries, because a modifiable request's object entries live on its task
+// rows as well as on its own: E070 yields the task numbers, then one E071
+// query covers the request and all of its tasks. A released request — the
+// main case here — usually has no tasks left at all: releasing dissolves them
+// and compresses their entries onto the request itself, so the E070 query
+// legitimately returns zero rows and the E071 query addresses the request
+// alone. Both are single-table (the data preview endpoint rejects JOINs on
+// some S/4HANA releases) and address their result columns by name. The second
+// query combines the numbers with OR rather than IN, which is not verified as
+// accepted on both system families. Neither query uses ORDER BY ... DESC: the
+// data preview endpoint rejects a descending sort ("Die Elemente der ORDER
+// BY-Liste müssen mit Kommata getrennt werden").
 //
 // Each row maps to a TransportObject with the row's own TRKORR as Task —
 // except for rows sitting on the request itself, which stay Task-less, the
-// same way a request-level object does on the ADT path. WBType has no E071
-// column and is always empty here.
+// same way a request-level object does on the ADT path. On a released request
+// that is nearly every row. WBType has no E071 column and is always empty
+// here.
+//
+// Two properties of E071 that callers must know, neither of which is
+// normalised away here:
+//
+//   - E071 records more than repository objects. A released request carries a
+//     release marker row (PGMID CORR, OBJECT RELE) whose OBJ_NAME is a packed
+//     audit string such as "E20K928234 20160702 143007 U13409", not an object
+//     name. PGMID CORR is excluded in the query itself, so the exclusion is
+//     visible in the statement rather than buried in a post-filter; the row
+//     loop drops any that survive anyway, as a guard against a server that
+//     ignores the predicate.
+//   - E071 records sub-object granularity. A single method arrives as its own
+//     LIMU METH row, where the ADT XML path reports the owning class once at
+//     R3TR granularity. The two paths therefore do not return identical
+//     shapes for the same transport, and this one is not folded up to match.
 //
 // transportNumber is validated against transportNumberRe before it is
 // interpolated, and so is every task number the first query returns.
@@ -742,8 +771,13 @@ func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportN
 	for _, n := range numbers {
 		where = append(where, "TRKORR = '"+n+"'")
 	}
-	query := "SELECT TRKORR, AS4POS, PGMID, OBJECT, OBJ_NAME FROM E071 WHERE " +
-		strings.Join(where, " OR ") + " ORDER BY TRKORR, AS4POS"
+	// The TRKORR disjunction is parenthesised so the PGMID exclusion applies
+	// to all of it and not just the last alternative. Spaces around the
+	// parentheses keep the statement acceptable to Open SQL's stricter
+	// tokenizer.
+	query := "SELECT TRKORR, AS4POS, PGMID, OBJECT, OBJ_NAME FROM E071 WHERE ( " +
+		strings.Join(where, " OR ") + " ) AND PGMID <> '" + pgmIDReleaseMarker + "'" +
+		" ORDER BY TRKORR, AS4POS"
 
 	qr, err := c.RunQuery(ctx, query, 5000)
 	if err != nil {
@@ -757,6 +791,12 @@ func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportN
 	// Same deduper, identity and upgrade rule as the ADT path, so both agree.
 	dedup := newTransportObjectDeduper()
 	for _, row := range qr.Rows {
+		// The query already excludes release markers; this repeats the rule
+		// only so a server that ignores the predicate cannot put a packed
+		// audit string into a caller's object list.
+		if strings.EqualFold(queryCell(row, idx["PGMID"]), pgmIDReleaseMarker) {
+			continue
+		}
 		task := queryCell(row, idx["TRKORR"])
 		if strings.EqualFold(task, transportNumber) {
 			task = "" // a row on the request itself is not task-attributed
