@@ -664,3 +664,87 @@ func TestSetSource_NoRetryOnBare403(t *testing.T) {
 		t.Error("bare 403 (empty Type) wrongly triggered the query-delivery retry")
 	}
 }
+
+// aibap.mcp#494: on the reporter's ECC (NetWeaver 7.5x) system, header
+// delivery of the lock handle is rejected outright with 400
+// ExceptionParameterNotFound ("Parameter lockHandle could not be found") —
+// not the 423/403 signals the retry gate already recognises — so the write
+// never falls back to query-param delivery and every source write fails.
+// Live-probed on our own R/3 (hfq, hfq_proxy) and S/4 (s4u) systems: none of
+// them reproduce this 400, confirming it's a system/SP-specific ADT handler
+// difference outside our landscape, not something our existing fixtures
+// cover. Reproduced here as a synthetic fixture matching the reporter's
+// exact SAP response body.
+func TestSetSource_RetriesQueryDeliveryOnLockHandleParameterNotFound(t *testing.T) {
+	const progURI = "/sap/bc/adt/programs/programs/z_lockhandle_494"
+	var attempts int
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		attempts++
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+			w.Header().Set("ETag", `"prog-new"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Header-delivery attempt → 400 "Parameter lockHandle could not be found".
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionParameterNotFound"/><message lang="EN">Parameter lockHandle could not be found</message></exc:exception>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	etag, err := client.SetSource(context.Background(), progURI, "REPORT z_lockhandle_494.", "LOCKH1", "TR1", `"etag-old"`)
+	if err != nil {
+		t.Fatalf("SetSource should have retried with query delivery and succeeded: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("expected a query-delivery retry (2 write attempts), got %d", attempts)
+	}
+	if !sawQueryHandle {
+		t.Error("retry did not deliver the lock handle as a ?lockHandle= query parameter")
+	}
+	if etag != `"prog-new"` {
+		t.Errorf("returned ETag: got %q, want %q", etag, `"prog-new"`)
+	}
+}
+
+// A 400 ExceptionParameterNotFound naming a DIFFERENT parameter (the classic
+// "missing transport" case, #378 finding 1) must NOT trigger the
+// lock-handle-delivery retry — retrying with query-param delivery would not
+// fix a missing corrNr and would mask the real error behind a misleading
+// second failure.
+func TestSetSource_NoRetryOnParameterNotFoundForOtherParam(t *testing.T) {
+	const progURI = "/sap/bc/adt/programs/programs/z_lockhandle_494_other"
+	var sawQueryHandle bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Query().Get("lockHandle") != "" {
+			sawQueryHandle = true
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionParameterNotFound"/><message lang="EN">Parameter corrNr could not be found</message></exc:exception>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	if _, err := client.SetSource(context.Background(), progURI, "REPORT z.", "LOCKH1", "", `"e"`); err == nil {
+		t.Fatal("expected the 400 to surface")
+	}
+	if sawQueryHandle {
+		t.Error("query-delivery retry fired for an unrelated missing parameter — must not happen")
+	}
+}
