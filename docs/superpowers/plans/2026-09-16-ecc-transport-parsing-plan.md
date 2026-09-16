@@ -31,9 +31,9 @@ Two measured properties of the ECC worklist shape the plan and are easy to get w
 - It is **not** user-scoped — a measurement on HFQ returned 8 requests across four
   different owners.
 - It **is** modifiable-scoped — all 8 were status `D`. A released request is not in the
-  body at all. Task 2 turns "absent from the body" into an error, so released transports
-  on ECC become a diagnosable failure rather than a silently wrong answer. That is an
-  intended, stated limitation of this plan; see Task 2.
+  body at all. Task 2 turns "absent from the body" into an error, and Task 4 then resolves
+  that case through an E071 data-preview query — which is what keeps `RollbackTransport`
+  working on ECC, and in fact makes it work there for the first time.
 
 Three defects follow from the response shape:
 
@@ -132,14 +132,14 @@ depend on, and add them as Go string constants in a new file `adt/transport_ecc_
 - `s4SingleRequestXML` — the single `<tm:request>` shape with tasks, populated `position`
   attributes, and per-object atom links including the `removeobject` relation.
 - `s4RequestNoObjectsXML` — an S/4 request holding **no** `abap_object` at all, keeping the
-  request-level atom links. Task 5's capability rule is defined against this; getting it
+  request-level atom links. Task 6's capability rule is defined against this; getting it
   wrong makes the gate block a system that supports removal.
 - `s4ObjectAtBothLevelsXML` — an S/4 variant in which one object appears **both** directly
   under `<request>` and under a `<task>`, same pgmid/type/name. Hand-built is expected;
   Task 3's dedup rule is defined by it.
 
 While reducing the captures, **record in the task report whether ECC emits its four atom
-relations at the `<abap_object>` level or at the `<request>` level.** Task 5 needs this and
+relations at the `<abap_object>` level or at the `<request>` level.** Task 6 needs this and
 it has not been determined.
 
 Delete the probe before committing. Commit only the fixture file.
@@ -158,7 +158,7 @@ Three changes in one task, because they touch the same struct and the same walk.
 **(a) Hoist the document struct.** `parseTransportTaskNumbers` (`adt/transport.go:691-700`)
 and `parseTransportObjectsXML` (`:749-758`) each declare their own anonymous struct for the
 same document. Hoist one named type both use. Extend `xmlRequest` (`:742-746`) with the
-`owner`, `desc` and `status` attributes, which Task 4 needs. Bind the **`customizing` group
+`owner`, `desc` and `status` attributes, which Task 5 needs. Bind the **`customizing` group
 as well as `workbench`** — today only `workbench` is bound, so a customizing request's
 objects are dropped; `GetTransportRequests` (`:426-430`) already walks both groups and is the
 precedent.
@@ -193,10 +193,10 @@ Update `GetTransportObjects` (`:649-655`) to pass its `transportNumber` through.
 `parseTransportTaskNumbers` onto the same filter rule and the same absent/empty distinction
 while you are in there, so the three parsers on this body stop disagreeing.
 
-**Known consequence, accepted:** `RollbackTransport` (`adt/rollback.go:43`) calls
-`GetTransportObjects` and is designed for released, imported transports, so on ECC it now
-returns this error instead of a wrong object list. An E071-based fallback (mirroring
-`getTransportRequestsViaQuery`, `adt/transport.go:460`) is **out of scope** for this plan.
+**This error is not the final behaviour.** `RollbackTransport` (`adt/rollback.go:43`) calls
+`GetTransportObjects` and is built for released, imported transports, which on ECC are never
+in the worklist. Task 4 adds an E071 fallback so that case starts working instead of
+erroring. Task 2 stops at returning the error; do not build the fallback here.
 
 **Acceptance:** over `eccWorklistXML`, asking for each of the two request numbers returns
 only that request's objects and the two results differ; a number absent from the body
@@ -226,7 +226,65 @@ over `s4ObjectAtBothLevelsXML`, the doubly recorded object appears exactly once,
 task number, and keeps its first-seen position; over `eccWorklistXML`, attribution survives
 Task 2's filtering. `go test ./...` passes.
 
-## Task 4 — Make `parseTransportInfo` handle the worklist shape
+## Task 4 — E071 fallback so a transport absent from the worklist still resolves
+
+Task 2 turns "not in the worklist" into an error. On ECC that is every released request,
+and `RollbackTransport` exists precisely for released, imported transports — so without
+this task the plan leaves that case erroring instead of working. It does not work today
+either: the worklist holds only modifiable requests, so rollback of a released ECC
+transport currently finds none of its objects, restores nothing, and reports a list of
+failures. This task is what makes it work.
+
+Add an unexported `getTransportObjectsViaQuery(ctx, transportNumber)` in `adt/transport.go`,
+modelled closely on `getTransportRequestsViaQuery` (`:460-520`) — same `c.RunQuery` data-preview
+route, same single-table discipline (the endpoint rejects JOINs on some S/4 releases), same
+column-index lookup by name rather than by position.
+
+**Input validation is mandatory and is the reason to copy that function rather than invent
+one.** It validates its inputs against `transportUserRe` / `transportStatusRe` before
+interpolating them into the query string. The transport number goes into a `WHERE` clause the
+same way, so validate it against an equivalent anchored pattern and return an error rather
+than querying when it does not match. A transport number can legitimately contain `/`
+(namespaced requests such as `/ACCGO/ACMS41709FP00`), so the pattern must admit that without
+admitting quotes.
+
+Two queries, because a request's object entries live on its task rows as well as its own:
+
+1. `SELECT TRKORR FROM E070 WHERE STRKORR = '<number>'` — the task numbers.
+2. `SELECT TRKORR, AS4POS, PGMID, OBJECT, OBJ_NAME FROM E071 WHERE TRKORR = '<number>'`,
+   plus the tasks, `ORDER BY TRKORR, AS4POS`. Combine with `OR` rather than `IN` unless you
+   verify the data-preview endpoint accepts `IN` on both systems.
+
+Map each row to a `TransportObject`: `PGMID`→`PgmID`, `OBJECT`→`Type`, `OBJ_NAME`→`Name`,
+`AS4POS`→`Position`, and **the row's own `TRKORR`→`Task`** — which is exactly the attribution
+Task 3 defines, obtained here for free, since an E071 row sits on the task that recorded it.
+`WBType` has no E071 column and stays empty; document that on the function.
+
+Apply the same dedup identity and upgrade rule Task 3 established, so both paths agree.
+
+**Wiring:** `GetTransportObjects` uses the ADT response when it contains the addressed
+request, and falls back to the query only when Task 2's "not present" case is hit. Do not
+reverse the order and do not call the query when the ADT path succeeded — it is a second
+round trip and, on a system where the data-preview endpoint is unavailable or unauthorised,
+a second way to fail. When the fallback itself fails, return an error that names both
+attempts, so a caller can tell "the request is not on this system" from "the fallback could
+not run here".
+
+Note the resulting asymmetry on ECC and leave it alone: a *modifiable* request resolves
+through the ADT path and carries no positions, because the server sends none; a *released*
+request resolves through E071 and does carry them. Each is the best its source offers.
+
+`GetTransportInfo` (Task 5) keeps erroring for an absent request — status and description are
+not what rollback needs, and E070 already has its own fallback route for request metadata.
+
+**Acceptance:** unit tests with an `httptest` server that serves the worklist body for the ADT
+path and a data-preview response for the query path show that a transport absent from the
+worklist resolves through the fallback with positions and task numbers populated; that a
+transport present in the worklist does **not** trigger the query (count the server's
+requests); that an invalid transport number is rejected before any query is issued; and that
+a failing fallback produces an error naming both attempts. `go test ./...` passes.
+
+## Task 5 — Make `parseTransportInfo` handle the worklist shape
 
 `parseTransportInfo` (`adt/transport.go:666-681`) must also accept the worklist form and
 select the request whose number matches `transportNumber`, using the named document struct
@@ -241,7 +299,7 @@ style of `adt/release_verified_test.go` that serves `eccWorklistXML` on the post
 status read and asserts `ReleaseTransportVerified` returns `Released: false` — parser-level
 tests alone do not cover aibap.mcp#496. `go test ./...` passes.
 
-## Task 5 — Detect `removeobject` support and cache it per client
+## Task 6 — Detect `removeobject` support and cache it per client
 
 Parse the `rel` attribute of the `<atom:link>` elements in the transport XML (the attribute
 is unprefixed; `encoding/xml` matches on local name, so namespace prefixes are irrelevant
@@ -282,10 +340,10 @@ Caching is asserted observably: after one `GetTransportObjects` against the ECC 
 subsequent `RemoveFromTransport` issues **no** further GET (count the requests the httptest
 server receives). `go test ./...` passes.
 
-## Task 6 — Gate `RemoveFromTransport`
+## Task 7 — Gate `RemoveFromTransport`
 
 Before issuing the `PUT`, `RemoveFromTransport` (`adt/transport.go:543-576`) consults the
-capability from Task 5. When the state is unknown, populate it with one read of the parent
+capability from Task 6. When the state is unknown, populate it with one read of the parent
 transport.
 
 **The gate fails open, stated exactly:** only a **confirmed `unsupported`** blocks the call.
@@ -320,7 +378,7 @@ a server whose capability read fails still issues the `PUT`. **And** the existin
 path with an empty body, so the new capability GET leaves the state unknown; prime it with
 `s4SingleRequestXML` and keep its assertion on the PUT body. `go test ./...` passes.
 
-## Task 7 — Integration tests and an end-to-end run against a local build
+## Task 8 — Integration tests and an end-to-end run against a local build
 
 Both parts use the env triple from the Global Constraints. Read-only throughout.
 
@@ -335,9 +393,9 @@ Both parts use the env triple from the Global Constraints. Read-only throughout.
   for adtler#125.
 - `GetTransportInfo` succeeds on both systems and returns the number it was asked for — the
   regression guard for aibap.mcp#496.
-- The Task 5 capability is unsupported on R/3 and supported on S/4, reached via
+- The Task 6 capability is unsupported on R/3 and supported on S/4, reached via
   `sys.Client.(adt.TestClient)`.
-- `RemoveFromTransport` against **R/3 only** returns the typed error from Task 6, with the
+- `RemoveFromTransport` against **R/3 only** returns the typed error from Task 7, with the
   arguments from aibap.mcp#493: task `HFQK902953`, parent `HFQK902952`, `R3TR CLAS
   ZCL_LOCKREPRO_2`, wbtype `CLAS/OC`, position `000001`. Never run this against S/4. Even if
   the gate were to fail open here, the resulting PUT writes nothing and leaks no enqueue —
@@ -362,7 +420,7 @@ to revert.
 **Acceptance:** both parts run and their output is in the task report. Part A is committed to
 this branch; Part B leaves no trace in the consumer repository.
 
-## Task 8 — Correct the consumer issues' reproducer expectations
+## Task 9 — Correct the consumer issues' reproducer expectations
 
 aibap.mcp's bump-PR reproducer-verify step runs each linked issue's reproducer verbatim
 (`aibap.mcp/CLAUDE.md`, "Cross-Repo Issue Tracking", point 4). Two of aibap.mcp#493's stated
@@ -377,7 +435,7 @@ Post one comment on aibap.mcp#493 that:
 - Adds the new limitation from Task 2: on ECC only modifiable requests are in the worklist, so
   `get_transport_objects` for a released transport now returns a diagnosable error where it
   previously returned a wrong list.
-- Reclassifies finding 3 as not fixable client-side, with the Task 6 typed error as the new
+- Reclassifies finding 3 as not fixable client-side, with the Task 7 typed error as the new
   fixed expectation.
 - Notes that finding 2 (`position` staying `mcp.Required()`) is consumer-side work this plan
   does not cover, so #493 is unblocked but not closed by it.
