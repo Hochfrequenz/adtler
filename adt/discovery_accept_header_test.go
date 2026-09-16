@@ -1,0 +1,61 @@
+package adt_test
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+)
+
+// Live-probing s4u turned up a real bug: fetchCSRFToken's discovery GET
+// (/sap/bc/adt/discovery) sent no Accept header at all. hfq tolerates that;
+// s4u does not — it 400s with "Accept header missing"
+// (ExceptionResourceBadRequest), and the error was silently swallowed
+// (fetchCSRFToken only checked the response body length, never the status
+// code), leaving the discovery cache permanently empty for the client's
+// whole lifetime. NegotiateContentType's default-fallback design hid this
+// in production: callers kept working off hardcoded content types with no
+// error, so discovery-driven content negotiation was silently dead on s4u
+// and nobody noticed. This reproduces the server behavior and asserts
+// discovery still populates.
+func TestDiscovery_ServerRequiresAcceptHeader_StillPopulatesCache(t *testing.T) {
+	discoveryXML := `<?xml version="1.0"?>
+<app:service xmlns:app="http://www.w3.org/2007/app">
+  <app:workspace>
+    <app:collection href="/sap/bc/adt/programs/programs">
+      <app:accept>text/plain</app:accept>
+    </app:collection>
+  </app:workspace>
+</app:service>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><type id="ExceptionResourceBadRequest"/><message lang="EN">Request could not be understood by the server due to malformed syntax: Accept header missing</message></exc:exception>`))
+			return
+		}
+		w.Header().Set("X-CSRF-Token", "token")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(discoveryXML))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClientForTest(cfg)
+
+	if err := client.LoadDiscoveryForTest(context.Background()); err != nil {
+		t.Fatalf("LoadDiscoveryForTest: %v", err)
+	}
+
+	// Discovery advertises ONLY "text/plain" (no charset) for programs — a
+	// value distinct from the hardcoded default (text/plain; charset=utf-8).
+	// Getting it back proves discovery was actually consulted, not silently
+	// empty and falling back.
+	got := client.SourceContentTypeForTest("/sap/bc/adt/programs/programs/ZTEST")
+	want := "text/plain"
+	if got != want {
+		t.Errorf("discovery cache after a server that demands Accept: got content type %q, want %q (discovery is empty — the Accept-header 400 was swallowed)", got, want)
+	}
+}

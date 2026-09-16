@@ -379,6 +379,15 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	}
 	c.setAuth(req)
 	req.Header.Set("X-CSRF-Token", "Fetch")
+	// Some systems (observed on S/4) reject this GET with 400
+	// ExceptionResourceBadRequest ("Accept header missing") when no Accept
+	// is sent at all — ECC tolerates the omission, S/4 does not. Discovery
+	// then silently stays empty for the client's whole lifetime (this
+	// function never checked the status code), which NegotiateContentType's
+	// default-fallback masks: callers keep working off hardcoded content
+	// types with no error, so the failure is invisible. */* asks for
+	// whatever the server's native discovery format is.
+	req.Header.Set("Accept", "*/*")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
