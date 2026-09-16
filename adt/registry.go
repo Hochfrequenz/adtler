@@ -260,6 +260,9 @@ func (r *ClientRegistry) SystemInfo() (host, client string) {
 func (r *ClientRegistry) Logout(ctx context.Context) error {
 	return r.activeClient().Logout(ctx)
 }
+func (r *ClientRegistry) SystemFlavor(ctx context.Context) (SystemFlavor, error) {
+	return r.activeClient().SystemFlavor(ctx)
+}
 
 // LogoutAll calls Logout on every registered client to end stateful SAP sessions
 // and release ENQUEUE locks. Errors are collected but do not stop other logouts.
