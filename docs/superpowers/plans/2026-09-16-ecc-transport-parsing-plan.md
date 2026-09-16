@@ -377,8 +377,11 @@ sharing the field across sessions.
 While in this function, fix `readTransportXML`'s doc comment (`:624-625`), which claims a 406
 fallback the body does not implement.
 
-**Acceptance:** `eccWorklistXML` yields unsupported; `s4SingleRequestXML` yields supported;
-`s4RequestNoObjectsXML` leaves the state unknown; a body with no links leaves it unknown.
+**Acceptance:** `eccWorklistXML` and `eccCustomizingXML` yield unsupported;
+`s4SingleRequestXML` and `s4ObjectAtBothLevelsXML` yield supported; `s4RequestNoObjectsXML`
+yields **supported** — it carries `addobject` and no objects, and exists precisely to prove
+that an S/4 request holding nothing is not mistaken for a system that cannot remove; a body
+with no atom relations at all leaves the state unknown.
 Caching is asserted observably: after one `GetTransportObjects` against the ECC body, a
 subsequent `RemoveFromTransport` issues **no** further GET (count the requests the httptest
 server receives). `go test ./...` passes.
