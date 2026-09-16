@@ -3,6 +3,7 @@ package adt
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -485,38 +486,50 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 		return nil, fmt.Errorf("GetTransportRequests: fallback E070 query: %w", err)
 	}
 
-	trkorrIdx, userIdx, statusIdx := -1, -1, -1
-	for i, col := range qr.Columns {
-		switch col.Name {
-		case "TRKORR":
-			trkorrIdx = i
-		case "AS4USER":
-			userIdx = i
-		case "TRSTATUS":
-			statusIdx = i
-		}
-	}
-	if trkorrIdx < 0 {
+	idx := queryColumnIndexes(qr, "TRKORR", "AS4USER", "TRSTATUS")
+	if idx["TRKORR"] < 0 {
 		return nil, fmt.Errorf("GetTransportRequests: fallback query returned no TRKORR column")
 	}
 
 	result := make([]TransportRequest, 0, len(qr.Rows))
 	for _, row := range qr.Rows {
-		tr := TransportRequest{}
-		if trkorrIdx < len(row) {
-			tr.Number = strings.TrimSpace(row[trkorrIdx])
-		}
-		if userIdx >= 0 && userIdx < len(row) {
-			tr.Owner = strings.TrimSpace(row[userIdx])
-		}
-		if statusIdx >= 0 && statusIdx < len(row) {
-			tr.Status = strings.TrimSpace(row[statusIdx])
+		tr := TransportRequest{
+			Number: queryCell(row, idx["TRKORR"]),
+			Owner:  queryCell(row, idx["AS4USER"]),
+			Status: queryCell(row, idx["TRSTATUS"]),
 		}
 		if tr.Number != "" {
 			result = append(result, tr)
 		}
 	}
 	return result, nil
+}
+
+// queryColumnIndexes maps each requested column name to its position in
+// qr.Columns, or to -1 when the result does not carry that column. Data
+// preview results are addressed by column *name* rather than by position
+// because the endpoint is free to reorder or omit columns; every query-route
+// fallback in this file shares this lookup.
+func queryColumnIndexes(qr *QueryResult, names ...string) map[string]int {
+	idx := make(map[string]int, len(names))
+	for _, name := range names {
+		idx[name] = -1
+	}
+	for i, col := range qr.Columns {
+		if _, wanted := idx[col.Name]; wanted {
+			idx[col.Name] = i
+		}
+	}
+	return idx
+}
+
+// queryCell returns the trimmed value of row[i], or "" when i is -1 (column
+// absent from the result) or beyond the row's length (short row).
+func queryCell(row []string, i int) string {
+	if i < 0 || i >= len(row) {
+		return ""
+	}
+	return strings.TrimSpace(row[i])
 }
 
 func (c *httpClient) AddToTransport(ctx context.Context, objectURI, transport string) error {
@@ -650,12 +663,143 @@ func (c *httpClient) GetTransportInfo(ctx context.Context, transportNumber strin
 }
 
 // GetTransportObjects reads the object list of a transport request, deduplicated across request and tasks.
+//
+// The ADT transport-organizer response is the primary source and is used
+// whenever it carries the addressed request. Only when it does not — the
+// absentTransportError case, which on ECC is every *released* request,
+// because that endpoint's worklist holds only modifiable ones — does this
+// fall back to reading E071 directly via getTransportObjectsViaQuery. The
+// query is never issued when the ADT path succeeded: it is a second round
+// trip and, on a system where the data preview endpoint is unavailable or
+// unauthorised, a second way to fail.
+//
+// This leaves a deliberate asymmetry on ECC: a modifiable request resolves
+// through ADT and carries no Position (the server sends none), while a
+// released one resolves through E071 and does. Each is the best its source
+// offers.
 func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber string) ([]TransportObject, error) {
 	data, err := c.readTransportXML(ctx, transportNumber, "application/vnd.sap.adt.transportorganizer.v1+xml, application/xml")
 	if err != nil {
 		return nil, fmt.Errorf("GetTransportObjects: %w", err)
 	}
-	return parseTransportObjectsXML(data, transportNumber)
+	objects, err := parseTransportObjectsXML(data, transportNumber)
+	if err == nil {
+		return objects, nil
+	}
+	if !errors.Is(err, errTransportAbsent) {
+		return nil, err
+	}
+
+	objects, queryErr := c.getTransportObjectsViaQuery(ctx, transportNumber)
+	if queryErr != nil {
+		// Name both attempts so the caller can tell "this request is not on
+		// this system" from "the fallback could not run here".
+		return nil, fmt.Errorf("GetTransportObjects: %w; the E071 query fallback did not resolve it either: %w", err, queryErr)
+	}
+	return objects, nil
+}
+
+// transportNumberRe matches a SAP transport request or task number that is
+// safe to embed as a literal in a SQL WHERE clause. E070-TRKORR is CHAR20.
+// "/" is admitted because namespaced requests are legitimate
+// (/ACCGO/ACMS41709FP00), as are "-" and "." for SAP's own piece lists
+// (SAPK-70003INSAPBW). Everything else — quotes of either kind, whitespace,
+// backslashes, semicolons, parentheses, %, comment markers — is rejected, so
+// a validated value cannot terminate or escape the literal it goes into.
+var transportNumberRe = regexp.MustCompile(`^[A-Za-z0-9_/.\-]{1,20}$`)
+
+// getTransportObjectsViaQuery reads a transport request's objects straight
+// out of E071 via the ADT data preview endpoint. It is the fallback for
+// GetTransportObjects when the transport-organizer response does not contain
+// the addressed request — on ECC that is every released request, and
+// RollbackTransport exists precisely for released, imported transports.
+//
+// Two queries, because a request's object entries live on its task rows as
+// well as on its own: E070 yields the task numbers, then one E071 query
+// covers the request and all of its tasks. Both are single-table (the data
+// preview endpoint rejects JOINs on some S/4HANA releases) and address their
+// result columns by name. The second query combines the numbers with OR
+// rather than IN, which is not verified as accepted on both system families.
+//
+// Each row maps to a TransportObject with the row's own TRKORR as Task —
+// except for rows sitting on the request itself, which stay Task-less, the
+// same way a request-level object does on the ADT path. WBType has no E071
+// column and is always empty here.
+//
+// transportNumber is validated against transportNumberRe before it is
+// interpolated, and so is every task number the first query returns.
+func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportNumber string) ([]TransportObject, error) {
+	if !transportNumberRe.MatchString(transportNumber) {
+		return nil, fmt.Errorf("transport number %q contains characters not allowed in a transport query", transportNumber)
+	}
+
+	numbers, err := c.transportQueryNumbers(ctx, transportNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	where := make([]string, 0, len(numbers))
+	for _, n := range numbers {
+		where = append(where, "TRKORR = '"+n+"'")
+	}
+	query := "SELECT TRKORR, AS4POS, PGMID, OBJECT, OBJ_NAME FROM E071 WHERE " +
+		strings.Join(where, " OR ") + " ORDER BY TRKORR, AS4POS"
+
+	qr, err := c.RunQuery(ctx, query, 5000)
+	if err != nil {
+		return nil, fmt.Errorf("E071 object query: %w", err)
+	}
+	idx := queryColumnIndexes(qr, "TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME")
+	if idx["OBJ_NAME"] < 0 {
+		return nil, fmt.Errorf("E071 object query returned no OBJ_NAME column")
+	}
+
+	// Same deduper, identity and upgrade rule as the ADT path, so both agree.
+	dedup := newTransportObjectDeduper()
+	for _, row := range qr.Rows {
+		task := queryCell(row, idx["TRKORR"])
+		if strings.EqualFold(task, transportNumber) {
+			task = "" // a row on the request itself is not task-attributed
+		}
+		dedup.add(
+			queryCell(row, idx["PGMID"]),
+			queryCell(row, idx["OBJECT"]),
+			queryCell(row, idx["OBJ_NAME"]),
+			"", // WBType: no E071 column
+			queryCell(row, idx["AS4POS"]),
+			task,
+		)
+	}
+	return dedup.result(), nil
+}
+
+// transportQueryNumbers returns transportNumber followed by the numbers of
+// its tasks, read from E070 (a task carries its request in STRKORR). Every
+// number returned has passed transportNumberRe, because each is interpolated
+// into the E071 query the same way the caller's own number is; duplicates
+// and the request's own number are dropped.
+func (c *httpClient) transportQueryNumbers(ctx context.Context, transportNumber string) ([]string, error) {
+	query := "SELECT TRKORR FROM E070 WHERE STRKORR = '" + transportNumber + "' ORDER BY TRKORR"
+	qr, err := c.RunQuery(ctx, query, 5000)
+	if err != nil {
+		return nil, fmt.Errorf("E070 task query: %w", err)
+	}
+	trkorr := queryColumnIndexes(qr, "TRKORR")["TRKORR"]
+	if trkorr < 0 {
+		return nil, fmt.Errorf("E070 task query returned no TRKORR column")
+	}
+
+	numbers := []string{transportNumber}
+	seen := map[string]bool{strings.ToUpper(transportNumber): true}
+	for _, row := range qr.Rows {
+		task := queryCell(row, trkorr)
+		if task == "" || seen[strings.ToUpper(task)] || !transportNumberRe.MatchString(task) {
+			continue
+		}
+		seen[strings.ToUpper(task)] = true
+		numbers = append(numbers, task)
+	}
+	return numbers, nil
 }
 
 // GetTransportTasks returns the task numbers belonging to a transport request.
@@ -700,10 +844,16 @@ func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest,
 // released request is always "absent" by this definition; Task 4 adds an
 // E071-based fallback for that case.
 func absentTransportError(transportNumber string) error {
-	return fmt.Errorf("transport %s is not in this system's transport-organizer worklist; "+
+	return fmt.Errorf("transport %s is %w; "+
 		"on ECC that endpoint returns only modifiable requests, so released requests cannot be read this way",
-		transportNumber)
+		transportNumber, errTransportAbsent)
 }
+
+// errTransportAbsent is the sentinel every absentTransportError wraps, so a
+// caller can branch on "the server did not send me that request" with
+// errors.Is instead of matching the message text. GetTransportObjects uses it
+// to decide whether its E071 query fallback applies.
+var errTransportAbsent = errors.New("not in this system's transport-organizer worklist")
 
 // matchesTransportNumber reports whether reqNumber (a request's tm:number
 // attribute, possibly empty) identifies transportNumber. The comparison is
