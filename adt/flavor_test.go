@@ -51,13 +51,17 @@ func TestSystemFlavor_DiscoveryFetchFails_ReturnsUnknownAndError(t *testing.T) {
 	// distinct from a 4xx/empty-discovery response (which is treated as
 	// ECC, not Unknown; see SystemFlavor's doc comment).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// t.Fatal off the test goroutine (this handler runs in its own)
+		// doesn't reliably stop the test — t.Error + return instead.
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			t.Fatal("ResponseWriter does not support hijacking")
+			t.Error("ResponseWriter does not support hijacking")
+			return
 		}
 		conn, _, err := hj.Hijack()
 		if err != nil {
-			t.Fatalf("hijack: %v", err)
+			t.Errorf("hijack: %v", err)
+			return
 		}
 		_ = conn.Close()
 	}))
