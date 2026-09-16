@@ -757,15 +757,21 @@ func parseHTMLErrorBody(data []byte) string {
 // a namespace object. This function converts it to the ADT-required format:
 // /sap/bc/adt/programs/programs/%2fhfq%2freport
 func encodeNamespacePath(path string) string {
-	idx := strings.Index(path, "//")
-	if idx < 0 {
-		return path
-	}
-	// Separate query string before processing
+	// Split the query off BEFORE searching for "//": a query value (a
+	// base64-shaped lock handle, say) can easily contain "//" with no
+	// genuine namespace segment anywhere in the actual path. Searching the
+	// combined string first found "//" inside the query, then sliced the
+	// query-stripped path at that (now out-of-range) index — a
+	// slice-bounds panic with no recover() above it, crashing the process.
+	// See adtler#131 / aibap.mcp#494.
 	query := ""
 	if qIdx := strings.IndexByte(path, '?'); qIdx >= 0 {
 		query = path[qIdx:]
 		path = path[:qIdx]
+	}
+	idx := strings.Index(path, "//")
+	if idx < 0 {
+		return path + query
 	}
 	prefix := path[:idx+1]
 	rest := path[idx+1:]
