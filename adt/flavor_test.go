@@ -45,6 +45,50 @@ func TestSystemFlavor_PackagesEndpointAdvertised_ReturnsS4(t *testing.T) {
 	}
 }
 
+func TestSystemFlavor_DiscoveryFetchFails_ReturnsUnknownAndError(t *testing.T) {
+	// Server refuses every request outright (connection accepted, then
+	// closed without a response) — ensureCSRF's underlying HTTP call fails,
+	// distinct from a 4xx/empty-discovery response (which is treated as
+	// ECC, not Unknown; see SystemFlavor's doc comment).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("ResponseWriter does not support hijacking")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	flavor, err := client.SystemFlavor(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when the discovery fetch itself fails")
+	}
+	if flavor != adt.SystemFlavorUnknown {
+		t.Errorf("flavor: got %v, want SystemFlavorUnknown", flavor)
+	}
+}
+
+func TestSystemFlavor_String(t *testing.T) {
+	cases := map[adt.SystemFlavor]string{
+		adt.SystemFlavorUnknown: "Unknown",
+		adt.SystemFlavorECC:     "ECC",
+		adt.SystemFlavorS4:      "S4",
+		adt.SystemFlavor(99):    "Unknown",
+	}
+	for flavor, want := range cases {
+		if got := flavor.String(); got != want {
+			t.Errorf("SystemFlavor(%d).String(): got %q, want %q", flavor, got, want)
+		}
+	}
+}
+
 func TestSystemFlavor_PackagesEndpointAbsent_ReturnsECC(t *testing.T) {
 	discoveryXML := `<?xml version="1.0"?>
 <app:service xmlns:app="http://www.w3.org/2007/app">

@@ -42,6 +42,17 @@ func (f SystemFlavor) String() string {
 // (network/auth error, surfaced via err); an empty or malformed discovery
 // document is treated as ECC, since ECC systems are the ones known to
 // return sparser discovery data.
+//
+// Detection is an exact match on the collection href
+// "/sap/bc/adt/packages" — parseDiscovery drops any collection with no
+// <app:accept> children, and a system advertising this collection under a
+// different href, or with no accepts listed, would misclassify as ECC. This
+// is a deliberate fail-safe direction, not an oversight: #377's consumer
+// treats SystemFlavorECC as "don't trust the cached lock handle, relock
+// defensively" — the safe-but-wasteful failure mode for an S/4 system
+// misread as ECC is an extra LockObject call, not a silently corrupted
+// write. A prefix scan would be more robust but was not needed for that
+// consumer; revisit if a future caller needs tighter detection.
 func (c *httpClient) SystemFlavor(ctx context.Context) (SystemFlavor, error) {
 	if err := c.ensureCSRF(ctx); err != nil {
 		return SystemFlavorUnknown, err
