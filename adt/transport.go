@@ -619,6 +619,10 @@ type TransportObject struct {
 	Name     string `json:"name"`
 	WBType   string `json:"wb_type"`
 	Position string `json:"position"`
+	// Task is the number of the task that recorded this entry, empty when
+	// the response did not attribute it to a task (e.g. a request-level
+	// object with no task-level duplicate).
+	Task string `json:"task,omitempty"`
 }
 
 // readTransportXML fetches the raw XML for a single transport request.
@@ -857,28 +861,63 @@ func parseTransportTaskNumbers(data []byte, transportNumber string) ([]string, e
 	return tasks, nil
 }
 
+// transportObjectDeduper collects TransportObjects from one or more sources
+// — the XML object list here, and Task 4's database-query fallback — into a
+// single deduplicated, order-stable list. Objects are keyed by
+// pgmid/type/name; the first occurrence of a key establishes every field
+// (including Position). A later occurrence for the same key never replaces
+// the entry, except that if the existing entry has no Task and the new
+// occurrence carries one, the entry is upgraded in place — this is how a
+// request-level object also recorded under a task ends up attributed to
+// that task without losing its first-seen Position or ordering.
+type transportObjectDeduper struct {
+	index   map[string]int
+	objects []TransportObject
+}
+
+// newTransportObjectDeduper returns an empty deduper ready for add.
+func newTransportObjectDeduper() *transportObjectDeduper {
+	return &transportObjectDeduper{index: make(map[string]int)}
+}
+
+// add records one object occurrence, attributed to task (pass "" for a
+// request-level occurrence not nested in a task). Empty names are ignored.
+func (d *transportObjectDeduper) add(pgmid, typ, name, wbtype, position, task string) {
+	if name == "" {
+		return
+	}
+	key := pgmid + "/" + typ + "/" + name
+	if idx, ok := d.index[key]; ok {
+		if d.objects[idx].Task == "" && task != "" {
+			d.objects[idx].Task = task
+		}
+		return
+	}
+	d.index[key] = len(d.objects)
+	d.objects = append(d.objects, TransportObject{
+		PgmID: pgmid, Type: typ, Name: name, WBType: wbtype, Position: position, Task: task,
+	})
+}
+
+// result returns the deduplicated objects in first-seen order.
+func (d *transportObjectDeduper) result() []TransportObject {
+	return d.objects
+}
+
 func parseTransportObjectsXML(data []byte, transportNumber string) ([]TransportObject, error) {
 	var doc xmlTransportDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing transport objects: %w", err)
 	}
 
-	seen := make(map[string]bool)
-	var objects []TransportObject
-	addObj := func(pgmid, typ, name, wbtype, position string) {
-		key := pgmid + "/" + typ + "/" + name
-		if !seen[key] && name != "" {
-			seen[key] = true
-			objects = append(objects, TransportObject{PgmID: pgmid, Type: typ, Name: name, WBType: wbtype, Position: position})
-		}
-	}
+	dedup := newTransportObjectDeduper()
 	addFromRequest := func(req xmlRequest) {
 		for _, obj := range req.objects() {
-			addObj(obj.PgmID, obj.Type, obj.Name, obj.WBType, obj.Position)
+			dedup.add(obj.PgmID, obj.Type, obj.Name, obj.WBType, obj.Position, "")
 		}
 		for _, task := range req.Tasks {
 			for _, obj := range task.objects() {
-				addObj(obj.PgmID, obj.Type, obj.Name, obj.WBType, obj.Position)
+				dedup.add(obj.PgmID, obj.Type, obj.Name, obj.WBType, obj.Position, task.Number)
 			}
 		}
 	}
@@ -890,7 +929,7 @@ func parseTransportObjectsXML(data []byte, transportNumber string) ([]TransportO
 	if doc.Request.Number != "" {
 		if transportNumber == "" || strings.EqualFold(doc.Request.Number, transportNumber) {
 			addFromRequest(doc.Request)
-			return objects, nil
+			return dedup.result(), nil
 		}
 		return nil, absentTransportError(transportNumber)
 	}
@@ -902,5 +941,5 @@ func parseTransportObjectsXML(data []byte, transportNumber string) ([]TransportO
 	if found := doc.walkRequests(transportNumber, addFromRequest); !found {
 		return nil, absentTransportError(transportNumber)
 	}
-	return objects, nil
+	return dedup.result(), nil
 }

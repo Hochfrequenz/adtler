@@ -204,3 +204,75 @@ func TestGetTransportTasks_ECCWorklist_AbsentNumberErrors(t *testing.T) {
 		t.Fatal("expected error for a transport absent from the worklist body")
 	}
 }
+
+// TestGetTransportObjects_ECCWorklist_AttributesTaskNumber verifies Task 3's
+// acceptance criterion for eccWorklistXML: each object's Task carries the
+// number of the task that recorded it, surviving Task 2's per-request
+// filtering.
+func TestGetTransportObjects_ECCWorklist_AttributesTaskNumber(t *testing.T) {
+	client := newFixtureClient(t, eccWorklistXML)
+
+	objs178, err := client.GetTransportObjects(context.Background(), "HFQK900178")
+	if err != nil {
+		t.Fatalf("HFQK900178: unexpected error: %v", err)
+	}
+	if len(objs178) != 1 || objs178[0].Task != "HFQK900635" {
+		t.Fatalf("HFQK900178: got %+v, want single object with Task HFQK900635", objs178)
+	}
+
+	objs952, err := client.GetTransportObjects(context.Background(), "HFQK902952")
+	if err != nil {
+		t.Fatalf("HFQK902952: unexpected error: %v", err)
+	}
+	if len(objs952) != 1 || objs952[0].Task != "HFQK902953" {
+		t.Fatalf("HFQK902952: got %+v, want single object with Task HFQK902953", objs952)
+	}
+}
+
+// TestGetTransportObjects_S4SingleRequest_DedupUpgradesTask verifies that the
+// object recorded both under <tm:all_objects> at request level (no task) and
+// again under <tm:task> (same object) is deduped into a single entry that
+// carries the task's number — not left with an empty Task, which is what a
+// first-wins-only implementation of the dedup map would produce.
+func TestGetTransportObjects_S4SingleRequest_DedupUpgradesTask(t *testing.T) {
+	client := newFixtureClient(t, s4SingleRequestXML)
+
+	objs, err := client.GetTransportObjects(context.Background(), "S4UK904438")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("got %d objects, want 1 (deduped): %+v", len(objs), objs)
+	}
+	if objs[0].Task != "S4UK904439" {
+		t.Errorf("got Task %q, want S4UK904439 (upgraded from the task-level duplicate)", objs[0].Task)
+	}
+}
+
+// TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPosition
+// verifies the acceptance criterion for s4ObjectAtBothLevelsXML (which records
+// the same object three times: bare under <tm:request>, wrapped in
+// <tm:all_objects>, and under <tm:task>): the result holds exactly one entry,
+// it carries the task number, and it keeps the position of the first-seen
+// (bare, request-level) occurrence rather than any later one.
+func TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPosition(t *testing.T) {
+	client := newFixtureClient(t, s4ObjectAtBothLevelsXML)
+
+	objs, err := client.GetTransportObjects(context.Background(), "S4UK904438")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("got %d objects, want exactly 1 (deduped across all three occurrences): %+v", len(objs), objs)
+	}
+	got := objs[0]
+	if got.Name != "Z_WINBACK" || got.Type != "DEVC" || got.PgmID != "R3TR" {
+		t.Errorf("got %+v, want R3TR/DEVC/Z_WINBACK", got)
+	}
+	if got.Task != "S4UK904439" {
+		t.Errorf("got Task %q, want S4UK904439", got.Task)
+	}
+	if got.Position != "000001" {
+		t.Errorf("got Position %q, want the first-seen position 000001", got.Position)
+	}
+}
