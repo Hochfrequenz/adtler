@@ -651,7 +651,7 @@ func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber st
 	if err != nil {
 		return nil, fmt.Errorf("GetTransportObjects: %w", err)
 	}
-	return parseTransportObjectsXML(data)
+	return parseTransportObjectsXML(data, transportNumber)
 }
 
 // GetTransportTasks returns the task numbers belonging to a transport request.
@@ -687,45 +687,34 @@ func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest,
 	}, nil
 }
 
-func parseTransportTaskNumbers(data []byte, transportNumber string) ([]string, error) {
-	var doc struct {
-		// Format 1: transportorganizer.v1 — <tm:root><tm:request>
-		Request xmlRequest `xml:"request"`
-		// Format 2: application/xml — <root><workbench><section><request>
-		Workbench struct {
-			Sections []struct {
-				Requests []xmlRequest `xml:"request"`
-			} `xml:",any"`
-		} `xml:"workbench"`
-	}
-	if err := xml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parsing transport tasks: %w", err)
-	}
-
-	var tasks []string
-	addTasks := func(req xmlRequest) {
-		if transportNumber != "" && req.Number != transportNumber && req.Number != "" {
-			return
-		}
-		for _, task := range req.Tasks {
-			if task.Number != "" {
-				tasks = append(tasks, task.Number)
-			}
-		}
-	}
-
-	// Format 1
-	addTasks(doc.Request)
-
-	// Format 2
-	for _, section := range doc.Workbench.Sections {
-		for _, req := range section.Requests {
-			addTasks(req)
-		}
-	}
-	return tasks, nil
+// absentTransportError reports that transportNumber was not found anywhere in
+// a parsed transport-organizer response body. This is distinct from a request
+// that is present but holds no objects/tasks (which returns an empty slice
+// and a nil error) — a silently empty list must not be the answer to "the
+// server did not send me that request". On ECC, the transport-organizer
+// worklist endpoint (Format 2 below) returns only modifiable requests, so a
+// released request is always "absent" by this definition; Task 4 adds an
+// E071-based fallback for that case.
+func absentTransportError(transportNumber string) error {
+	return fmt.Errorf("transport %s is not in this system's transport-organizer worklist; "+
+		"on ECC that endpoint returns only modifiable requests, so released requests cannot be read this way",
+		transportNumber)
 }
 
+// matchesTransportNumber reports whether reqNumber (a request's tm:number
+// attribute, possibly empty) identifies transportNumber. The comparison is
+// case-insensitive because aibap.mcp passes the caller's string through
+// unchanged. A request with an empty or absent number never matches — this
+// is the fix for the historical guard here, which let unnumbered requests
+// leak into every result.
+func matchesTransportNumber(reqNumber, transportNumber string) bool {
+	if reqNumber == "" || transportNumber == "" {
+		return false
+	}
+	return strings.EqualFold(reqNumber, transportNumber)
+}
+
+// xmlObject is a single tm:abap_object entry recorded against a request or task.
 type xmlObject struct {
 	PgmID    string `xml:"pgmid,attr"`
 	Type     string `xml:"type,attr"`
@@ -734,28 +723,142 @@ type xmlObject struct {
 	Position string `xml:"position,attr"`
 }
 
+// xmlObjectGroup binds the <tm:all_objects> wrapper some responses (real S/4
+// single-request bodies) nest object lists inside. It is bound at both
+// request and task level; xmlRequest.objects and xmlTask.objects merge it
+// with any bare, direct-child <tm:abap_object> elements (ECC's shape) so
+// neither is lost.
+type xmlObjectGroup struct {
+	Objects []xmlObject `xml:"abap_object"`
+}
+
+// xmlTask is a <tm:task> element nested under a request.
 type xmlTask struct {
-	Number  string      `xml:"number,attr"`
-	Objects []xmlObject `xml:"abap_object"`
+	Number     string         `xml:"number,attr"`
+	Objects    []xmlObject    `xml:"abap_object"`
+	AllObjects xmlObjectGroup `xml:"all_objects"`
 }
 
-type xmlRequest struct {
-	Number  string      `xml:"number,attr"`
-	Objects []xmlObject `xml:"abap_object"`
-	Tasks   []xmlTask   `xml:"task"`
-}
-
-func parseTransportObjectsXML(data []byte) ([]TransportObject, error) {
-	var doc struct {
-		// Format 1: transportorganizer.v1 — <tm:root><tm:request>...</tm:request>
-		Request xmlRequest `xml:"request"`
-		// Format 2: application/xml — <root><workbench><section><request>...</request>
-		Workbench struct {
-			Sections []struct {
-				Requests []xmlRequest `xml:"request"`
-			} `xml:",any"`
-		} `xml:"workbench"`
+// objects returns this task's objects, merging bare direct children with any
+// wrapped under <tm:all_objects>.
+func (t xmlTask) objects() []xmlObject {
+	if len(t.AllObjects.Objects) == 0 {
+		return t.Objects
 	}
+	return append(append([]xmlObject{}, t.Objects...), t.AllObjects.Objects...)
+}
+
+// xmlRequest is a <tm:request> element, either the sole element of a Format 1
+// (transportorganizer.v1) body or one of many under a Format 2 (application/xml)
+// workbench/customizing group. Owner, Description and Status are carried here
+// (not just Number) so a caller needing them — see GetTransportInfo — can use
+// this same struct instead of a parallel one.
+type xmlRequest struct {
+	Number      string         `xml:"number,attr"`
+	Owner       string         `xml:"owner,attr"`
+	Description string         `xml:"desc,attr"`
+	Status      string         `xml:"status,attr"`
+	Objects     []xmlObject    `xml:"abap_object"`
+	AllObjects  xmlObjectGroup `xml:"all_objects"`
+	Tasks       []xmlTask      `xml:"task"`
+}
+
+// objects returns this request's own (non-task) objects, merging bare direct
+// children with any wrapped under <tm:all_objects>. See the a0 fix note on
+// xmlObjectGroup: request-level objects wrapped in <tm:all_objects> (the real
+// S/4 shape once a request has been sorted-and-compressed, or is released)
+// were silently dropped before this method existed.
+func (r xmlRequest) objects() []xmlObject {
+	if len(r.AllObjects.Objects) == 0 {
+		return r.Objects
+	}
+	return append(append([]xmlObject{}, r.Objects...), r.AllObjects.Objects...)
+}
+
+// xmlTransportGroup is a Format 2 group (<tm:workbench> or <tm:customizing>),
+// each holding one or more section elements — named "tm:modifiable",
+// "tm:released", or generically "section" depending on server and vintage —
+// that in turn hold <tm:request> elements. The section name itself carries no
+// meaning to any parser here, so it is matched with xml:",any".
+type xmlTransportGroup struct {
+	Sections []struct {
+		Requests []xmlRequest `xml:"request"`
+	} `xml:",any"`
+}
+
+// xmlTransportDoc is the parsed shape of a transport-request response body,
+// covering both formats a single request may arrive in:
+//
+//   - Format 1 (application/vnd.sap.adt.transportorganizer.v1+xml): a single
+//     <tm:request> directly under <tm:root>.
+//   - Format 2 (application/xml): one or more <tm:request> elements grouped
+//     under <tm:workbench> and/or <tm:customizing>. This is also the shape of
+//     ECC's worklist response — see eccWorklistXML in transport_ecc_test.go.
+//
+// Both parseTransportObjectsXML and parseTransportTaskNumbers walk this same
+// document; GetTransportRequests (which already walks both the workbench and
+// customizing groups) is the precedent for binding both here instead of only
+// workbench.
+type xmlTransportDoc struct {
+	Request     xmlRequest        `xml:"request"`
+	Workbench   xmlTransportGroup `xml:"workbench"`
+	Customizing xmlTransportGroup `xml:"customizing"`
+}
+
+// walkRequests calls fn for every Format 2 request (across the workbench and
+// customizing groups) whose number matches transportNumber per
+// matchesTransportNumber, and reports whether at least one matched — the
+// "present" half of the absent/empty distinction.
+func (doc xmlTransportDoc) walkRequests(transportNumber string, fn func(xmlRequest)) (found bool) {
+	for _, group := range []xmlTransportGroup{doc.Workbench, doc.Customizing} {
+		for _, section := range group.Sections {
+			for _, req := range section.Requests {
+				if !matchesTransportNumber(req.Number, transportNumber) {
+					continue
+				}
+				found = true
+				fn(req)
+			}
+		}
+	}
+	return found
+}
+
+func parseTransportTaskNumbers(data []byte, transportNumber string) ([]string, error) {
+	var doc xmlTransportDoc
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parsing transport tasks: %w", err)
+	}
+
+	var tasks []string
+	addTasks := func(req xmlRequest) {
+		for _, task := range req.Tasks {
+			if task.Number != "" {
+				tasks = append(tasks, task.Number)
+			}
+		}
+	}
+
+	// Format 1: a Format 1 body whose number differs from transportNumber is
+	// treated as absent, identically to the Format 2 (worklist) branch below.
+	// An empty transportNumber, or a match, keeps the existing behaviour.
+	if doc.Request.Number != "" {
+		if transportNumber == "" || strings.EqualFold(doc.Request.Number, transportNumber) {
+			addTasks(doc.Request)
+			return tasks, nil
+		}
+		return nil, absentTransportError(transportNumber)
+	}
+
+	// Format 2
+	if found := doc.walkRequests(transportNumber, addTasks); !found {
+		return nil, absentTransportError(transportNumber)
+	}
+	return tasks, nil
+}
+
+func parseTransportObjectsXML(data []byte, transportNumber string) ([]TransportObject, error) {
+	var doc xmlTransportDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing transport objects: %w", err)
 	}
@@ -770,24 +873,34 @@ func parseTransportObjectsXML(data []byte) ([]TransportObject, error) {
 		}
 	}
 	addFromRequest := func(req xmlRequest) {
-		for _, obj := range req.Objects {
+		for _, obj := range req.objects() {
 			addObj(obj.PgmID, obj.Type, obj.Name, obj.WBType, obj.Position)
 		}
 		for _, task := range req.Tasks {
-			for _, obj := range task.Objects {
+			for _, obj := range task.objects() {
 				addObj(obj.PgmID, obj.Type, obj.Name, obj.WBType, obj.Position)
 			}
 		}
 	}
 
-	// Format 1: direct request under root (transportorganizer.v1)
-	addFromRequest(doc.Request)
-
-	// Format 2: workbench > sections > requests (application/xml)
-	for _, section := range doc.Workbench.Sections {
-		for _, req := range section.Requests {
-			addFromRequest(req)
+	// Format 1: direct request under root (transportorganizer.v1). A body
+	// whose number differs from transportNumber is treated as absent,
+	// identically to the Format 2 (worklist) branch below. An empty
+	// transportNumber, or a match, keeps the existing behaviour.
+	if doc.Request.Number != "" {
+		if transportNumber == "" || strings.EqualFold(doc.Request.Number, transportNumber) {
+			addFromRequest(doc.Request)
+			return objects, nil
 		}
+		return nil, absentTransportError(transportNumber)
+	}
+
+	// Format 2: workbench/customizing > sections > requests (application/xml),
+	// filtered to the addressed transport. A request with an empty or absent
+	// number never matches (matchesTransportNumber), so it can no longer leak
+	// its objects into every result the way the old guard allowed.
+	if found := doc.walkRequests(transportNumber, addFromRequest); !found {
+		return nil, absentTransportError(transportNumber)
 	}
 	return objects, nil
 }
