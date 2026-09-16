@@ -900,28 +900,52 @@ func (c *httpClient) GetTransportTasks(ctx context.Context, transportNumber stri
 	return parseTransportTaskNumbers(data, transportNumber)
 }
 
+// parseTransportInfo extracts a single request's Number/Owner/Description/
+// Status from either shape a transport-request GET may come back in — see
+// xmlTransportDoc. It shares that struct and matchesTransportNumber/
+// walkRequests with parseTransportObjectsXML and parseTransportTaskNumbers so
+// all three parsers on this response body agree on what "this is the
+// addressed request" and "this request is absent" mean.
 func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest, error) {
-	// Single transport response: <tm:root><tm:request tm:number=... tm:desc=... tm:status=.../>
-	var doc struct {
-		Request struct {
-			Number      string `xml:"number,attr"`
-			Owner       string `xml:"owner,attr"`
-			Description string `xml:"desc,attr"`
-			Status      string `xml:"status,attr"`
-		} `xml:"request"`
-	}
+	var doc xmlTransportDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing transport info: %w", err)
 	}
-	if doc.Request.Number == "" {
-		return nil, fmt.Errorf("transport %s: no request element in response", transportNumber)
+
+	toTransportRequest := func(req xmlRequest) *TransportRequest {
+		return &TransportRequest{
+			Number:      req.Number,
+			Owner:       req.Owner,
+			Description: req.Description,
+			Status:      req.Status,
+		}
 	}
-	return &TransportRequest{
-		Number:      doc.Request.Number,
-		Owner:       doc.Request.Owner,
-		Description: doc.Request.Description,
-		Status:      doc.Request.Status,
-	}, nil
+
+	// Format 1: a single request directly under <tm:root>
+	// (transportorganizer.v1). A body whose number differs from
+	// transportNumber is treated as absent, identically to the Format 2
+	// (worklist) branch below. An empty transportNumber, or a match, keeps
+	// the existing behaviour.
+	if doc.Request.Number != "" {
+		if transportNumber == "" || strings.EqualFold(doc.Request.Number, transportNumber) {
+			return toTransportRequest(doc.Request), nil
+		}
+		return nil, absentTransportError(transportNumber)
+	}
+
+	// Format 2: workbench/customizing > sections > requests (application/xml)
+	// — this is also ECC's worklist shape (see eccWorklistXML). Select the
+	// request whose number matches transportNumber.
+	var result *TransportRequest
+	found := doc.walkRequests(transportNumber, func(req xmlRequest) {
+		if result == nil {
+			result = toTransportRequest(req)
+		}
+	})
+	if !found {
+		return nil, absentTransportError(transportNumber)
+	}
+	return result, nil
 }
 
 // absentTransportError reports that transportNumber was not found anywhere in

@@ -306,6 +306,82 @@ func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstSeenPosition(t *
 	}
 }
 
+// TestGetTransportInfo_ECCWorklist_SelectsMatchingRequest verifies
+// parseTransportInfo's Format 2 (worklist) branch: over eccWorklistXML, the
+// requested request's Number/Owner/Description/Status come back — not the
+// worklist's first entry regardless of which number was asked for.
+func TestGetTransportInfo_ECCWorklist_SelectsMatchingRequest(t *testing.T) {
+	client := newFixtureClient(t, eccWorklistXML)
+
+	info, err := client.GetTransportInfo(context.Background(), "HFQK902952")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := &adt.TransportRequest{
+		Number:      "HFQK902952",
+		Owner:       "MEISKEJ",
+		Description: "Lock reproducer probe (throwaway, delete after)",
+		Status:      adt.TransportStatusModifiable,
+	}
+	if *info != *want {
+		t.Errorf("got %+v, want %+v", *info, *want)
+	}
+
+	// The other request in the same worklist body must resolve to its own
+	// data, not HFQK902952's.
+	info178, err := client.GetTransportInfo(context.Background(), "HFQK900178")
+	if err != nil {
+		t.Fatalf("HFQK900178: unexpected error: %v", err)
+	}
+	if info178.Number != "HFQK900178" || info178.Owner != "KLEINK" {
+		t.Errorf("HFQK900178: got %+v, want Number=HFQK900178 Owner=KLEINK", info178)
+	}
+}
+
+// TestGetTransportInfo_ECCWorklist_AbsentNumberErrors mirrors the
+// objects/tasks absent-number tests: a number absent from the worklist body
+// must error with Task 2's absentTransportError, not return a zero-value
+// TransportRequest.
+func TestGetTransportInfo_ECCWorklist_AbsentNumberErrors(t *testing.T) {
+	client := newFixtureClient(t, eccWorklistXML)
+
+	_, err := client.GetTransportInfo(context.Background(), "HFQK999999")
+	if err == nil {
+		t.Fatal("expected error for a transport absent from the worklist body")
+	}
+	if !strings.Contains(err.Error(), "HFQK999999") ||
+		!strings.Contains(err.Error(), "transport-organizer worklist") ||
+		!strings.Contains(err.Error(), "released requests cannot be read this way") {
+		t.Errorf("error text missing expected content: %v", err)
+	}
+}
+
+// TestGetTransportInfo_S4SingleRequest_StillPasses verifies the Format 1
+// (single-request) branch is unaffected by the switch to xmlTransportDoc.
+func TestGetTransportInfo_S4SingleRequest_StillPasses(t *testing.T) {
+	client := newFixtureClient(t, s4SingleRequestXML)
+
+	info, err := client.GetTransportInfo(context.Background(), "S4UK904438")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Number != "S4UK904438" || info.Owner != "MANNN" || info.Status != adt.TransportStatusModifiable {
+		t.Errorf("got %+v, want Number=S4UK904438 Owner=MANNN Status=D", info)
+	}
+}
+
+// TestGetTransportInfo_S4SingleRequest_WrongNumberIsAbsent verifies a Format
+// 1 body whose request number differs from the requested transport is
+// treated as absent, identically to GetTransportObjects/GetTransportTasks.
+func TestGetTransportInfo_S4SingleRequest_WrongNumberIsAbsent(t *testing.T) {
+	client := newFixtureClient(t, s4SingleRequestXML)
+
+	_, err := client.GetTransportInfo(context.Background(), "S4UK000000")
+	if err == nil {
+		t.Fatal("expected error: fixture body is for S4UK904438, not S4UK000000")
+	}
+}
+
 // TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstAttributedTask
 // uses the same fixture to pin the other half of the upgrade rule: once an
 // entry has been attributed to a task (S4UK904439, the first task to record
