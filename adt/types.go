@@ -164,6 +164,13 @@ const (
 	// collision this way rather than as ExceptionResourceAlreadyExists —
 	// verified live on both S/4 and R/3 (mcp-server-abap #406 / #407).
 	ExceptionTypeResourceCreationFailure = "ExceptionResourceCreationFailure"
+	// ExceptionTypeRemoveObjectUnsupported is not a type SAP ever emits — it
+	// is synthesised locally by RemoveFromTransport's capability gate (see
+	// RemoveObjectSupport) so the resulting error carries a Type that
+	// ClassifyError/classifyByExceptionType can key on, the same way it keys
+	// on a genuine <exc:exception> Type. RemoveFromTransport never sends a
+	// request in this case, so there is no SAP-side error to relay.
+	ExceptionTypeRemoveObjectUnsupported = "ADT_TM_REMOVEOBJECT_UNSUPPORTED"
 )
 
 // ADTError is returned when SAP ADT responds with an error status.

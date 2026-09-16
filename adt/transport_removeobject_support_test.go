@@ -215,14 +215,21 @@ func TestRemoveObjectSupport_FreshSession_StartsUnknownAgain(t *testing.T) {
 }
 
 // TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssuesNoGET
-// asserts caching observably at the API boundary the brief specifies: after
-// one GetTransportObjects call against an ECC body, a subsequent
+// asserts caching observably at the API boundary: after one
+// GetTransportObjects call against an ECC body, a subsequent
 // RemoveFromTransport call issues no further GET against the
-// transportrequests endpoint. RemoveFromTransport only ever PUTs today, so
-// this also serves as a regression guard for whenever a future capability
-// gate is wired into it — that gate must consult the cache, not re-read.
+// transportrequests endpoint — Task 7's gate (ensureRemoveObjectSupported)
+// consults the cached state instead of re-reading it. Written before that
+// gate existed, this test originally asserted RemoveFromTransport still
+// succeeded; now that the cached state is confirmed
+// RemoveObjectSupportUnsupported, the gate blocks the call before any PUT is
+// sent, so the correct assertion is an ErrorNotSupported error and zero PUTs
+// — not a successful call. See TestRemoveFromTransport_ECCUnsupported_NeverSendsPUT
+// (transport_removeobject_gate_test.go) for the same blocking behavior
+// pinned end-to-end without relying on a prior GetTransportObjects call to
+// warm the cache.
 func TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssuesNoGET(t *testing.T) {
-	var getCount int32
+	var getCount, putCount int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
@@ -236,7 +243,9 @@ func TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssu
 			_, _ = w.Write([]byte(eccWorklistXML))
 			return
 		}
-		// RemoveFromTransport's PUT.
+		if r.Method == http.MethodPut {
+			atomic.AddInt32(&putCount, 1)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
@@ -251,11 +260,18 @@ func TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssu
 		t.Fatalf("after GetTransportObjects: got %d GETs, want 1", got)
 	}
 
-	if err := client.RemoveFromTransport(context.Background(),
-		"HFQK900635", "HFQK900178", "R3TR", "PROG", "/HFQ/ORDER_REQUEST", "PROG/P", "000001"); err != nil {
-		t.Fatalf("RemoveFromTransport: unexpected error: %v", err)
+	err := client.RemoveFromTransport(context.Background(),
+		"HFQK900635", "HFQK900178", "R3TR", "PROG", "/HFQ/ORDER_REQUEST", "PROG/P", "000001")
+	if err == nil {
+		t.Fatal("RemoveFromTransport: expected ErrorNotSupported, got nil (cached state is Unsupported)")
+	}
+	if got := adt.ClassifyError(err); got != adt.ErrorNotSupported {
+		t.Errorf("ClassifyError = %v, want ErrorNotSupported", got)
 	}
 	if got := atomic.LoadInt32(&getCount); got != 1 {
 		t.Errorf("after RemoveFromTransport: got %d GETs total, want still 1 (no further GET)", got)
+	}
+	if got := atomic.LoadInt32(&putCount); got != 0 {
+		t.Errorf("after RemoveFromTransport: got %d PUTs, want 0 (gate must block before sending)", got)
 	}
 }

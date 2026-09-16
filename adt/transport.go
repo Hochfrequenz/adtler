@@ -554,6 +554,10 @@ func (c *httpClient) AddToTransport(ctx context.Context, objectURI, transport st
 }
 
 func (c *httpClient) RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error {
+	if err := c.ensureRemoveObjectSupported(ctx, parentTransport); err != nil {
+		return err
+	}
+
 	body, err := xml.Marshal(adtxml.TMRoot{
 		NSTM:       "http://www.sap.com/cts/adt/tm",
 		UserAction: "removeobject",
@@ -780,6 +784,47 @@ func (c *httpClient) cacheRemoveObjectSupport(data []byte) {
 		return
 	}
 	c.removeObjectSupport = deriveRemoveObjectSupport(data)
+}
+
+// ensureRemoveObjectSupported is RemoveFromTransport's gate: it blocks the
+// PUT only when this system's capability is confirmed
+// RemoveObjectSupportUnsupported. On a pre-7.53 system that PUT is not
+// rejected by SAP — it is silently reinterpreted by a legacy handler as a
+// change-owner request with a missing target user, which is why not sending
+// it is the point, not merely producing a clearer error (see issue #125).
+//
+// If the capability is still unknown, this triggers exactly one read of
+// parentTransport to populate it — readTransportXML derives and caches the
+// capability as a side effect of every successful read (see
+// cacheRemoveObjectSupport). Per the fail-open rule, a state that remains
+// unknown after that read — including because the read itself failed, which
+// is why its error is deliberately discarded here — does not block the
+// call: only a confirmed RemoveObjectSupportUnsupported does. Failing closed
+// on a system that simply could not be classified would break setups that
+// work today; this gate exists to stop a known-bad call, not to demand
+// proof of a good one.
+func (c *httpClient) ensureRemoveObjectSupported(ctx context.Context, parentTransport string) error {
+	c.mu.Lock()
+	state := c.removeObjectSupport
+	c.mu.Unlock()
+
+	if state == RemoveObjectSupportUnknown {
+		_, _ = c.readTransportXML(ctx, parentTransport,
+			"application/vnd.sap.adt.transportorganizer.v1+xml, application/xml")
+		c.mu.Lock()
+		state = c.removeObjectSupport
+		c.mu.Unlock()
+	}
+
+	if state != RemoveObjectSupportUnsupported {
+		return nil
+	}
+
+	return fmt.Errorf("RemoveFromTransport: %w", &ADTError{
+		Type: ExceptionTypeRemoveObjectUnsupported,
+		Message: "this system's ADT does not advertise a remove-object operation for transport entries " +
+			"(added in AS ABAP 7.53 SP00 / ABAP Platform 1809); remove the entry in SE09 instead",
+	})
 }
 
 // GetTransportInfo retrieves status and description of a single transport by number.
