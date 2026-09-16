@@ -638,8 +638,12 @@ type TransportObject struct {
 	Task string `json:"task,omitempty"`
 }
 
-// readTransportXML fetches the raw XML for a single transport request.
-// Tries the given accept type first, falls back to the alternative if 406.
+// readTransportXML fetches the raw XML for a single transport request using
+// the given Accept header. It is the single read all three transport parsers
+// (parseTransportInfo, parseTransportObjectsXML, parseTransportTaskNumbers)
+// go through, so it also derives and caches this system's removeobject
+// support (see RemoveObjectSupport) as a side effect of every successful
+// read.
 func (c *httpClient) readTransportXML(ctx context.Context, transportNumber, accept string) ([]byte, error) {
 	path := "/sap/bc/adt/cts/transportrequests/" + url.PathEscape(transportNumber)
 	resp, err := c.doRead(ctx, path, map[string]string{"Accept": accept})
@@ -650,7 +654,132 @@ func (c *httpClient) readTransportXML(ctx context.Context, transportNumber, acce
 	if err := checkResponse(resp); err != nil {
 		return nil, err
 	}
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	c.cacheRemoveObjectSupport(data)
+	return data, nil
+}
+
+// RemoveObjectSupport is a tri-state describing whether the addressed
+// system's transport organizer endpoint supports removing an object from a
+// transport request at all. Removing an object from a transport was added to
+// SAP's ADT only in AS ABAP 7.53; on older systems (ECC) the endpoint does
+// not exist and the PUT the library would send there is silently absorbed by
+// a legacy "change owner" handler instead (confusing empty-user failure). The
+// zero value, RemoveObjectSupportUnknown, is deliberate: it is what every
+// freshly constructed *httpClient starts with, before any transport has been
+// read.
+type RemoveObjectSupport int
+
+const (
+	// RemoveObjectSupportUnknown means no transport response has been parsed
+	// yet, or the one response seen so far carried no atom relations at all
+	// (so it says nothing about this system either way).
+	RemoveObjectSupportUnknown RemoveObjectSupport = iota
+	// RemoveObjectSupportSupported means the system advertised removeobject
+	// or addobject (see deriveRemoveObjectSupport) — removal should work.
+	RemoveObjectSupportSupported
+	// RemoveObjectSupportUnsupported means the system advertised at least one
+	// atom relation, but neither removeobject nor addobject — this is ECC.
+	RemoveObjectSupportUnsupported
+)
+
+// removeObjectRelation and addObjectRelation are the atom:link rel values
+// deriveRemoveObjectSupport looks for. Both are unprefixed local names as
+// SAP emits them; encoding/xml matches on local name, so the atom:/tm:
+// namespace prefixes seen on the wire don't matter here.
+const (
+	removeObjectRelation = "http://www.sap.com/cts/relations/removeobject"
+	addObjectRelation    = "http://www.sap.com/cts/relations/addobject"
+)
+
+// atomLinkNode recursively captures the rel attribute of every element in a
+// transport XML document, at any nesting depth. It exists only to answer
+// "which atom relations appear anywhere in this body" — it does not care
+// which element carries them.
+type atomLinkNode struct {
+	Rel      string         `xml:"rel,attr"`
+	Children []atomLinkNode `xml:",any"`
+}
+
+// collectRels adds every non-empty rel value found in the subtree rooted at
+// n into rels.
+func (n atomLinkNode) collectRels(rels map[string]bool) {
+	if n.Rel != "" {
+		rels[n.Rel] = true
+	}
+	for _, child := range n.Children {
+		child.collectRels(rels)
+	}
+}
+
+// deriveRemoveObjectSupport inspects every atom:link rel attribute in a
+// transport-request response body, at any nesting depth, and reports whether
+// the system supports removing an object from a transport
+// (http://www.sap.com/cts/relations/removeobject).
+//
+// Two more obvious rules are both wrong, per Task 1's live measurements: ECC
+// and S/4 relation sets do not differ merely by nesting level. ECC's
+// abap_object elements are self-closing and carry no links at all, and its
+// four relations (consistencycheck, releasejobs, modify, newtask) sit only on
+// requests and tasks and are purely administrative. So "an object with links
+// but no removeobject" never matches on ECC, and plain "no removeobject
+// anywhere" cannot tell ECC apart from an S/4 request that simply holds no
+// objects yet.
+//
+// The discriminator that does hold, across every captured fixture, is
+// addobject: present on every S/4 response including one with no objects at
+// all, absent from every ECC response. Hence the rule:
+//
+//   - removeobject or addobject present anywhere -> supported.
+//   - at least one atom relation present, but neither of those -> unsupported.
+//   - no atom relation present at all -> unknown (this body says nothing).
+//
+// addobject is a proxy for the post-1808 action set, not a direct statement
+// about removal specifically. If some release ever advertised addobject
+// without removeobject, this function reports supported — the safe
+// direction: it leaves the caller with today's (pre-gate) behaviour rather
+// than incorrectly blocking a system that can in fact remove objects. See
+// Task 7's fail-open rule.
+func deriveRemoveObjectSupport(data []byte) RemoveObjectSupport {
+	var root atomLinkNode
+	if err := xml.Unmarshal(data, &root); err != nil {
+		return RemoveObjectSupportUnknown
+	}
+	rels := make(map[string]bool)
+	root.collectRels(rels)
+	if len(rels) == 0 {
+		return RemoveObjectSupportUnknown
+	}
+	if rels[removeObjectRelation] || rels[addObjectRelation] {
+		return RemoveObjectSupportSupported
+	}
+	return RemoveObjectSupportUnsupported
+}
+
+// cacheRemoveObjectSupport populates c.removeObjectSupport from data, once
+// per client instance, in the spirit of the cached discovery document (see
+// c.discovery and ensureCSRF's locking contract). The capability is a
+// property of the system, not of the addressed request, so once it is known
+// this is a cheap mutex-only no-op — it deliberately skips re-deriving (and
+// therefore re-unmarshalling) on every subsequent transport read, which
+// matters because these bodies run from 754 KB on ECC to 10.3 MB on S/4.
+//
+// It acquires c.mu itself; callers MUST NOT already hold it.
+//
+// freshSession() builds a new *httpClient and copies no cache, so a fresh
+// session's state starts at RemoveObjectSupportUnknown again. That is
+// intentional, not a gap to "fix" by sharing this field across sessions —
+// see freshSession's own doc comment for why it stays isolated.
+func (c *httpClient) cacheRemoveObjectSupport(data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.removeObjectSupport != RemoveObjectSupportUnknown {
+		return
+	}
+	c.removeObjectSupport = deriveRemoveObjectSupport(data)
 }
 
 // GetTransportInfo retrieves status and description of a single transport by number.
