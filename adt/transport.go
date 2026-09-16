@@ -691,12 +691,23 @@ func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber st
 	}
 
 	objects, queryErr := c.getTransportObjectsViaQuery(ctx, transportNumber)
-	if queryErr != nil {
+	switch {
+	case queryErr == nil:
+		return objects, nil
+	case errors.Is(queryErr, errTransportNumberUnsafe):
+		// The string could never have been a transport number. Leading with
+		// "absent from the worklist" would bury the real reason behind a
+		// finding that is true but beside the point.
+		return nil, fmt.Errorf("GetTransportObjects: %w", queryErr)
+	case errors.Is(queryErr, errTransportAbsent):
+		// Both sources agree the request is not here. Say that once, in the
+		// caller's own spelling of the number, rather than twice.
+		return nil, fmt.Errorf("GetTransportObjects: %w; it has no E070 entry on this system either", err)
+	default:
 		// Name both attempts so the caller can tell "this request is not on
 		// this system" from "the fallback could not run here".
 		return nil, fmt.Errorf("GetTransportObjects: %w; the E071 query fallback did not resolve it either: %w", err, queryErr)
 	}
-	return objects, nil
 }
 
 // transportNumberRe matches a SAP transport request or task number that is
@@ -707,6 +718,11 @@ func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber st
 // backslashes, semicolons, parentheses, %, comment markers — is rejected, so
 // a validated value cannot terminate or escape the literal it goes into.
 var transportNumberRe = regexp.MustCompile(`^[A-Za-z0-9_/.\-]{1,20}$`)
+
+// errTransportNumberUnsafe is the sentinel behind the validation failure
+// transportNumberRe produces, so GetTransportObjects can report an unusable
+// number as the reason rather than burying it behind the worklist finding.
+var errTransportNumberUnsafe = errors.New("contains characters not allowed in a transport query")
 
 // pgmIDReleaseMarker is the E071 PGMID of a release marker row (paired with
 // OBJECT "RELE"). Such a row is bookkeeping, not a repository object: its
@@ -756,13 +772,20 @@ const pgmIDReleaseMarker = "CORR"
 //     shapes for the same transport, and this one is not folded up to match.
 //
 // transportNumber is validated against transportNumberRe before it is
-// interpolated, and so is every task number the first query returns.
+// interpolated, and so is every task number the first query returns. It is
+// then uppercased: SAP stores TRKORR uppercase and Open SQL "=" on CHAR is
+// case-sensitive, so a caller's lowercase number would match no row and this
+// path would answer "no objects" where the ADT path — deliberately
+// case-insensitive, see matchesTransportNumber — answers correctly.
 func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportNumber string) ([]TransportObject, error) {
 	if !transportNumberRe.MatchString(transportNumber) {
-		return nil, fmt.Errorf("transport number %q contains characters not allowed in a transport query", transportNumber)
+		return nil, fmt.Errorf("transport number %q %w", transportNumber, errTransportNumberUnsafe)
 	}
+	// Uppercase once, after validation, and use this value for both
+	// statements and for the task-attribution comparison below.
+	number := strings.ToUpper(transportNumber)
 
-	numbers, err := c.transportQueryNumbers(ctx, transportNumber)
+	numbers, err := c.transportQueryNumbers(ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -798,7 +821,7 @@ func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportN
 			continue
 		}
 		task := queryCell(row, idx["TRKORR"])
-		if strings.EqualFold(task, transportNumber) {
+		if strings.EqualFold(task, number) {
 			task = "" // a row on the request itself is not task-attributed
 		}
 		dedup.add(
@@ -814,29 +837,55 @@ func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportN
 }
 
 // transportQueryNumbers returns transportNumber followed by the numbers of
-// its tasks, read from E070 (a task carries its request in STRKORR). Every
-// number returned has passed transportNumberRe, because each is interpolated
-// into the E071 query the same way the caller's own number is; duplicates
-// and the request's own number are dropped.
+// its tasks, read from E070. One query answers two questions, so the fallback
+// needs no extra round trip to tell them apart:
+//
+//   - Does the request exist here at all? A row whose TRKORR is the number is
+//     the request's own header row and proves it does. If the query returns
+//     no row whatsoever, neither the request nor any task of it is on this
+//     system, and the answer is absentTransportError — not an empty object
+//     list. Task 2's contract (see absentTransportError) is that a silently
+//     empty result must never be the answer to "the server does not have that
+//     request", and the E071 path would otherwise drop that contract: the
+//     CORR exclusion means a real released request and a nonexistent one both
+//     come back with zero object rows, so the row count alone cannot tell
+//     them apart.
+//   - Which tasks does it have? Rows whose STRKORR is the number. A released
+//     request usually has none — releasing dissolves its tasks.
+//
+// transportNumber must already have passed transportNumberRe and been
+// uppercased; getTransportObjectsViaQuery is the only caller and does both.
+// Task numbers coming back from the server are re-validated here before they
+// reach the E071 statement, exactly like the caller's own number; duplicates
+// and the request's own row are dropped.
 func (c *httpClient) transportQueryNumbers(ctx context.Context, transportNumber string) ([]string, error) {
-	query := "SELECT TRKORR FROM E070 WHERE STRKORR = '" + transportNumber + "' ORDER BY TRKORR"
+	query := "SELECT TRKORR, STRKORR FROM E070 WHERE TRKORR = '" + transportNumber +
+		"' OR STRKORR = '" + transportNumber + "' ORDER BY TRKORR"
 	qr, err := c.RunQuery(ctx, query, 5000)
 	if err != nil {
-		return nil, fmt.Errorf("E070 task query: %w", err)
+		return nil, fmt.Errorf("E070 request/task query: %w", err)
 	}
-	trkorr := queryColumnIndexes(qr, "TRKORR")["TRKORR"]
-	if trkorr < 0 {
-		return nil, fmt.Errorf("E070 task query returned no TRKORR column")
+	idx := queryColumnIndexes(qr, "TRKORR", "STRKORR")
+	if idx["TRKORR"] < 0 {
+		return nil, fmt.Errorf("E070 request/task query returned no TRKORR column")
+	}
+	if len(qr.Rows) == 0 {
+		return nil, absentTransportError(transportNumber)
 	}
 
 	numbers := []string{transportNumber}
-	seen := map[string]bool{strings.ToUpper(transportNumber): true}
+	seen := map[string]bool{transportNumber: true}
 	for _, row := range qr.Rows {
-		task := queryCell(row, trkorr)
-		if task == "" || seen[strings.ToUpper(task)] || !transportNumberRe.MatchString(task) {
+		// Only rows parented by this request are its tasks; the request's own
+		// header row comes back from the same query and is already in numbers.
+		if !strings.EqualFold(queryCell(row, idx["STRKORR"]), transportNumber) {
 			continue
 		}
-		seen[strings.ToUpper(task)] = true
+		task := strings.ToUpper(queryCell(row, idx["TRKORR"]))
+		if task == "" || seen[task] || !transportNumberRe.MatchString(task) {
+			continue
+		}
+		seen[task] = true
 		numbers = append(numbers, task)
 	}
 	return numbers, nil

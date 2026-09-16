@@ -101,19 +101,29 @@ func newQueryFallbackClient(t *testing.T, worklist string, respond func(sql stri
 	return adt.NewClient(cfg), probe
 }
 
+// e070Columns is the column list the widened E070 request/task query selects.
+// A returned row is either the request's own header row (STRKORR empty) or one
+// of its tasks (STRKORR = the request number).
+var e070Columns = []string{"TRKORR", "STRKORR"}
+
 // releasedRequestResponder answers the two fallback queries for
-// releasedRequestNumber: E070 yields its two task numbers, E071 yields one
-// object recorded at both request and task level (so the dedup upgrade rule
-// is exercised) and one recorded only on the second task.
-func releasedRequestResponder(t *testing.T) func(string) (int, string) {
+// releasedRequestNumber: E070 yields the request's own header row plus its two
+// tasks, E071 yields one object recorded at both request and task level (so
+// the dedup upgrade rule is exercised) and one recorded only on the second
+// task. extraE070Rows are appended to the E070 result, so a test can inject a
+// hostile or malformed TRKORR without restating the whole responder.
+func releasedRequestResponder(t *testing.T, extraE070Rows ...[]string) func(string) (int, string) {
 	t.Helper()
 	return func(sql string) (int, string) {
 		switch {
 		case strings.Contains(sql, "FROM E070"):
-			return http.StatusOK, dataPreviewXML(
-				[]string{"TRKORR"},
-				[][]string{{releasedTaskOne}, {releasedTaskTwo}},
-			)
+			rows := [][]string{
+				{releasedRequestNumber, ""},
+				{releasedTaskOne, releasedRequestNumber},
+				{releasedTaskTwo, releasedRequestNumber},
+			}
+			rows = append(rows, extraE070Rows...)
+			return http.StatusOK, dataPreviewXML(e070Columns, rows)
 		case strings.Contains(sql, "FROM E071"):
 			return http.StatusOK, dataPreviewXML(
 				[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
@@ -168,7 +178,12 @@ func TestGetTransportObjects_AbsentFromWorklist_ResolvesViaE071(t *testing.T) {
 	if len(queries) != 2 {
 		t.Fatalf("expected exactly 2 queries (E070 tasks, E071 objects), got %d: %v", len(queries), queries)
 	}
-	if !strings.Contains(queries[0], "SELECT TRKORR FROM E070 WHERE STRKORR = '"+releasedRequestNumber+"'") {
+	// One E070 query answers both "does this request exist here" (its own
+	// header row, TRKORR = the number) and "what are its tasks" (STRKORR =
+	// the number), so no extra round trip is needed to tell an absent request
+	// from an empty one.
+	if !strings.Contains(queries[0], "SELECT TRKORR, STRKORR FROM E070 WHERE TRKORR = '"+releasedRequestNumber+
+		"' OR STRKORR = '"+releasedRequestNumber+"'") {
 		t.Errorf("E070 query: got %q", queries[0])
 	}
 	for _, number := range []string{releasedRequestNumber, releasedTaskOne, releasedTaskTwo} {
@@ -214,8 +229,8 @@ func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T)
 
 	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
 		if strings.Contains(sql, "FROM E070") {
-			// A released request has no tasks left.
-			return http.StatusOK, dataPreviewXML([]string{"TRKORR"}, nil)
+			// A released request has no tasks left — only its own header row.
+			return http.StatusOK, dataPreviewXML(e070Columns, [][]string{{releasedNumber, ""}})
 		}
 		return http.StatusOK, dataPreviewXML(
 			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
@@ -269,7 +284,8 @@ func TestGetTransportObjects_NamespacedNumber_ReachesTheQuery(t *testing.T) {
 
 	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
 		if strings.Contains(sql, "FROM E070") {
-			return http.StatusOK, dataPreviewXML([]string{"TRKORR"}, nil)
+			// The request's own header row, no tasks.
+			return http.StatusOK, dataPreviewXML(e070Columns, [][]string{{namespaced, ""}})
 		}
 		return http.StatusOK, dataPreviewXML(
 			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
@@ -362,7 +378,107 @@ func TestGetTransportObjects_FallbackFails_ErrorNamesBothAttempts(t *testing.T) 
 		t.Errorf("error should name the ADT attempt: %v", err)
 	}
 	// The query attempt.
-	if !strings.Contains(msg, "E070 task query") {
+	if !strings.Contains(msg, "E070 request/task query") {
 		t.Errorf("error should name the query attempt: %v", err)
+	}
+}
+
+// TestGetTransportObjects_LowercaseNumber_UppercasedForTheQuery pins that the
+// fallback agrees with the ADT path on case. The ADT path matches
+// case-insensitively on purpose (matchesTransportNumber), but SAP stores
+// TRKORR uppercase and Open SQL "=" on CHAR is case-sensitive, so a verbatim
+// lowercase number would match no row and the fallback would answer "no
+// objects" instead of the request's contents — a disagreement that is
+// invisible to the caller, because an empty list is a successful result.
+func TestGetTransportObjects_LowercaseNumber_UppercasedForTheQuery(t *testing.T) {
+	client, probe := newQueryFallbackClient(t, eccWorklistXML, releasedRequestResponder(t))
+
+	objs, err := client.GetTransportObjects(context.Background(), strings.ToLower(releasedRequestNumber))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(objs) != 2 {
+		t.Fatalf("lowercase number resolved to %d objects, want the same 2 as the uppercase form: %+v", len(objs), objs)
+	}
+	// Task attribution must use the uppercased number too, or the request's
+	// own row would look like a task row and be attributed to itself.
+	if objs[0].Task != releasedTaskOne {
+		t.Errorf("object 0 Task: got %q, want %q", objs[0].Task, releasedTaskOne)
+	}
+
+	for i, sql := range probe.all() {
+		if strings.Contains(sql, strings.ToLower(releasedRequestNumber)) {
+			t.Errorf("query %d interpolated the number in lowercase: %q", i, sql)
+		}
+		if !strings.Contains(sql, releasedRequestNumber) {
+			t.Errorf("query %d should use the uppercased number: %q", i, sql)
+		}
+	}
+}
+
+// TestGetTransportObjects_NoE070Entry_ReportsAbsentNotEmpty pins Task 2's
+// contract on the fallback path: a request that is on neither the worklist nor
+// E070 must produce absentTransportError, not a successful empty object list.
+// Without this, a typo'd or foreign transport number gives RollbackTransport
+// an empty work list, which it reports as a clean success. The CORR exclusion
+// makes the row count useless for telling the two cases apart — a real
+// released request and a nonexistent one both return zero object rows — which
+// is why the existence proof comes from E070 instead.
+func TestGetTransportObjects_NoE070Entry_ReportsAbsentNotEmpty(t *testing.T) {
+	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			return http.StatusOK, dataPreviewXML(e070Columns, nil)
+		}
+		t.Errorf("E071 must not be queried for a request with no E070 entry: %s", sql)
+		return http.StatusInternalServerError, ""
+	})
+
+	objs, err := client.GetTransportObjects(context.Background(), "HFQK999999")
+	if err == nil {
+		t.Fatalf("expected an absent error, got a successful result: %+v", objs)
+	}
+	if objs != nil {
+		t.Errorf("expected no objects alongside the error, got %+v", objs)
+	}
+	if !strings.Contains(err.Error(), "HFQK999999") ||
+		!strings.Contains(err.Error(), "transport-organizer worklist") ||
+		!strings.Contains(err.Error(), "no E070 entry on this system either") {
+		t.Errorf("error should say the request is absent from both sources: %v", err)
+	}
+	// Only the E070 existence query runs; there is nothing to ask E071 about.
+	if got := probe.all(); len(got) != 1 {
+		t.Errorf("expected exactly 1 query, got %v", got)
+	}
+}
+
+// TestGetTransportObjects_HostileTaskNumberFromE070_NeverReachesTheQuery
+// covers the second validation site: task numbers arrive from the server and
+// are interpolated into the E071 statement exactly like the caller's own
+// number, so they are re-validated. A malformed row must be dropped without
+// taking the legitimate tasks down with it.
+func TestGetTransportObjects_HostileTaskNumberFromE070_NeverReachesTheQuery(t *testing.T) {
+	const hostileTask = `T' OR '1'='1`
+
+	client, probe := newQueryFallbackClient(t, eccWorklistXML, releasedRequestResponder(t,
+		[]string{hostileTask, releasedRequestNumber},
+	))
+
+	if _, err := client.GetTransportObjects(context.Background(), releasedRequestNumber); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	queries := probe.all()
+	if len(queries) != 2 {
+		t.Fatalf("expected 2 queries, got %v", queries)
+	}
+	if strings.Contains(queries[1], hostileTask) || strings.Contains(queries[1], "'1'='1") {
+		t.Errorf("hostile task number reached the E071 statement: %q", queries[1])
+	}
+	// The legitimate tasks must survive — the guard drops the bad row, not
+	// the whole result.
+	for _, number := range []string{releasedRequestNumber, releasedTaskOne, releasedTaskTwo} {
+		if !strings.Contains(queries[1], "TRKORR = '"+number+"'") {
+			t.Errorf("E071 query lost legitimate number %s: %q", number, queries[1])
+		}
 	}
 }
