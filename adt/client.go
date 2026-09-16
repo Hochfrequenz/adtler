@@ -763,7 +763,9 @@ func encodeNamespacePath(path string) string {
 	// combined string first found "//" inside the query, then sliced the
 	// query-stripped path at that (now out-of-range) index — a
 	// slice-bounds panic with no recover() above it, crashing the process.
-	// See adtler#131 / aibap.mcp#494.
+	// Found via adversarial review of adtler#131 (a lock-handle query
+	// encoding fix for aibap.mcp#494) — #131 only incidentally avoids
+	// triggering this; the panic itself is fixed here, in adtler#133.
 	query := ""
 	if qIdx := strings.IndexByte(path, '?'); qIdx >= 0 {
 		query = path[qIdx:]
