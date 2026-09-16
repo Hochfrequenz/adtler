@@ -26,7 +26,7 @@ func TestDiscovery_ServerRequiresAcceptHeader_StillPopulatesCache(t *testing.T) 
 <app:service xmlns:app="http://www.w3.org/2007/app">
   <app:workspace>
     <app:collection href="/sap/bc/adt/programs/programs">
-      <app:accept>text/plain</app:accept>
+      <app:accept>text/plain; charset=utf-8</app:accept>
     </app:collection>
   </app:workspace>
 </app:service>`
@@ -49,12 +49,18 @@ func TestDiscovery_ServerRequiresAcceptHeader_StillPopulatesCache(t *testing.T) 
 		t.Fatalf("LoadDiscoveryForTest: %v", err)
 	}
 
-	// Discovery advertises ONLY "text/plain" (no charset) for programs — a
-	// value distinct from the hardcoded default (text/plain; charset=utf-8).
-	// Getting it back proves discovery was actually consulted, not silently
-	// empty and falling back.
+	// Discovery advertises "text/plain; charset=utf-8" — sourceContentType's
+	// PREFERRED type when discovery has it, but NOT its hardcoded fallback
+	// default ("text/plain", no charset, used when discovery is empty). An
+	// earlier version of this test asserted "text/plain" here, which is
+	// wrong: sourceContentType returns exactly that value on EMPTY discovery
+	// too (adt/source.go's contentTypeTextPlain fallback), so that assertion
+	// passed identically whether discovery populated or not — it proved
+	// nothing. Asserting the charset variant only passes if discovery was
+	// actually consulted. Same technique as the pre-existing
+	// TestSourceContentType_DiscoveryAdvertisesType_UsesIt.
 	got := client.SourceContentTypeForTest("/sap/bc/adt/programs/programs/ZTEST")
-	want := "text/plain"
+	want := "text/plain; charset=utf-8"
 	if got != want {
 		t.Errorf("discovery cache after a server that demands Accept: got content type %q, want %q (discovery is empty — the Accept-header 400 was swallowed)", got, want)
 	}

@@ -385,9 +385,13 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	// then silently stays empty for the client's whole lifetime (this
 	// function never checked the status code), which NegotiateContentType's
 	// default-fallback masks: callers keep working off hardcoded content
-	// types with no error, so the failure is invisible. */* asks for
-	// whatever the server's native discovery format is.
-	req.Header.Set("Accept", "*/*")
+	// types with no error, so the failure is invisible. The discovery
+	// document is AtomPub (RFC 5023, application/atomsvc+xml); state that
+	// preference explicitly rather than a bare "*/*", so content
+	// negotiation can't hand back some other representation this client
+	// doesn't parse — with ", */*" as a fallback in case a system's
+	// discovery endpoint doesn't recognise the vendor type.
+	req.Header.Set("Accept", "application/atomsvc+xml, */*")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -395,9 +399,14 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Parse discovery XML to cache accepted content types per endpoint.
+	// Parse discovery XML to cache accepted content types per endpoint. Only
+	// on a successful response: a non-2xx status (the 400 above, or any
+	// other failure) carries an error envelope, not a discovery document —
+	// feeding it to parseDiscovery would silently yield an empty map
+	// either way, but skipping the parse makes the intent explicit rather
+	// than relying on that as an implementation detail.
 	body, _ := io.ReadAll(resp.Body)
-	if len(body) > 0 {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && len(body) > 0 {
 		c.discovery = parseDiscovery(body)
 	}
 
