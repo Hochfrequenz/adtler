@@ -67,3 +67,38 @@ func TestUnlockObject(t *testing.T) {
 		t.Errorf("action: got %q, want UNLOCK", gotAction)
 	}
 }
+
+// aibap.mcp#494: the reporter's raw-HTTP diagnosis required URL-encoding the
+// lock handle in the query string, since real handles contain '+', '=', '/'.
+// UnlockObject builds its query string via raw concatenation
+// ("?_action=UNLOCK&lockHandle="+lockHandle), never through url.Values —
+// unlike every other lockHandle-in-query call site (SetIncludeSource,
+// CreateTestInclude, setSourceWithLockParam). A raw '+' in the handle is
+// decoded as a space by any form-urlencoded-convention query parser
+// (Go's r.URL.Query() included), silently corrupting the handle the server
+// receives — a plausible contributor to "invalid lock handle" / lock
+// release failures reported elsewhere (#383, #430, #449).
+func TestUnlockObject_EncodesLockHandleWithSpecialCharacters(t *testing.T) {
+	const rawHandle = `AB+C=D/E`
+	var gotHandle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotHandle = r.URL.Query().Get("lockHandle")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	if err := client.UnlockObject(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", rawHandle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotHandle != rawHandle {
+		t.Errorf("server received lockHandle %q, want %q (unencoded '+' corrupts to space)", gotHandle, rawHandle)
+	}
+}
