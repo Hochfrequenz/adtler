@@ -160,6 +160,7 @@ type EnhancementClient interface {
 type SystemClient interface {
 	SystemInfo() (host, client string)
 	Logout(ctx context.Context) error
+	SystemFlavor(ctx context.Context) (SystemFlavor, error)
 }
 
 // DependencyClient resolves the objects an ABAP object depends on.
