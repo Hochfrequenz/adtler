@@ -47,6 +47,14 @@ const (
 	// request is recoverable via ADTError.LockingTransport(); retargeting the
 	// write at it typically succeeds. See mcp-server-abap#442.
 	ErrorObjectLockedInTransport
+	// ErrorNotSupported means the operation is not available on the addressed
+	// system at all — not rejected by SAP, but refused locally before any
+	// request went out. RemoveFromTransport's capability gate is the first
+	// source of this kind: on a system that does not advertise the
+	// removeobject relation (see RemoveObjectSupport), sending the PUT
+	// anyway would be silently reinterpreted by a legacy handler as an
+	// unrelated, damaging operation, so the call never leaves the library.
+	ErrorNotSupported
 )
 
 // String returns a stable, lowercase identifier for the kind (handy for logs
@@ -83,6 +91,8 @@ func (k ErrorKind) String() string {
 		return "server_error"
 	case ErrorObjectLockedInTransport:
 		return "object_locked_in_transport"
+	case ErrorNotSupported:
+		return "not_supported"
 	default:
 		return "unknown"
 	}
@@ -147,6 +157,8 @@ func classifyByExceptionType(excType string) ErrorKind {
 		return ErrorMethodNotAllowed
 	case ExceptionTypeResourceCreationFailure:
 		return ErrorCreationFailed
+	case ExceptionTypeRemoveObjectUnsupported:
+		return ErrorNotSupported
 	default:
 		return ErrorUnknown
 	}

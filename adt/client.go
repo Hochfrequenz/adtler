@@ -190,16 +190,17 @@ type Client interface {
 }
 
 type httpClient struct {
-	cfg              sapmcpconfig.SAPSystem
-	http             *http.Client
-	httpLong         *http.Client // long-timeout client for large queries; shares transport + cookie jar
-	mu               sync.Mutex
-	csrfToken        string
-	hasSecureCookies bool                         // true if SAP sets Secure cookies on an HTTP connection
-	discovery        map[string][]string          // endpoint → accepted content types from discovery
-	accessToken      string                       // OAuth2 access token (empty = Basic Auth)
-	onTokenRefresh   func(string) (string, error) // callback to refresh token, returns new access token
-	pollInterval     time.Duration                // polling interval for background runs (default: 10s)
+	cfg                 sapmcpconfig.SAPSystem
+	http                *http.Client
+	httpLong            *http.Client // long-timeout client for large queries; shares transport + cookie jar
+	mu                  sync.Mutex
+	csrfToken           string
+	hasSecureCookies    bool                         // true if SAP sets Secure cookies on an HTTP connection
+	discovery           map[string][]string          // endpoint → accepted content types from discovery
+	removeObjectSupport RemoveObjectSupport          // cached tri-state; see cacheRemoveObjectSupport
+	accessToken         string                       // OAuth2 access token (empty = Basic Auth)
+	onTokenRefresh      func(string) (string, error) // callback to refresh token, returns new access token
+	pollInterval        time.Duration                // polling interval for background runs (default: 10s)
 }
 
 // NewClient creates a new ADT HTTP client configured from cfg.
@@ -775,15 +776,23 @@ func parseHTMLErrorBody(data []byte) string {
 // a namespace object. This function converts it to the ADT-required format:
 // /sap/bc/adt/programs/programs/%2fhfq%2freport
 func encodeNamespacePath(path string) string {
-	idx := strings.Index(path, "//")
-	if idx < 0 {
-		return path
-	}
-	// Separate query string before processing
+	// Split the query off BEFORE searching for "//": a query value (a
+	// base64-shaped lock handle, say) can easily contain "//" with no
+	// genuine namespace segment anywhere in the actual path. Searching the
+	// combined string first found "//" inside the query, then sliced the
+	// query-stripped path at that (now out-of-range) index — a
+	// slice-bounds panic with no recover() above it, crashing the process.
+	// Found via adversarial review of adtler#131 (a lock-handle query
+	// encoding fix for aibap.mcp#494) — #131 only incidentally avoids
+	// triggering this; the panic itself is fixed here, in adtler#133.
 	query := ""
 	if qIdx := strings.IndexByte(path, '?'); qIdx >= 0 {
 		query = path[qIdx:]
 		path = path[:qIdx]
+	}
+	idx := strings.Index(path, "//")
+	if idx < 0 {
+		return path + query
 	}
 	prefix := path[:idx+1]
 	rest := path[idx+1:]
