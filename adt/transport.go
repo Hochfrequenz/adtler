@@ -690,10 +690,12 @@ const (
 	RemoveObjectSupportUnsupported
 )
 
-// removeObjectRelation and addObjectRelation are the atom:link rel values
-// deriveRemoveObjectSupport looks for. Both are unprefixed local names as
-// SAP emits them; encoding/xml matches on local name, so the atom:/tm:
-// namespace prefixes seen on the wire don't matter here.
+// removeObjectRelation and addObjectRelation are the two values the atom:link
+// rel attribute takes on the wire that deriveRemoveObjectSupport looks for.
+// The rel attribute itself carries no namespace prefix in any captured
+// fixture; encoding/xml matches attributes (and elements) on local name, so
+// the atom:/tm: namespace prefixes elsewhere in the document don't affect
+// this lookup.
 const (
 	removeObjectRelation = "http://www.sap.com/cts/relations/removeobject"
 	addObjectRelation    = "http://www.sap.com/cts/relations/addobject"
@@ -763,13 +765,18 @@ func deriveRemoveObjectSupport(data []byte) RemoveObjectSupport {
 	return RemoveObjectSupportUnsupported
 }
 
-// cacheRemoveObjectSupport populates c.removeObjectSupport from data, once
-// per client instance, in the spirit of the cached discovery document (see
-// c.discovery and ensureCSRF's locking contract). The capability is a
-// property of the system, not of the addressed request, so once it is known
-// this is a cheap mutex-only no-op — it deliberately skips re-deriving (and
-// therefore re-unmarshalling) on every subsequent transport read, which
-// matters because these bodies run from 754 KB on ECC to 10.3 MB on S/4.
+// cacheRemoveObjectSupport populates c.removeObjectSupport from data, in the
+// spirit of the cached discovery document (see c.discovery and ensureCSRF's
+// locking contract). This is "once per client instance" only once the state
+// has actually been determined: once it is Supported or Unsupported, this is
+// a cheap mutex-only no-op that deliberately skips re-deriving (and therefore
+// re-unmarshalling) on every subsequent transport read, which matters because
+// these bodies run from 754 KB on ECC to 10.3 MB on S/4. But a body with no
+// atom relations at all leaves the state at RemoveObjectSupportUnknown (see
+// deriveRemoveObjectSupport), and the guard below only skips when the cached
+// state is something other than Unknown — so that case is re-derived (and
+// re-unmarshalled) on every subsequent read until some later body actually
+// decides it one way or the other.
 //
 // It acquires c.mu itself; callers MUST NOT already hold it.
 //
@@ -851,6 +858,15 @@ func (c *httpClient) GetTransportInfo(ctx context.Context, transportNumber strin
 // through ADT and carries no Position (the server sends none), while a
 // released one resolves through E071 and does. Each is the best its source
 // offers.
+//
+// A transport's entries can be recorded at R3TR (whole-object) or sub-object
+// (e.g. LIMU/METH) granularity — a property of what SAP wrote into the
+// transport itself, not of which path read it back or which system family it
+// came from (see getTransportObjectsViaQuery's doc comment for a live,
+// row-for-row comparison of both paths against the same request). A
+// transport recorded at sub-object granularity yields a list RollbackTransport
+// skips in full, reporting an all-skipped result with a nil error rather than
+// an error — see https://github.com/Hochfrequenz/adtler/issues/134.
 func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber string) ([]TransportObject, error) {
 	data, err := c.readTransportXML(ctx, transportNumber, "application/vnd.sap.adt.transportorganizer.v1+xml, application/xml")
 	if err != nil {
@@ -905,6 +921,24 @@ var errTransportNumberUnsafe = errors.New("contains characters not allowed in a 
 // to callers as if it were transported content.
 const pgmIDReleaseMarker = "CORR"
 
+// e071ObjectQueryMaxRows is the maxRows cap passed to RunQuery for the E071
+// object query in getTransportObjectsViaQuery. The ADT data preview endpoint
+// enforces this as a server-side row limit and returns no error when it
+// truncates — a transport with more objects than this silently comes back as
+// a complete-looking partial list unless the caller checks for it.
+//
+// Whether QueryResult.TotalRows reports the *uncapped* total (letting the
+// truncation be detected directly) or only the number of rows actually
+// returned is not settled from this codebase: RunQuery reads TotalRows
+// straight off the wire (see transposeDataPreview) without controlling what
+// the server puts there, and this package's own test helper
+// (dataPreviewXML) sets it to len(rows) — so no fixture in this repo can
+// decide the question either way. Treating the returned row count reaching
+// the cap as the primary, unconditionally reliable signal — checked
+// alongside TotalRows in case a server does report the true, larger total —
+// means the check does not depend on that assumption being true.
+const e071ObjectQueryMaxRows = 5000
+
 // getTransportObjectsViaQuery reads a transport request's objects straight
 // out of E071 via the ADT data preview endpoint. It is the fallback for
 // GetTransportObjects when the transport-organizer response does not contain
@@ -930,8 +964,9 @@ const pgmIDReleaseMarker = "CORR"
 // that is nearly every row. WBType has no E071 column and is always empty
 // here.
 //
-// Two properties of E071 that callers must know, neither of which is
-// normalised away here:
+// Differences from the ADT XML path (GetTransportObjects's primary source),
+// measured by reading the same released S/4 request (S4UK900013) through
+// both paths and comparing, not merely inferred:
 //
 //   - E071 records more than repository objects. A released request carries a
 //     release marker row (PGMID CORR, OBJECT RELE) whose OBJ_NAME is a packed
@@ -939,11 +974,27 @@ const pgmIDReleaseMarker = "CORR"
 //     name. PGMID CORR is excluded in the query itself, so the exclusion is
 //     visible in the statement rather than buried in a post-filter; the row
 //     loop drops any that survive anyway, as a guard against a server that
-//     ignores the predicate.
-//   - E071 records sub-object granularity. A single method arrives as its own
-//     LIMU METH row, where the ADT XML path reports the owning class once at
-//     R3TR granularity. The two paths therefore do not return identical
-//     shapes for the same transport, and this one is not folded up to match.
+//     ignores the predicate. The ADT XML path does the opposite: the same
+//     measurement found the equivalent CORR/RELE row (positions 1-2, e.g.
+//     "S4UK900014 20250526 112849 MSP-BASIS") passed through unfiltered. Both
+//     behaviours are deliberate — this path's exclusion is not a bug to
+//     "fix" into matching the XML path's, and the XML path's filtering is out
+//     of scope here.
+//   - Granularity itself is NOT a difference between the two paths, despite
+//     an earlier version of this comment claiming one: the same measurement
+//     found the ADT XML path reporting a LIMU/METH row (e.g.
+//     "/US4G/CL_CHK_GUB_SUP_PROCESS  CHK_GUB_DELV_NOTE_PROC_STATUS", WBType
+//     "CLAS/OM") at the same position as the equivalent E071 row, among 16
+//     entries that matched between the two paths row-for-row. Granularity is
+//     a property of what SAP recorded in the transport, not of which path
+//     reads it back.
+//   - Field coverage differs: the ADT XML path additionally supplies WBType,
+//     which E071 has no column for and which stays empty on every row here.
+//   - queryCell applies strings.TrimSpace to every cell. E071's CHAR/NUMC
+//     columns are blank-padded on the wire (as seen above in the packed CORR
+//     audit string and in a LIMU/METH OBJ_NAME's embedded field boundary);
+//     the ADT XML path's attribute values never carried that padding to
+//     begin with, so only this path needs the trim.
 //
 // transportNumber is validated against transportNumberRe before it is
 // interpolated, and so is every task number the first query returns. It is
@@ -951,6 +1002,14 @@ const pgmIDReleaseMarker = "CORR"
 // case-sensitive, so a caller's lowercase number would match no row and this
 // path would answer "no objects" where the ADT path — deliberately
 // case-insensitive, see matchesTransportNumber — answers correctly.
+//
+// e071ObjectQueryMaxRows caps the E071 object query below (the second of the
+// two; transportQueryNumbers' own E070 query has a separate, unchanged
+// literal cap and is not in scope here — an oversized task list is a much
+// rarer shape than an oversized object list). That cap is silent unless
+// checked: RunQuery hands back whatever rows the server returned, with no
+// error, whether or not more existed. See e071ObjectQueryMaxRows's own doc
+// comment for how that is detected below.
 func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportNumber string) ([]TransportObject, error) {
 	if !transportNumberRe.MatchString(transportNumber) {
 		return nil, fmt.Errorf("transport number %q %w", transportNumber, errTransportNumberUnsafe)
@@ -976,9 +1035,18 @@ func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportN
 		strings.Join(where, " OR ") + " ) AND PGMID <> '" + pgmIDReleaseMarker + "'" +
 		" ORDER BY TRKORR, AS4POS"
 
-	qr, err := c.RunQuery(ctx, query, 5000)
+	qr, err := c.RunQuery(ctx, query, e071ObjectQueryMaxRows)
 	if err != nil {
 		return nil, fmt.Errorf("E071 object query: %w", err)
+	}
+	// The server-side row cap can silently truncate a large transport's object
+	// list with no error — see e071ObjectQueryMaxRows's doc comment for why
+	// both conditions below are checked rather than just one.
+	if len(qr.Rows) >= e071ObjectQueryMaxRows || qr.TotalRows >= e071ObjectQueryMaxRows {
+		return nil, fmt.Errorf(
+			"E071 object query: transport %s has at least %d objects, at or above the %d-row query cap "+
+				"(returned %d rows, server-reported TotalRows %d) — refusing to return a possibly truncated list",
+			transportNumber, e071ObjectQueryMaxRows, e071ObjectQueryMaxRows, len(qr.Rows), qr.TotalRows)
 	}
 	idx := queryColumnIndexes(qr, "TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME")
 	if idx["OBJ_NAME"] < 0 {
@@ -1039,12 +1107,17 @@ func (c *httpClient) transportQueryNumbers(ctx context.Context, transportNumber 
 	if err != nil {
 		return nil, fmt.Errorf("E070 request/task query: %w", err)
 	}
+	// Zero rows is checked before the column metadata: a server answering an
+	// absent transport with an empty result set may also omit column
+	// metadata entirely, and that combination must still report "absent",
+	// not "malformed response" — the absent case is the common, expected one
+	// (see absentTransportError), not an error condition in its own right.
+	if len(qr.Rows) == 0 {
+		return nil, absentTransportError(transportNumber)
+	}
 	idx := queryColumnIndexes(qr, "TRKORR", "STRKORR")
 	if idx["TRKORR"] < 0 {
 		return nil, fmt.Errorf("E070 request/task query returned no TRKORR column")
-	}
-	if len(qr.Rows) == 0 {
-		return nil, absentTransportError(transportNumber)
 	}
 
 	numbers := []string{transportNumber}
@@ -1110,6 +1183,14 @@ func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest,
 	// Format 2: workbench/customizing > sections > requests (application/xml)
 	// — this is also ECC's worklist shape (see eccWorklistXML). Select the
 	// request whose number matches transportNumber.
+	//
+	// Unlike parseTransportObjectsXML and parseTransportTaskNumbers, which
+	// accumulate every match walkRequests reports (their dedupers/slices have
+	// a natural way to combine duplicates), a TransportRequest is a single
+	// Owner/Description/Status identity with no such combining rule. So this
+	// keeps only the first match and ignores any further one — walkRequests
+	// can call fn more than once for the same transportNumber, e.g. if that
+	// number appeared in both the workbench and customizing groups.
 	var result *TransportRequest
 	found := doc.walkRequests(transportNumber, func(req xmlRequest) {
 		if result == nil {
@@ -1183,10 +1264,7 @@ type xmlTask struct {
 // objects returns this task's objects, merging bare direct children with any
 // wrapped under <tm:all_objects>.
 func (t xmlTask) objects() []xmlObject {
-	if len(t.AllObjects.Objects) == 0 {
-		return t.Objects
-	}
-	return append(append([]xmlObject{}, t.Objects...), t.AllObjects.Objects...)
+	return mergeObjectSources(t.Objects, t.AllObjects)
 }
 
 // xmlRequest is a <tm:request> element, either the sole element of a Format 1
@@ -1205,15 +1283,24 @@ type xmlRequest struct {
 }
 
 // objects returns this request's own (non-task) objects, merging bare direct
-// children with any wrapped under <tm:all_objects>. See the a0 fix note on
-// xmlObjectGroup: request-level objects wrapped in <tm:all_objects> (the real
-// S/4 shape once a request has been sorted-and-compressed, or is released)
-// were silently dropped before this method existed.
+// children with any wrapped under <tm:all_objects>: request-level objects
+// wrapped in <tm:all_objects> (the real S/4 shape once a request has been
+// sorted-and-compressed, or is released) were silently dropped before this
+// method existed.
 func (r xmlRequest) objects() []xmlObject {
-	if len(r.AllObjects.Objects) == 0 {
-		return r.Objects
+	return mergeObjectSources(r.Objects, r.AllObjects)
+}
+
+// mergeObjectSources merges bare, direct-child <tm:abap_object> elements
+// (bare) with any wrapped under a sibling <tm:all_objects> element (wrapped),
+// the shape shared by both <tm:request> and <tm:task> — see xmlObjectGroup's
+// doc comment. xmlRequest.objects and xmlTask.objects are otherwise identical
+// wrappers around this single implementation.
+func mergeObjectSources(bare []xmlObject, wrapped xmlObjectGroup) []xmlObject {
+	if len(wrapped.Objects) == 0 {
+		return bare
 	}
-	return append(append([]xmlObject{}, r.Objects...), r.AllObjects.Objects...)
+	return append(append([]xmlObject{}, bare...), wrapped.Objects...)
 }
 
 // xmlTransportGroup is a Format 2 group (<tm:workbench> or <tm:customizing>),
@@ -1249,7 +1336,12 @@ type xmlTransportDoc struct {
 // walkRequests calls fn for every Format 2 request (across the workbench and
 // customizing groups) whose number matches transportNumber per
 // matchesTransportNumber, and reports whether at least one matched — the
-// "present" half of the absent/empty distinction.
+// "present" half of the absent/empty distinction. fn can be called more than
+// once for the same transportNumber — nothing here rules out the same
+// request number appearing in both groups. parseTransportObjectsXML and
+// parseTransportTaskNumbers are written to accumulate every call; a caller
+// that instead needs a single identity, like parseTransportInfo, must choose
+// which match to keep itself.
 func (doc xmlTransportDoc) walkRequests(transportNumber string, fn func(xmlRequest)) (found bool) {
 	for _, group := range []xmlTransportGroup{doc.Workbench, doc.Customizing} {
 		for _, section := range group.Sections {

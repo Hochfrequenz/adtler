@@ -8,8 +8,8 @@ import (
 
 // The fixtures below were captured on 2026-09-16 by a temporary, read-only
 // probe (adt/probe_transport_capture_integration_test.go, deleted before
-// commit — see task-1-report.md in the ecc-transport-parsing plan) that
-// issued GET /sap/bc/adt/cts/transportrequests/<number> against two real
+// commit — see Task 1 of docs/superpowers/plans/2026-09-16-ecc-transport-parsing-plan.md)
+// that issued GET /sap/bc/adt/cts/transportrequests/<number> against two real
 // systems:
 //
 //   - HFQ (ECC, SAP_BASIS 750), Accept: "application/vnd.sap.adt.transportorganizer.v1+xml, application/xml"
@@ -30,9 +30,9 @@ import (
 // S/4 captures of real transports (S4UK904438 and S4UK904476 respectively);
 // only the boilerplate administrative atom:link entries (consistencycheck,
 // sortandcompress, changeowner, etc.) were trimmed for size. s4ObjectAtBothLevelsXML
-// is hand-built (per the task brief) from s4SingleRequestXML's content: no
-// captured S/4 response was found where an object sits both as a bare child
-// of <tm:request> and inside a <tm:task> — see task-1-report.md.
+// is hand-built from s4SingleRequestXML's content: no captured S/4 response
+// was found where an object sits both as a bare child of <tm:request> and
+// inside a <tm:task>, so this fixture constructs that shape by hand instead.
 
 // eccWorklistXML is ECC's worklist shape as captured: a GET for a single
 // transport number instead returns the whole <tm:workbench><tm:modifiable>
@@ -82,10 +82,11 @@ var eccWorklistEmptyNumberXML = strings.Replace(eccWorklistXML,
 // eccCustomizingXML is eccWorklistXML hand-edited so the second request
 // (HFQK902952, with its task and object left untouched) sits under a
 // <tm:customizing> group instead of <tm:workbench>. No genuine ECC
-// customizing-group capture was available (the probed worklist held none —
-// see task-1-report.md); the group wrapper is built from the real
-// tm:category/tm:status attribute names and values already confirmed on the
-// tm:workbench/tm:modifiable pair above. Task 2 must not drop this request.
+// customizing-group capture was available — the probed worklist held only
+// workbench entries — so the group wrapper here is inferred by symmetry: it
+// reuses the real tm:category/tm:status attribute names and values already
+// confirmed on the tm:workbench/tm:modifiable pair above. GetTransportObjects
+// must not drop this request just because it sits in the customizing group.
 const eccCustomizingXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<tm:root adtcore:name="MEISKEJ" adtcore:changedAt="2026-09-16T13:24:09Z" adtcore:createdAt="2026-09-16T13:24:09Z" adtcore:changedBy="MEISKEJ" adtcore:createdBy="MEISKEJ" xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core">` +
 	`<tm:workbench tm:category="Workbench">` +
@@ -119,9 +120,9 @@ const eccCustomizingXML = `<?xml version="1.0" encoding="utf-8"?>` +
 // request/task-level self+modify+addobject links and — crucially — every
 // per-object atom:link (removeobject/lockobject/moveobjects) are kept
 // verbatim. Note the real object list under <tm:request> is wrapped in
-// <tm:all_objects> (not bare <tm:abap_object> children) — the existing
-// Go parsers' xmlRequest.Objects ("abap_object" as a direct child of
-// request) does not match this wrapper; see task-1-report.md.
+// <tm:all_objects> (not bare <tm:abap_object> children) — xmlRequest binds
+// this wrapper explicitly (see xmlObjectGroup) precisely because a plain
+// "abap_object as a direct child of request" binding does not match it.
 const s4SingleRequestXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<tm:root tm:object_type="R" adtcore:responsible="MANNN" adtcore:name="S4UK904438" adtcore:type="RQRQ" adtcore:changedAt="2026-09-11T16:31:58Z" adtcore:changedBy="MANNN" adtcore:description="dummy transportschicht" xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core">` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904438" rel="http://www.sap.com/cts/relations/adturi" type="application/vnd.sap.adt.transportrequests.v1+xml" title="Transport Organizer ADT URI" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
@@ -172,11 +173,11 @@ const s4RequestNoObjectsXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`</tm:request>` +
 	`</tm:root>`
 
-// s4ObjectAtBothLevelsXML is hand-built (per the task brief — no such
-// response was observed live; see task-1-report.md) from s4SingleRequestXML
-// by adding a bare <tm:abap_object> for the same object (R3TR/DEVC/Z_WINBACK)
-// directly as a child of <tm:request>, alongside the identical object
-// already present inside <tm:task>. Task 3's dedup rule is defined by it.
+// s4ObjectAtBothLevelsXML is hand-built — no live S/4 response was found with
+// this shape — from s4SingleRequestXML by adding a bare <tm:abap_object> for
+// the same object (R3TR/DEVC/Z_WINBACK) directly as a child of <tm:request>,
+// alongside the identical object already present inside <tm:task>. The
+// object-dedup rule in parseTransportObjectsXML is defined against it.
 const s4ObjectAtBothLevelsXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<tm:root tm:object_type="R" adtcore:responsible="MANNN" adtcore:name="S4UK904438" adtcore:type="RQRQ" adtcore:changedAt="2026-09-11T16:31:58Z" adtcore:changedBy="MANNN" adtcore:description="dummy transportschicht" xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core">` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4UK904438" rel="http://www.sap.com/cts/relations/adturi" type="application/vnd.sap.adt.transportrequests.v1+xml" title="Transport Organizer ADT URI" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
@@ -205,9 +206,9 @@ const s4ObjectAtBothLevelsXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`</tm:request>` +
 	`</tm:root>`
 
-// s4ObjectDivergentPositionAndTaskXML is hand-built (per task-3 fix round 1
-// review feedback on 2026-09-16 — see task-3-report.md's fix-report section)
-// from s4ObjectAtBothLevelsXML's shape. In every other fixture in this file
+// s4ObjectDivergentPositionAndTaskXML is hand-built, from a round of review
+// feedback on the dedup tests below, from s4ObjectAtBothLevelsXML's shape.
+// In every other fixture in this file
 // that duplicates an object across levels, every occurrence carries the
 // identical tm:position (and, where a task is involved, the same single
 // task), so a test asserting "kept the first-seen value" cannot actually
@@ -324,8 +325,9 @@ func TestEccCustomizingXML_RequestUnderCustomizingGroup(t *testing.T) {
 
 // TestRemoveObjectRelation_S4OnlyNotECC pins the acceptance criterion that
 // s4SingleRequestXML carries the removeobject relation and eccWorklistXML
-// does not (ECC never emits per-object atom relations at all — see
-// task-1-report.md for the level finding).
+// does not: the captured ECC worklist body never emits per-object atom
+// relations at all (its only atom:link elements sit on requests/tasks, and
+// list only consistencycheck/releasejobs/modify/newtask).
 func TestRemoveObjectRelation_S4OnlyNotECC(t *testing.T) {
 	if !strings.Contains(s4SingleRequestXML, "removeobject") {
 		t.Error("s4SingleRequestXML must contain the removeobject relation")

@@ -34,7 +34,13 @@ func TestRemoveFromTransport_ECCUnsupported_NeverSendsPUT(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(eccWorklistXML))
 		case r.Method == http.MethodPut:
-			t.Fatalf("PUT must never be sent once the capability read confirms unsupported, got PUT %s", r.URL.Path)
+			// t.Fatalf is documented as incorrect from a non-test goroutine
+			// (an httptest handler runs on its own goroutine, not the test's)
+			// and would produce a misleading failure here; t.Errorf plus an
+			// explicit response is the pattern the sibling fallback tests use
+			// (see transport_e071_fallback_test.go).
+			t.Errorf("PUT must never be sent once the capability read confirms unsupported, got PUT %s", r.URL.Path)
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

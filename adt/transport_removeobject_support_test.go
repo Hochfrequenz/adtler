@@ -22,34 +22,12 @@ const noAtomLinksTransportXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<tm:request tm:number="DEVK900001" tm:owner="DEV" tm:desc="No links" tm:status="D"/>` +
 	`</tm:root>`
 
-// newCapabilityTestClient returns a TestClient whose transportrequests/<n>
-// endpoint always answers with body, mirroring newFixtureClient's helper in
-// transport_test.go but returning the TestClient interface so callers can
-// read back the cached RemoveObjectSupport state via
-// RemoveObjectSupportForTest.
-func newCapabilityTestClient(t *testing.T, body string) adt.TestClient {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/sap/bc/adt/cts/transportrequests/") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/xml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	return adt.NewClientForTest(cfg)
-}
-
 // TestRemoveObjectSupport_ECCWorklist_Unsupported pins the acceptance
 // criterion that eccWorklistXML (consistencycheck, releasejobs, modify,
 // newtask — no addobject, no removeobject) yields
 // RemoveObjectSupportUnsupported.
 func TestRemoveObjectSupport_ECCWorklist_Unsupported(t *testing.T) {
-	client := newCapabilityTestClient(t, eccWorklistXML)
+	client := newFixtureClient(t, eccWorklistXML)
 
 	if _, err := client.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
@@ -62,7 +40,7 @@ func TestRemoveObjectSupport_ECCWorklist_Unsupported(t *testing.T) {
 // TestRemoveObjectSupport_ECCCustomizing_Unsupported extends the ECC case to
 // the customizing-group shape (modify only).
 func TestRemoveObjectSupport_ECCCustomizing_Unsupported(t *testing.T) {
-	client := newCapabilityTestClient(t, eccCustomizingXML)
+	client := newFixtureClient(t, eccCustomizingXML)
 
 	if _, err := client.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
@@ -76,7 +54,7 @@ func TestRemoveObjectSupport_ECCCustomizing_Unsupported(t *testing.T) {
 // criterion that s4SingleRequestXML, which carries both removeobject and
 // addobject, yields RemoveObjectSupportSupported.
 func TestRemoveObjectSupport_S4SingleRequest_Supported(t *testing.T) {
-	client := newCapabilityTestClient(t, s4SingleRequestXML)
+	client := newFixtureClient(t, s4SingleRequestXML)
 
 	if _, err := client.GetTransportObjects(context.Background(), "S4UK904438"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
@@ -89,7 +67,7 @@ func TestRemoveObjectSupport_S4SingleRequest_Supported(t *testing.T) {
 // TestRemoveObjectSupport_S4ObjectAtBothLevels_Supported covers the other
 // "both markers present" fixture named in the acceptance criteria.
 func TestRemoveObjectSupport_S4ObjectAtBothLevels_Supported(t *testing.T) {
-	client := newCapabilityTestClient(t, s4ObjectAtBothLevelsXML)
+	client := newFixtureClient(t, s4ObjectAtBothLevelsXML)
 
 	if _, err := client.GetTransportObjects(context.Background(), "S4UK904438"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
@@ -105,15 +83,8 @@ func TestRemoveObjectSupport_S4ObjectAtBothLevels_Supported(t *testing.T) {
 // at both request and task level. Per the stated derivation rule, addobject
 // alone is enough for "supported" — it is the discriminator that tells ECC
 // apart from an S/4 request that simply holds no objects yet.
-//
-// NOTE: the task brief's own "Acceptance" section says this fixture "leaves
-// the state unknown", which contradicts both the rule as stated earlier in
-// the same brief and the brief's own "Checked against the fixtures" list
-// ("s4RequestNoObjectsXML (addobject, no removeobject) -> supported"). This
-// test follows the rule and the fixture-check list, not the acceptance
-// bullet, which looks like a drafting error — see the task report.
 func TestRemoveObjectSupport_S4RequestNoObjects_Supported(t *testing.T) {
-	client := newCapabilityTestClient(t, s4RequestNoObjectsXML)
+	client := newFixtureClient(t, s4RequestNoObjectsXML)
 
 	if _, err := client.GetTransportObjects(context.Background(), "S4UK904476"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
@@ -127,7 +98,7 @@ func TestRemoveObjectSupport_S4RequestNoObjects_Supported(t *testing.T) {
 // that a body with no atom relations at all leaves the capability unknown —
 // it cannot tell ECC apart from S/4 and must not guess either way.
 func TestRemoveObjectSupport_NoAtomLinks_Unknown(t *testing.T) {
-	client := newCapabilityTestClient(t, noAtomLinksTransportXML)
+	client := newFixtureClient(t, noAtomLinksTransportXML)
 
 	if _, err := client.GetTransportInfo(context.Background(), "DEVK900001"); err != nil {
 		t.Fatalf("GetTransportInfo: unexpected error: %v", err)
@@ -187,16 +158,20 @@ func TestRemoveObjectSupport_SkipsRederivationOnceKnown(t *testing.T) {
 	}
 }
 
-// TestRemoveObjectSupport_FreshSession_StartsUnknownAgain pins that
-// freshSession's isolated *httpClient does not inherit a cached capability —
-// this is exercised through RunClass, the only public entry point that uses
-// freshSession internally, so a direct field check isn't available; instead
-// this documents the behaviour via a fresh TestClient the same way
-// TestRemoveObjectSupport_FreshClient_StartsUnknown does, since freshSession
-// itself is unexported and copies none of these fields (see freshSession's
-// doc comment in client.go).
-func TestRemoveObjectSupport_FreshSession_StartsUnknownAgain(t *testing.T) {
-	client1 := newCapabilityTestClient(t, eccWorklistXML)
+// TestRemoveObjectSupport_SeparateClients_DoNotShareCachedState pins that the
+// cached removeobject capability lives on the *httpClient instance, not
+// anywhere package-global: a second, independent client starts at Unknown
+// regardless of what an earlier client has already learned. This does not
+// actually exercise freshSession (there is no direct way to reach its
+// isolated *httpClient from this package's tests — RunClass is the only
+// public entry point that uses it internally, and it does not expose a way
+// to read the capability back out); it only stands in for that guarantee via
+// two ordinary TestClients, the same way
+// TestRemoveObjectSupport_FreshClient_StartsUnknown does for a single one.
+// freshSession's own doc comment in client.go is the source of truth for why
+// its *httpClient copies none of these fields.
+func TestRemoveObjectSupport_SeparateClients_DoNotShareCachedState(t *testing.T) {
+	client1 := newFixtureClient(t, eccWorklistXML)
 	if _, err := client1.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -1,14 +1,15 @@
 //go:build integration
 
-// Integration tests for Task 8 of the ecc-transport-parsing plan
+// Integration tests for adtler#125
 // (https://github.com/Hochfrequenz/adtler/issues/125): verify the
-// GetTransportObjects/GetTransportInfo parsing changes and the Task 6
-// removeobject capability tri-state against real R/3 (HFQ) and S/4 (S4U)
-// systems, using eachSystem(t) so both run from a single `go test` command.
+// GetTransportObjects/GetTransportInfo ECC-worklist-vs-S/4-single-request
+// parsing changes and the removeobject capability tri-state
+// (adt.RemoveObjectSupport) against real R/3 (HFQ) and S/4 (S4U) systems,
+// using eachSystem(t) so both run from a single `go test` command.
 //
 // These tests are read-only. They enumerate existing modifiable transport
 // requests and read their contents; they never create, release, or modify a
-// transport. See transport_task8_remove_gate_integration_test.go for the
+// transport. See transport_removeobject_gate_integration_test.go for the
 // (also read-only, gate-blocked) RemoveFromTransport coverage.
 package adt_test
 
@@ -37,14 +38,21 @@ func objectSetKey(objs []adt.TransportObject) string {
 
 // maxTransportProbe caps how many modifiable requests selectTwoDifferingTransports
 // will pull object lists for. Each GetTransportObjects call fetches a full
-// transport-organizer body — up to 10.3 MB measured on S/4 (see
-// task-1-brief.md) against a 30s HTTP timeout — so this walks a bounded
-// prefix of the modifiable worklist rather than the whole thing.
+// transport-organizer body — up to 10.3 MB measured on S/4 — against a 30s
+// HTTP timeout, so this walks a bounded prefix of the modifiable worklist
+// rather than the whole thing.
 const maxTransportProbe = 25
 
 // selectTwoDifferingTransports enumerates GetTransportRequests(ctx, "", "D")
-// and walks the result (bounded by maxTransportProbe), grouping every
-// non-empty GetTransportObjects result by its objectSetKey fingerprint.
+// and walks the result (bounded by maxTransportProbe), grouping each
+// non-empty GetTransportObjects result by its objectSetKey fingerprint — but
+// it stops as soon as two distinct fingerprints have been seen, rather than
+// grouping every result in the prefix unconditionally. That short-circuit
+// never masks the regression this test exists to catch: a full regression
+// (every request returning the same object list) never produces a second
+// distinct fingerprint, so that case walks the whole prefix anyway, and the
+// fatal check below still sees every duplicate landing on the one
+// fingerprint it did find.
 //
 // Two outcomes are NOT the same thing, and this function tells them apart
 // rather than collapsing both into a skip:
@@ -207,8 +215,8 @@ func TestGetTransportInfo_ReturnsRequestedNumber_Integration(t *testing.T) {
 	}
 }
 
-// TestRemoveObjectSupport_Capability_Integration verifies the Task 6
-// removeobject capability tri-state (adt.RemoveObjectSupport) resolves to
+// TestRemoveObjectSupport_Capability_Integration verifies the removeobject
+// capability tri-state (adt.RemoveObjectSupport) resolves to
 // Unsupported on R/3 (HFQ) and Supported on S/4 (S4U). The capability is a
 // cached side effect of readTransportXML (see cacheRemoveObjectSupport), so
 // this first triggers one real transport read via GetTransportInfo before

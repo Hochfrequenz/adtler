@@ -190,10 +190,18 @@ type ADTError struct {
 }
 
 func (e *ADTError) Error() string {
-	if e.Type != "" {
+	switch {
+	case e.StatusCode == 0 && e.Type != "":
+		// No HTTP request was ever sent — e.g. RemoveFromTransport's
+		// capability gate (ExceptionTypeRemoveObjectUnsupported), which
+		// synthesises this error locally. "SAP ADT error 0" would claim an
+		// HTTP status that never happened, so this case is worded without one.
+		return fmt.Sprintf("%s: %s", e.Type, e.Message)
+	case e.Type != "":
 		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
+	default:
+		return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 	}
-	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 }
 
 // ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):

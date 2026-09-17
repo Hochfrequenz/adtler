@@ -24,11 +24,16 @@ const (
 // dedup/attribution tests below.
 const s4WinbackFirstTaskNumber = "S4UK904439"
 
-// newFixtureClient returns a client whose transportrequests/<transport>
+// newFixtureClient returns a TestClient whose transportrequests/<transport>
 // endpoint always answers with body, regardless of which transport number is
 // requested — mirroring the ECC worklist bug where a GET for one transport
 // number returns the whole worklist body (see eccWorklistXML's doc comment).
-func newFixtureClient(t *testing.T, body string) adt.Client {
+// It returns adt.TestClient (rather than plain adt.Client) so callers that
+// also need to read back the cached RemoveObjectSupport state (see
+// transport_removeobject_support_test.go) can use the same helper instead of
+// a near-duplicate one; TestClient embeds Client, so this serves every
+// caller that only needs the public surface too.
+func newFixtureClient(t *testing.T, body string) adt.TestClient {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/sap/bc/adt/cts/transportrequests/") {
@@ -42,7 +47,7 @@ func newFixtureClient(t *testing.T, body string) adt.Client {
 	t.Cleanup(srv.Close)
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	return adt.NewClient(cfg)
+	return adt.NewClientForTest(cfg)
 }
 
 // TestGetTransportObjects_ECCWorklist_FiltersByNumber pins the filter rule:
@@ -145,8 +150,8 @@ func TestGetTransportObjects_ECCCustomizing_ReturnsCustomizingGroupObjects(t *te
 	}
 }
 
-// TestGetTransportObjects_S4SingleRequest_BindsAllObjectsWrapper verifies the
-// a0 fix: request-level objects wrapped in <tm:all_objects> are no longer
+// TestGetTransportObjects_S4SingleRequest_BindsAllObjectsWrapper verifies
+// that request-level objects wrapped in <tm:all_objects> are no longer
 // dropped, and dedup still collapses the identical object also present under
 // <tm:task> into a single entry.
 func TestGetTransportObjects_S4SingleRequest_BindsAllObjectsWrapper(t *testing.T) {
@@ -173,6 +178,28 @@ func TestGetTransportObjects_S4SingleRequest_WrongNumberIsAbsent(t *testing.T) {
 	_, err := client.GetTransportObjects(context.Background(), "S4UK000000")
 	if err == nil {
 		t.Fatal("expected error: fixture body is for S4UK904438, not S4UK000000")
+	}
+}
+
+// TestGetTransportObjects_S4RequestPresentButEmpty_ReturnsEmptySliceNilError
+// pins the present-but-empty case directly: s4RequestNoObjectsXML's request
+// (S4UK904476) IS the addressed request — it is present, per
+// absentTransportError's contract — it simply holds no abap_object anywhere.
+// That must come back as an empty slice and a nil error, never as
+// absentTransportError; absent and empty are deliberately different outcomes
+// (see absentTransportError's doc comment), and until this test existed the
+// distinction was only ever exercised as a side effect of a capability test
+// (TestRemoveObjectSupport_S4RequestNoObjects_Supported), not asserted on
+// directly here.
+func TestGetTransportObjects_S4RequestPresentButEmpty_ReturnsEmptySliceNilError(t *testing.T) {
+	client := newFixtureClient(t, s4RequestNoObjectsXML)
+
+	objs, err := client.GetTransportObjects(context.Background(), "S4UK904476")
+	if err != nil {
+		t.Fatalf("unexpected error for a present-but-empty request: %v", err)
+	}
+	if len(objs) != 0 {
+		t.Errorf("got %+v, want an empty slice", objs)
 	}
 }
 
@@ -256,11 +283,15 @@ func TestGetTransportObjects_S4SingleRequest_DedupUpgradesTask(t *testing.T) {
 }
 
 // TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPosition
-// verifies the acceptance criterion for s4ObjectAtBothLevelsXML (which records
-// the same object three times: bare under <tm:request>, wrapped in
-// <tm:all_objects>, and under <tm:task>): the result holds exactly one entry,
-// it carries the task number, and it keeps the position of the first-seen
-// (bare, request-level) occurrence rather than any later one.
+// verifies the acceptance criterion for s4ObjectAtBothLevelsXML (which
+// records the same object three times: bare under <tm:request>, wrapped in
+// <tm:all_objects>, and under <tm:task>): the result holds exactly one entry
+// and carries the task number. It also asserts Position == "000001", but
+// every occurrence in this fixture shares that same position, so that
+// assertion cannot by itself distinguish "kept the first-seen position" from
+// "the last occurrence happened to carry the same value" —
+// TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstSeenPosition
+// below is the test that actually discriminates between those two.
 func TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPosition(t *testing.T) {
 	client := newFixtureClient(t, s4ObjectAtBothLevelsXML)
 

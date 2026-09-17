@@ -26,11 +26,23 @@ const (
 
 // dataPreviewXML renders a column-oriented data preview response body — the
 // shape RunQuery parses — from a column-name list and row-major data.
+// TotalRows is reported as len(rows) — this is the "server reports only the
+// returned count" convention this package's fixtures use throughout, which is
+// exactly why the truncation check in getTransportObjectsViaQuery cannot rely
+// on TotalRows alone (see e071ObjectQueryMaxRows's doc comment). Use
+// dataPreviewXMLWithTotal to report a different TotalRows.
 func dataPreviewXML(columns []string, rows [][]string) string {
+	return dataPreviewXMLWithTotal(columns, rows, len(rows))
+}
+
+// dataPreviewXMLWithTotal is dataPreviewXML with an explicit, independently
+// controlled TotalRows — for pinning the truncation check's TotalRows-based
+// condition separately from its returned-row-count condition.
+func dataPreviewXMLWithTotal(columns []string, rows [][]string, totalRows int) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>`)
 	b.WriteString(`<dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">`)
-	fmt.Fprintf(&b, `<dataPreview:totalRows>%d</dataPreview:totalRows>`, len(rows))
+	fmt.Fprintf(&b, `<dataPreview:totalRows>%d</dataPreview:totalRows>`, totalRows)
 	b.WriteString(`<dataPreview:queryExecutionTime>1.0</dataPreview:queryExecutionTime>`)
 	for i, name := range columns {
 		b.WriteString(`<dataPreview:columns>`)
@@ -451,6 +463,38 @@ func TestGetTransportObjects_NoE070Entry_ReportsAbsentNotEmpty(t *testing.T) {
 	}
 }
 
+// TestGetTransportObjects_NoE070EntryNoColumnMetadata_ReportsAbsentNotMalformed
+// pins transportQueryNumbers' check order: a server answering an absent
+// transport with an empty result set that also carries no column metadata at
+// all must still report absentTransportError, not "no TRKORR column" — the
+// zero-rows check runs before the column lookup, because the empty/absent
+// case is the expected shape of this answer, not evidence of a malformed
+// response.
+func TestGetTransportObjects_NoE070EntryNoColumnMetadata_ReportsAbsentNotMalformed(t *testing.T) {
+	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			return http.StatusOK, dataPreviewXML(nil, nil)
+		}
+		t.Errorf("E071 must not be queried when the E070 existence check reports absent: %s", sql)
+		return http.StatusInternalServerError, ""
+	})
+
+	_, err := client.GetTransportObjects(context.Background(), "HFQK999999")
+	if err == nil {
+		t.Fatal("expected an absent error, got a successful result")
+	}
+	if strings.Contains(err.Error(), "no TRKORR column") {
+		t.Errorf("error should report absence, not missing column metadata: %v", err)
+	}
+	if !strings.Contains(err.Error(), "HFQK999999") ||
+		!strings.Contains(err.Error(), "no E070 entry on this system either") {
+		t.Errorf("error should say the request is absent from both sources: %v", err)
+	}
+	if got := probe.all(); len(got) != 1 {
+		t.Errorf("expected exactly 1 query, got %v", got)
+	}
+}
+
 // TestGetTransportObjects_HostileTaskNumberFromE070_NeverReachesTheQuery
 // covers the second validation site: task numbers arrive from the server and
 // are interpolated into the E071 statement exactly like the caller's own
@@ -480,5 +524,67 @@ func TestGetTransportObjects_HostileTaskNumberFromE070_NeverReachesTheQuery(t *t
 		if !strings.Contains(queries[1], "TRKORR = '"+number+"'") {
 			t.Errorf("E071 query lost legitimate number %s: %q", number, queries[1])
 		}
+	}
+}
+
+// e071QueryCap mirrors the unexported e071ObjectQueryMaxRows constant
+// (adt/transport.go) so this test can build a response that reaches it
+// without depending on package-internal access.
+const e071QueryCap = 5000
+
+// TestGetTransportObjects_E071RowCountAtCap_ErrorsInsteadOfTruncating pins
+// that the E071 object query refuses to answer once the number of rows
+// actually returned reaches the server-side cap, rather than silently
+// handing back a list that looks complete but may not be. The row count is
+// the primary signal (see e071ObjectQueryMaxRows's doc comment for why); this
+// fixture also reports TotalRows == len(rows), the same convention every
+// other fixture in this file uses, so this test would still catch the
+// truncation even if the TotalRows-based condition were removed.
+func TestGetTransportObjects_E071RowCountAtCap_ErrorsInsteadOfTruncating(t *testing.T) {
+	rows := make([][]string, e071QueryCap)
+	for i := range rows {
+		rows[i] = []string{releasedRequestNumber, fmt.Sprintf("%06d", i+1), "R3TR", "PROG", fmt.Sprintf("ZPROG%04d", i)}
+	}
+
+	client, _ := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			// A task-less request: every row addresses the request itself.
+			return http.StatusOK, dataPreviewXML(e070Columns, [][]string{{releasedRequestNumber, ""}})
+		}
+		return http.StatusOK, dataPreviewXML(
+			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
+			rows,
+		)
+	})
+
+	objs, err := client.GetTransportObjects(context.Background(), releasedRequestNumber)
+	if err == nil {
+		t.Fatalf("expected an error when the E071 query returns exactly the %d-row cap, got %d objects", e071QueryCap, len(objs))
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d", e071QueryCap)) {
+		t.Errorf("error should name the cap: %v", err)
+	}
+}
+
+// TestGetTransportObjects_E071TotalRowsAboveCap_ErrorsEvenWithFewerReturnedRows
+// pins the other half of the truncation check: even when only a handful of
+// rows come back, a server-reported TotalRows at or above the cap must still
+// be treated as "this list may be truncated", independently of the returned
+// row count.
+func TestGetTransportObjects_E071TotalRowsAboveCap_ErrorsEvenWithFewerReturnedRows(t *testing.T) {
+	client, _ := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			return http.StatusOK, dataPreviewXML(e070Columns, [][]string{{releasedRequestNumber, ""}})
+		}
+		return http.StatusOK, dataPreviewXMLWithTotal(
+			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
+			[][]string{{releasedRequestNumber, "0001", "R3TR", "PROG", eccOrderRequestObjName}},
+			e071QueryCap, // reported total, far above the single row actually returned
+		)
+	})
+
+	objs, err := client.GetTransportObjects(context.Background(), releasedRequestNumber)
+	if err == nil {
+		t.Fatalf("expected an error when TotalRows reports the cap even though only 1 row was returned, got %d objects", len(objs))
 	}
 }
