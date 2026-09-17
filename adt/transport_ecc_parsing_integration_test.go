@@ -25,73 +25,39 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-// objectSetKey renders a TransportObject slice as an order-independent
-// fingerprint (PgmID|Type|Name per entry, sorted, joined) so two object
-// lists can be compared for equality regardless of server-returned order or
-// the Task/Position/WBType fields, which legitimately differ between the
-// ADT and E071-fallback code paths (see GetTransportObjects' doc comment).
-func objectSetKey(objs []adt.TransportObject) string {
-	keys := make([]string, len(objs))
-	for i, o := range objs {
-		keys[i] = o.PgmID + "|" + o.Type + "|" + o.Name
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ";")
-}
-
-// maxTransportProbe caps how many modifiable requests selectTwoDifferingTransports
+// maxTransportProbe caps how many modifiable requests selectTwoTaskOwnedTransports
 // will pull object lists for. Each GetTransportObjects call fetches a full
 // transport-organizer body — up to 10.3 MB measured on S/4 — against a 30s
 // HTTP timeout, so this walks a bounded prefix of the modifiable worklist
 // rather than the whole thing.
 const maxTransportProbe = 25
 
-// selectTwoDifferingTransports enumerates GetTransportRequests(ctx, "", "D")
-// and walks the result (bounded by maxTransportProbe), grouping each
-// non-empty GetTransportObjects result by its objectSetKey fingerprint — but
-// it stops as soon as two distinct fingerprints have been seen, rather than
-// grouping every result in the prefix unconditionally. That short-circuit
-// never masks the regression this test exists to catch: a full regression
-// (every request returning the same object list) never produces a second
-// distinct fingerprint, so that case walks the whole prefix anyway, and the
-// fatal check below still sees every duplicate landing on the one
-// fingerprint it did find.
-//
-// Two outcomes are NOT the same thing, and this function tells them apart
-// rather than collapsing both into a skip:
-//
-//   - Sparse data: fewer than two distinct non-empty fingerprints turn up
-//     among the probed prefix (e.g. only one modifiable request has any
-//     objects at all, or the rest happened to be empty). This is a property
-//     of the target system's current data, not a bug — t.Skip with a clear
-//     reason.
-//   - A broken filter: two or more DIFFERENT request numbers return the
-//     identical non-empty fingerprint. This is the exact shape of the
-//     adtler#125 regression — GetTransportObjects ignoring which transport
-//     number it was asked for and returning the same body regardless — and
-//     must never be reported as "ok" via a skip. t.Fatal, naming the
-//     offending request numbers and the shared fingerprint.
-//
-// On success it returns two requests whose object sets are guaranteed to
-// differ by construction (they are the first two distinct fingerprints
-// found), so callers do not need to re-verify that themselves.
-func selectTwoDifferingTransports(t *testing.T, ctx context.Context, client adt.Client) (req1, req2 adt.TransportRequest, objs1, objs2 []adt.TransportObject) {
+type transportObjectsProbe struct {
+	req     adt.TransportRequest
+	objects []adt.TransportObject
+}
+
+func taskSet(tasks []string) map[string]bool {
+	set := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		set[strings.ToUpper(task)] = true
+	}
+	return set
+}
+
+// selectTwoTaskOwnedTransports finds two modifiable requests whose object lists
+// are non-empty and whose task-attributed objects all point back to that
+// request's own tasks. That ownership check is the live oracle: if
+// GetTransportObjects regresses to "return some other request's objects", at
+// least one returned Task stops belonging to the request being probed.
+func selectTwoTaskOwnedTransports(t *testing.T, ctx context.Context, client adt.Client) (probe1, probe2 transportObjectsProbe) {
 	t.Helper()
 
 	requests, err := client.GetTransportRequests(ctx, "", "D")
 	if err != nil {
 		t.Fatalf("GetTransportRequests: %v", err)
 	}
-
-	type candidate struct {
-		req     adt.TransportRequest
-		objects []adt.TransportObject
-	}
-	// byKey groups every non-empty candidate probed so far by its
-	// object-set fingerprint. A key claimed by two or more candidates is
-	// the failure signature described above, not a "duplicate to skip".
-	byKey := make(map[string][]candidate)
-	var order []string // fingerprints in first-seen order
+	var probes []transportObjectsProbe
 
 	probeLimit := len(requests)
 	if probeLimit > maxTransportProbe {
@@ -99,6 +65,16 @@ func selectTwoDifferingTransports(t *testing.T, ctx context.Context, client adt.
 	}
 
 	for _, r := range requests[:probeLimit] {
+		tasks, err := client.GetTransportTasks(ctx, r.Number)
+		if err != nil {
+			t.Logf("GetTransportTasks(%s) failed, skipping: %v", r.Number, err)
+			continue
+		}
+		if len(tasks) == 0 {
+			continue
+		}
+		taskNums := taskSet(tasks)
+
 		objects, err := client.GetTransportObjects(ctx, r.Number)
 		if err != nil {
 			t.Logf("GetTransportObjects(%s) failed, skipping: %v", r.Number, err)
@@ -107,79 +83,54 @@ func selectTwoDifferingTransports(t *testing.T, ctx context.Context, client adt.
 		if len(objects) == 0 {
 			continue
 		}
-		key := objectSetKey(objects)
-		if _, seen := byKey[key]; !seen {
-			order = append(order, key)
+		hasTaskObject := false
+		for _, o := range objects {
+			if o.Task == "" {
+				continue
+			}
+			hasTaskObject = true
+			if !taskNums[strings.ToUpper(o.Task)] {
+				sortedTasks := append([]string(nil), tasks...)
+				sort.Strings(sortedTasks)
+				t.Fatalf("GetTransportObjects(%s) returned task %q on object %s/%s/%s, but GetTransportTasks only reports %s",
+					r.Number, o.Task, o.PgmID, o.Type, o.Name, strings.Join(sortedTasks, ", "))
+			}
 		}
-		byKey[key] = append(byKey[key], candidate{req: r, objects: objects})
-
-		// Stop once two DISTINCT fingerprints exist — that's all this test
-		// needs. A duplicate landing on an already-seen key does not count
-		// toward this and keeps the loop going (see the fatal check below,
-		// which needs to see every duplicate, not just the first).
-		if len(order) >= 2 {
-			break
-		}
-	}
-
-	for _, key := range order {
-		group := byKey[key]
-		if len(group) < 2 {
+		if !hasTaskObject {
 			continue
 		}
-		numbers := make([]string, len(group))
-		for i, c := range group {
-			numbers[i] = c.req.Number
+		probes = append(probes, transportObjectsProbe{req: r, objects: objects})
+		if len(probes) >= 2 {
+			return probes[0], probes[1]
 		}
-		t.Fatalf("GetTransportObjects returned the identical non-empty object set (fingerprint %q) for %d different requests (%s) — "+
-			"this is the adtler#125 regression shape (the object list does not depend on which transport number was requested), not sparse test data",
-			key, len(group), strings.Join(numbers, ", "))
 	}
 
-	if len(order) < 2 {
-		t.Skipf("fewer than two modifiable requests with differing, non-empty object lists among the first %d of %d modifiable requests", probeLimit, len(requests))
+	if len(probes) < 2 {
+		t.Skipf("fewer than two modifiable requests with non-empty object lists and task-attributed entries among the first %d of %d modifiable requests", probeLimit, len(requests))
 	}
-
-	c1, c2 := byKey[order[0]][0], byKey[order[1]][0]
-	return c1.req, c2.req, c1.objects, c2.objects
+	return probes[0], probes[1]
 }
 
-// TestGetTransportObjects_TwoRequestsDiffer_Integration is the regression
-// guard for adtler#125 on R/3: GetTransportObjects, run against two
-// different modifiable requests on the same system, must return results
-// that actually depend on the request number rather than a
-// stuck/cached/misparsed identical list.
-//
-// What this test enforces, precisely: selectTwoDifferingTransports either
-// (a) returns two requests it has already confirmed have distinct,
-// non-empty object sets — in which case there is nothing left to
-// re-verify here, so this test body does not re-check that equality, or
-// (b) fails the test itself (t.Fatal) if it instead finds several
-// different request numbers collapsing onto the same non-empty
-// fingerprint — the regression's actual shape — or (c) skips if the
-// system's current data is simply too sparse to tell (fewer than two
-// non-empty results at all). See selectTwoDifferingTransports' doc comment
-// for why those three cases are kept distinct rather than folded into one
-// skip. On S/4 a request may resolve via the E070 fallback
-// (adt/transport.go:444-447 in GetTransportRequests) and hand back an
-// empty object list, which selectTwoDifferingTransports treats as sparse
-// data (case c), not as a fingerprint collision.
-func TestGetTransportObjects_TwoRequestsDiffer_Integration(t *testing.T) {
+// TestGetTransportObjects_TaskAttributionMatchesRequestTasks_Integration is the
+// ECC regression guard for adtler#125 on live data: for two different
+// modifiable requests, every task-attributed object GetTransportObjects returns
+// must belong to one of that request's own tasks.
+func TestGetTransportObjects_TaskAttributionMatchesRequestTasks_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
-			req1, req2, objs1, objs2 := selectTwoDifferingTransports(t, ctx, sys.Client)
+			probe1, probe2 := selectTwoTaskOwnedTransports(t, ctx, sys.Client)
 
 			t.Logf("%s: selected %s (%d objects) and %s (%d objects)",
-				sys.Name, req1.Number, len(objs1), req2.Number, len(objs2))
-			for _, o := range objs1 {
+				sys.Name, probe1.req.Number, len(probe1.objects), probe2.req.Number, len(probe2.objects))
+			for _, o := range probe1.objects {
 				t.Logf("  [%s] pgmid=%s type=%s name=%s wbtype=%s pos=%s task=%s",
-					req1.Number, o.PgmID, o.Type, o.Name, o.WBType, o.Position, o.Task)
+					probe1.req.Number, o.PgmID, o.Type, o.Name, o.WBType, o.Position, o.Task)
 			}
-			for _, o := range objs2 {
+			for _, o := range probe2.objects {
 				t.Logf("  [%s] pgmid=%s type=%s name=%s wbtype=%s pos=%s task=%s",
-					req2.Number, o.PgmID, o.Type, o.Name, o.WBType, o.Position, o.Task)
+					probe2.req.Number, o.PgmID, o.Type, o.Name, o.WBType, o.Position, o.Task)
 			}
 		})
 	}

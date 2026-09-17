@@ -22,6 +22,40 @@ const noAtomLinksTransportXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<tm:request tm:number="DEVK900001" tm:owner="DEV" tm:desc="No links" tm:status="D"/>` +
 	`</tm:root>`
 
+// s4NoMutationActionsTransportXML is s4RequestNoObjectsXML with both addobject
+// links removed. It stands in for a supported system answering a request that
+// advertises unrelated relations (adturi/modify/newtask) but no mutation
+// action for this specific request.
+var s4NoMutationActionsTransportXML = strings.ReplaceAll(
+	strings.ReplaceAll(
+		s4RequestNoObjectsXML,
+		`<atom:link href="/sap/bc/adt/cts/transportrequests/S4DK904476" rel="http://www.sap.com/cts/relations/addobject" type="application/xml" title="Transport Request/Task Add Objects" xmlns:atom="http://www.w3.org/2005/Atom"/>`,
+		"",
+	),
+	`<atom:link href="/sap/bc/adt/cts/transportrequests/S4DK904477" rel="http://www.sap.com/cts/relations/addobject" type="application/xml" title="Transport Request/Task Add Objects" xmlns:atom="http://www.w3.org/2005/Atom"/>`,
+	"",
+)
+
+func newMutableTransportFixtureClient(t *testing.T, initialBody string) (adt.TestClient, *atomic.Value) {
+	t.Helper()
+
+	var body atomic.Value
+	body.Store(initialBody)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/sap/bc/adt/cts/transportrequests/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	return adt.NewClientForTest(cfg), &body
+}
+
 // TestRemoveObjectSupport_ECCWorklist_Unsupported pins the acceptance
 // criterion that eccWorklistXML (consistencycheck, releasejobs, modify,
 // newtask — no addobject, no removeobject) yields
@@ -108,6 +142,21 @@ func TestRemoveObjectSupport_NoAtomLinks_Unknown(t *testing.T) {
 	}
 }
 
+// TestRemoveObjectSupport_S4NoMutationActions_Unknown pins the fail-open
+// branch: a direct single-request body with unrelated atom relations but no
+// addobject/removeobject must stay Unknown rather than being cached as
+// Unsupported.
+func TestRemoveObjectSupport_S4NoMutationActions_Unknown(t *testing.T) {
+	client := newFixtureClient(t, s4NoMutationActionsTransportXML)
+
+	if _, err := client.GetTransportInfo(context.Background(), "S4DK904476"); err != nil {
+		t.Fatalf("GetTransportInfo: unexpected error: %v", err)
+	}
+	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnknown {
+		t.Errorf("got %v, want RemoveObjectSupportUnknown", got)
+	}
+}
+
 // TestRemoveObjectSupport_FreshClient_StartsUnknown pins the zero value: a
 // client that has never read a transport reports Unknown.
 func TestRemoveObjectSupport_FreshClient_StartsUnknown(t *testing.T) {
@@ -124,21 +173,7 @@ func TestRemoveObjectSupport_FreshClient_StartsUnknown(t *testing.T) {
 // capability is Unsupported (from an ECC body), a later read of a body that
 // would derive Supported must NOT change the cached state.
 func TestRemoveObjectSupport_SkipsRederivationOnceKnown(t *testing.T) {
-	var body atomic.Value
-	body.Store(eccWorklistXML)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/sap/bc/adt/cts/transportrequests/") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/xml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body.Load().(string)))
-	}))
-	t.Cleanup(srv.Close)
-
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	client := adt.NewClientForTest(cfg)
+	client, body := newMutableTransportFixtureClient(t, eccWorklistXML)
 
 	if _, err := client.GetTransportObjects(context.Background(), "DEVK900178"); err != nil {
 		t.Fatalf("first read: unexpected error: %v", err)
@@ -155,6 +190,29 @@ func TestRemoveObjectSupport_SkipsRederivationOnceKnown(t *testing.T) {
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnsupported {
 		t.Errorf("after second read with a different body: got %v, want state to remain Unsupported (cached, not re-derived)", got)
+	}
+}
+
+// TestRemoveObjectSupport_UnknownCanUpgradeToSupported pins the other caching
+// edge: an initial direct-request body that says nothing conclusive must leave
+// the cache at Unknown so a later affirmative read can upgrade it to
+// Supported.
+func TestRemoveObjectSupport_UnknownCanUpgradeToSupported(t *testing.T) {
+	client, body := newMutableTransportFixtureClient(t, s4NoMutationActionsTransportXML)
+
+	if _, err := client.GetTransportInfo(context.Background(), "S4DK904476"); err != nil {
+		t.Fatalf("first read: unexpected error: %v", err)
+	}
+	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnknown {
+		t.Fatalf("after first read: got %v, want Unknown", got)
+	}
+
+	body.Store(s4SingleRequestXML)
+	if _, err := client.GetTransportObjects(context.Background(), "S4DK904438"); err != nil {
+		t.Fatalf("second read: unexpected error: %v", err)
+	}
+	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportSupported {
+		t.Errorf("after second read: got %v, want Supported", got)
 	}
 }
 

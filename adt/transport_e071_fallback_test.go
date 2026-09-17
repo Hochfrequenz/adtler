@@ -495,6 +495,24 @@ func TestGetTransportObjects_NoE070EntryNoColumnMetadata_ReportsAbsentNotMalform
 	}
 }
 
+func TestGetTransportObjects_E070MissingSTRKORRColumn_ReportsMalformed(t *testing.T) {
+	client, _ := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			return http.StatusOK, dataPreviewXML([]string{"TRKORR"}, [][]string{{releasedRequestNumber}})
+		}
+		t.Errorf("E071 must not be queried when the E070 response is malformed: %s", sql)
+		return http.StatusInternalServerError, ""
+	})
+
+	_, err := client.GetTransportObjects(context.Background(), releasedRequestNumber)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "E070 request/task query returned no STRKORR column") {
+		t.Errorf("error should report the missing STRKORR column: %v", err)
+	}
+}
+
 // TestGetTransportObjects_HostileTaskNumberFromE070_NeverReachesTheQuery
 // covers the second validation site: task numbers arrive from the server and
 // are interpolated into the E071 statement exactly like the caller's own
@@ -523,6 +541,28 @@ func TestGetTransportObjects_HostileTaskNumberFromE070_NeverReachesTheQuery(t *t
 	for _, number := range []string{releasedRequestNumber, releasedTaskOne, releasedTaskTwo} {
 		if !strings.Contains(queries[1], "TRKORR = '"+number+"'") {
 			t.Errorf("E071 query lost legitimate number %s: %q", number, queries[1])
+		}
+	}
+}
+
+func TestGetTransportObjects_E071MissingRequiredColumns_ReportsMalformed(t *testing.T) {
+	client, _ := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
+		if strings.Contains(sql, "FROM E070") {
+			return http.StatusOK, dataPreviewXML(e070Columns, [][]string{{releasedRequestNumber, ""}})
+		}
+		return http.StatusOK, dataPreviewXML(
+			[]string{"TRKORR", "OBJ_NAME"},
+			[][]string{{releasedRequestNumber, eccOrderRequestObjName}},
+		)
+	})
+
+	_, err := client.GetTransportObjects(context.Background(), releasedRequestNumber)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	for _, col := range []string{"AS4POS", "PGMID", "OBJECT"} {
+		if !strings.Contains(err.Error(), col) {
+			t.Errorf("error should name missing column %s: %v", col, err)
 		}
 	}
 }

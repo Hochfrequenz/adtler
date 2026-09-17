@@ -7,18 +7,18 @@
 // adt.ExceptionTypeRemoveObjectUnsupported error, using the real fixture
 // arguments from https://github.com/Hochfrequenz/aibap.mcp/issues/493.
 //
-// SAFETY: this test must never run against the S/4 system — removal is
-// supported there, so a write would actually happen. The gate blocks the
-// call before any HTTP PUT is sent, so no write happens on the ECC system
-// (or on the S/4 system) even if the gate were to fail open, but the
-// restriction to the ECC system is enforced structurally here too (skip on
-// any system name other than the one configured locally for it), not merely
-// relied upon via the gate.
+// SAFETY: this test wraps the real client in a RoundTripper that refuses any
+// PUT to the transportrequests endpoint before the request can hit SAP. The
+// HFQ name check only selects the live ECC fixture system whose transport/task
+// numbers below are known to exist; it is not the safety boundary.
 package adt_test
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -48,19 +48,30 @@ func TestRemoveFromTransport_ECCGateBlocksWrite_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
-			// sys.Name is compared against the real system name configured
-			// locally for the ECC system — this is a safety allowlist, not a
-			// value that generalizes to any other reader's own config.
 			if sys.Name != "HFQ" {
 				t.Skipf("this test only ever runs against the ECC system — never against the S/4 system; got %q", sys.Name)
 			}
+			base := http.DefaultTransport.(*http.Transport).Clone()
+			base.TLSClientConfig = &tls.Config{InsecureSkipVerify: sys.Config.TLSSkipVerify} //nolint:gosec
+			t.Cleanup(base.CloseIdleConnections)
+			var putCount atomic.Int32
+			client := adt.NewClientWithTransport(sys.Config, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodPut && req.URL.Path == "/sap/bc/adt/cts/transportrequests/"+taskNumber {
+					putCount.Add(1)
+					return nil, errors.New("blocked transport write in integration test")
+				}
+				return base.RoundTrip(req)
+			}))
 
 			ctx := context.Background()
-			err := sys.Client.RemoveFromTransport(ctx, taskNumber, parentNumber, pgmID, objectType, objectName, wbType, position)
+			err := client.RemoveFromTransport(ctx, taskNumber, parentNumber, pgmID, objectType, objectName, wbType, position)
 			if err == nil {
 				t.Fatal("expected RemoveFromTransport to be blocked by the removeobject capability gate, got nil error")
 			}
 			t.Logf("%s: RemoveFromTransport returned (expected): %v", sys.Name, err)
+			if got := putCount.Load(); got != 0 {
+				t.Fatalf("integration safety wrapper blocked %d unexpected transport PUT(s); the gate must stop the write before it is attempted", got)
+			}
 
 			var adtErr *adt.ADTError
 			if !errors.As(err, &adtErr) {

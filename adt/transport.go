@@ -523,6 +523,23 @@ func queryColumnIndexes(qr *QueryResult, names ...string) map[string]int {
 	return idx
 }
 
+func requireQueryColumns(context string, idx map[string]int, names ...string) error {
+	var missing []string
+	for _, name := range names {
+		if idx[name] < 0 {
+			missing = append(missing, name)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("%s returned no %s column", context, missing[0])
+	default:
+		return fmt.Errorf("%s returned no required columns: %s", context, strings.Join(missing, ", "))
+	}
+}
+
 // queryCell returns the trimmed value of row[i], or "" when i is -1 (column
 // absent from the result) or beyond the row's length (short row).
 func queryCell(row []string, i int) string {
@@ -685,8 +702,9 @@ const (
 	// RemoveObjectSupportSupported means the system advertised removeobject
 	// or addobject (see deriveRemoveObjectSupport) — removal should work.
 	RemoveObjectSupportSupported
-	// RemoveObjectSupportUnsupported means the system advertised at least one
-	// atom relation, but neither removeobject nor addobject — this is ECC.
+	// RemoveObjectSupportUnsupported means the response positively identified
+	// the legacy ECC worklist shape and advertised neither removeobject nor
+	// addobject.
 	RemoveObjectSupportUnsupported
 )
 
@@ -737,10 +755,15 @@ func (n atomLinkNode) collectRels(rels map[string]bool) {
 //
 // The discriminator that does hold, across every captured fixture, is
 // addobject: present on every S/4 response including one with no objects at
-// all, absent from every ECC response. Hence the rule:
+// all, absent from every ECC response. But "at least one other relation and
+// neither addobject nor removeobject" is still not enough to conclude
+// unsupported, because a supported S/4 system can omit mutation actions for a
+// released or foreign request while still carrying unrelated links such as
+// adturi/modify. Hence the rule:
 //
 //   - removeobject or addobject present anywhere -> supported.
-//   - at least one atom relation present, but neither of those -> unsupported.
+//   - legacy ECC worklist/customizing shape + at least one atom relation, but
+//     neither of those -> unsupported.
 //   - no atom relation present at all -> unknown (this body says nothing).
 //
 // addobject is a proxy for the post-1808 action set, not a direct statement
@@ -762,7 +785,32 @@ func deriveRemoveObjectSupport(data []byte) RemoveObjectSupport {
 	if rels[removeObjectRelation] || rels[addObjectRelation] {
 		return RemoveObjectSupportSupported
 	}
-	return RemoveObjectSupportUnsupported
+	if isLegacyTransportWorklistXML(data) {
+		return RemoveObjectSupportUnsupported
+	}
+	return RemoveObjectSupportUnknown
+}
+
+// isLegacyTransportWorklistXML reports whether data parses as the older
+// worklist/customizing response shape (requests grouped under
+// <tm:workbench>/<tm:customizing>), the one older ECC systems return even when
+// asked for a single transport number. That shape is the positive signal
+// deriveRemoveObjectSupport uses for Unsupported; a direct single-request body
+// with unrelated atom links is left Unknown so a later affirmative read can
+// still upgrade the cached state to Supported.
+func isLegacyTransportWorklistXML(data []byte) bool {
+	var doc xmlTransportDoc
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return false
+	}
+	for _, group := range []xmlTransportGroup{doc.Workbench, doc.Customizing} {
+		for _, section := range group.Sections {
+			if len(section.Requests) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cacheRemoveObjectSupport populates c.removeObjectSupport from data, in the
@@ -1049,8 +1097,8 @@ func (c *httpClient) getTransportObjectsViaQuery(ctx context.Context, transportN
 			transportNumber, e071ObjectQueryMaxRows, e071ObjectQueryMaxRows, len(qr.Rows), qr.TotalRows)
 	}
 	idx := queryColumnIndexes(qr, "TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME")
-	if idx["OBJ_NAME"] < 0 {
-		return nil, fmt.Errorf("E071 object query returned no OBJ_NAME column")
+	if err := requireQueryColumns("E071 object query", idx, "TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"); err != nil {
+		return nil, err
 	}
 
 	// Same deduper, identity and upgrade rule as the ADT path, so both agree.
@@ -1116,8 +1164,8 @@ func (c *httpClient) transportQueryNumbers(ctx context.Context, transportNumber 
 		return nil, absentTransportError(transportNumber)
 	}
 	idx := queryColumnIndexes(qr, "TRKORR", "STRKORR")
-	if idx["TRKORR"] < 0 {
-		return nil, fmt.Errorf("E070 request/task query returned no TRKORR column")
+	if err := requireQueryColumns("E070 request/task query", idx, "TRKORR", "STRKORR"); err != nil {
+		return nil, err
 	}
 
 	numbers := []string{transportNumber}
