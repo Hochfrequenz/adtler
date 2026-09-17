@@ -28,7 +28,7 @@ whoever reaches it.
 
 Two measured properties of the ECC worklist shape the plan and are easy to get wrong:
 
-- It is **not** user-scoped — a measurement on HFQ returned 8 requests across four
+- It is **not** user-scoped — a measurement on the ECC system returned 8 requests across four
   different owners.
 - It **is** modifiable-scoped — all 8 were status `D`. A released request is not in the
   body at all. Task 2 turns "absent from the body" into an error, and Task 4 then resolves
@@ -71,8 +71,11 @@ Separately, `TransportObject` carries no field for the task that recorded it, al
   variable and runs both systems:
 
   ```
-  SAP_INTEGRATION_SYSTEMS=HFQ,S4U SAP_INTEGRATION_SYSTEM=NONE go test -tags=integration ...
+  SAP_INTEGRATION_SYSTEMS=<ecc-system>,<s4-system> SAP_INTEGRATION_SYSTEM=NONE go test -tags=integration ...
   ```
+
+  (`<ecc-system>`/`<s4-system>` are the connection names configured locally for the two
+  target systems — see `~/.config/sap-mcp/systems.json`.)
 
   If a run prints `=== Integration test setup: ensuring fixtures exist ===` followed by a
   `[transport]` line, the guard did not work — stop and report it rather than continuing.
@@ -109,10 +112,11 @@ can call `readTransportXML` directly — `adt/transport_syst_cust_investigation_
 shows the pattern and its `issue63Systems` helper can be reused) that fetches
 `/sap/bc/adt/cts/transportrequests/<number>` from both systems and writes the raw bodies to
 disk **outside the repo**. Run it with the env triple from the Global Constraints, plus
-`PROBE_TRANSPORT_HFQ=HFQK902952`. For S4U pick a **small** request — the S/4 bodies measured
-so far reached 10.3 MB and `c.http` has a 30-second timeout (`adt/client.go:222`); choose one
+`PROBE_TRANSPORT_ECC=<a modifiable ECC transport number>`. For the S/4 system pick a
+**small** request — the S/4 bodies measured so far reached 10.3 MB and `c.http` has a
+30-second timeout (`adt/client.go:222`); choose one
 by enumerating `GetTransportRequests(user, "D")` and taking a request with a short object
-list. (`/ACCGO/ACMS41709FP00` is known to work but is the 10.3 MB one; prefer smaller.)
+list. (`/ZDEMO/TESTOBJ001` is known to work but is the 10.3 MB one; prefer smaller.)
 
 Reduce each body by hand to a small fixture preserving the structural features later tasks
 depend on, and add them as Go string constants in a new file `adt/transport_ecc_test.go`
@@ -274,7 +278,7 @@ one.** It validates its inputs against `transportUserRe` / `transportStatusRe` b
 interpolating them into the query string. The transport number goes into a `WHERE` clause the
 same way, so validate it against an equivalent anchored pattern and return an error rather
 than querying when it does not match. A transport number can legitimately contain `/`
-(namespaced requests such as `/ACCGO/ACMS41709FP00`), so the pattern must admit that without
+(namespaced requests such as `/ZDEMO/TESTOBJ001`), so the pattern must admit that without
 admitting quotes.
 
 Two queries, because a request's object entries live on its task rows as well as its own:
@@ -443,7 +447,9 @@ Both parts use the env triple from the Global Constraints. Read-only throughout.
   `sys.Client.(adt.TestClient)`.
 - `RemoveFromTransport` against **R/3 only** returns the typed error from Task 7, with the
   arguments from aibap.mcp#493: task `HFQK902953`, parent `HFQK902952`, `R3TR CLAS
-  ZCL_LOCKREPRO_2`, wbtype `CLAS/OC`, position `000001`. Never run this against S/4. Even if
+  ZCL_LOCKREPRO_2`, wbtype `CLAS/OC`, position `000001` (live, environment-specific
+  identifiers on the real ECC system — see the same values in
+  `transport_removeobject_gate_integration_test.go`). Never run this against S/4. Even if
   the gate were to fail open here, the resulting PUT writes nothing and leaks no enqueue —
   established in the adtler#125 investigation — but assert the typed error, not the outcome.
 

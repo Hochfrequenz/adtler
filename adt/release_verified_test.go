@@ -82,16 +82,16 @@ func TestReleaseTransportVerified(t *testing.T) {
 // it comes back as the whole transport-organizer worklist (eccWorklistXML),
 // nesting requests under <tm:workbench>/<tm:modifiable>. Before Task 5,
 // parseTransportInfo only bound a request as a direct child of the root, so
-// it never found HFQK902952 in that shape and GetTransportInfo always
+// it never found DEVK902952 in that shape and GetTransportInfo always
 // errored on ECC; ReleaseTransportVerified treats a failed status read as
 // "assume released" (see its doc comment), so the silent-failure detection
 // this method exists for never fired on the one system it targets. With
-// parseTransportInfo fixed, the status read succeeds, finds HFQK902952 still
+// parseTransportInfo fixed, the status read succeeds, finds DEVK902952 still
 // at status "D" (modifiable — see eccWorklistXML), and this test asserts the
 // caller now gets Released: false instead of the false-positive Released:
 // true.
 func TestReleaseTransportVerified_ECCWorklistStatusRead_ReportsModifiable(t *testing.T) {
-	const transport = "HFQK902952"
+	const transport = "DEVK902952"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == csrfEndpoint:

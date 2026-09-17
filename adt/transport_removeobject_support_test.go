@@ -29,7 +29,7 @@ const noAtomLinksTransportXML = `<?xml version="1.0" encoding="utf-8"?>` +
 func TestRemoveObjectSupport_ECCWorklist_Unsupported(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	if _, err := client.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "DEVK900178"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnsupported {
@@ -42,7 +42,7 @@ func TestRemoveObjectSupport_ECCWorklist_Unsupported(t *testing.T) {
 func TestRemoveObjectSupport_ECCCustomizing_Unsupported(t *testing.T) {
 	client := newFixtureClient(t, eccCustomizingXML)
 
-	if _, err := client.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "DEVK900178"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnsupported {
@@ -56,7 +56,7 @@ func TestRemoveObjectSupport_ECCCustomizing_Unsupported(t *testing.T) {
 func TestRemoveObjectSupport_S4SingleRequest_Supported(t *testing.T) {
 	client := newFixtureClient(t, s4SingleRequestXML)
 
-	if _, err := client.GetTransportObjects(context.Background(), "S4UK904438"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "S4DK904438"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportSupported {
@@ -69,7 +69,7 @@ func TestRemoveObjectSupport_S4SingleRequest_Supported(t *testing.T) {
 func TestRemoveObjectSupport_S4ObjectAtBothLevels_Supported(t *testing.T) {
 	client := newFixtureClient(t, s4ObjectAtBothLevelsXML)
 
-	if _, err := client.GetTransportObjects(context.Background(), "S4UK904438"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "S4DK904438"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportSupported {
@@ -86,7 +86,7 @@ func TestRemoveObjectSupport_S4ObjectAtBothLevels_Supported(t *testing.T) {
 func TestRemoveObjectSupport_S4RequestNoObjects_Supported(t *testing.T) {
 	client := newFixtureClient(t, s4RequestNoObjectsXML)
 
-	if _, err := client.GetTransportObjects(context.Background(), "S4UK904476"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "S4DK904476"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportSupported {
@@ -140,7 +140,7 @@ func TestRemoveObjectSupport_SkipsRederivationOnceKnown(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClientForTest(cfg)
 
-	if _, err := client.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "DEVK900178"); err != nil {
 		t.Fatalf("first read: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnsupported {
@@ -150,7 +150,7 @@ func TestRemoveObjectSupport_SkipsRederivationOnceKnown(t *testing.T) {
 	// Switch the server to an S/4 body that would derive Supported if the
 	// capability were re-derived. Caching must keep it at Unsupported.
 	body.Store(s4SingleRequestXML)
-	if _, err := client.GetTransportObjects(context.Background(), "S4UK904438"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "S4DK904438"); err != nil {
 		t.Fatalf("second read: unexpected error: %v", err)
 	}
 	if got := client.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnsupported {
@@ -172,7 +172,7 @@ func TestRemoveObjectSupport_SkipsRederivationOnceKnown(t *testing.T) {
 // its *httpClient copies none of these fields.
 func TestRemoveObjectSupport_SeparateClients_DoNotShareCachedState(t *testing.T) {
 	client1 := newFixtureClient(t, eccWorklistXML)
-	if _, err := client1.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
+	if _, err := client1.GetTransportObjects(context.Background(), "DEVK900178"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := client1.RemoveObjectSupportForTest(); got != adt.RemoveObjectSupportUnsupported {
@@ -228,7 +228,7 @@ func TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssu
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	if _, err := client.GetTransportObjects(context.Background(), "HFQK900178"); err != nil {
+	if _, err := client.GetTransportObjects(context.Background(), "DEVK900178"); err != nil {
 		t.Fatalf("GetTransportObjects: unexpected error: %v", err)
 	}
 	if got := atomic.LoadInt32(&getCount); got != 1 {
@@ -236,7 +236,7 @@ func TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssu
 	}
 
 	err := client.RemoveFromTransport(context.Background(),
-		"HFQK900635", "HFQK900178", "R3TR", "PROG", "/HFQ/ORDER_REQUEST", "PROG/P", "000001")
+		"DEVK900635", "DEVK900178", "R3TR", "PROG", "/ZTEST/ORDER_REQUEST", "PROG/P", "000001")
 	if err == nil {
 		t.Fatal("RemoveFromTransport: expected ErrorNotSupported, got nil (cached state is Unsupported)")
 	}

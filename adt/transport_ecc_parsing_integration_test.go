@@ -4,8 +4,11 @@
 // (https://github.com/Hochfrequenz/adtler/issues/125): verify the
 // GetTransportObjects/GetTransportInfo ECC-worklist-vs-S/4-single-request
 // parsing changes and the removeobject capability tri-state
-// (adt.RemoveObjectSupport) against real R/3 (HFQ) and S/4 (S4U) systems,
-// using eachSystem(t) so both run from a single `go test` command.
+// (adt.RemoveObjectSupport) against the real ECC (SAP_BASIS 750) and S/4
+// (SAP_BASIS 816) systems configured locally, using eachSystem(t) so both
+// run from a single `go test` command. Which configured system name is which
+// release is resolved at runtime from the local SAP config, not hardcoded
+// here beyond the two `case` labels below that key the expected verdict.
 //
 // These tests are read-only. They enumerate existing modifiable transport
 // requests and read their contents; they never create, release, or modify a
@@ -217,12 +220,15 @@ func TestGetTransportInfo_ReturnsRequestedNumber_Integration(t *testing.T) {
 
 // TestRemoveObjectSupport_Capability_Integration verifies the removeobject
 // capability tri-state (adt.RemoveObjectSupport) resolves to
-// Unsupported on R/3 (HFQ) and Supported on S/4 (S4U). The capability is a
-// cached side effect of readTransportXML (see cacheRemoveObjectSupport), so
-// this first triggers one real transport read via GetTransportInfo before
-// reading the cached verdict through the test-only adt.TestClient hook
-// (sys.Client.(adt.TestClient) — never added to the exported Client
-// interface, see adt/export_internal_test.go).
+// Unsupported on the ECC system and Supported on the S/4 system. The
+// capability is a cached side effect of readTransportXML (see
+// cacheRemoveObjectSupport), so this first triggers one real transport read
+// via GetTransportInfo before reading the cached verdict through the
+// test-only adt.TestClient hook (sys.Client.(adt.TestClient) — never added
+// to the exported Client interface, see adt/export_internal_test.go). The
+// `case` labels below select on the system name configured locally (the
+// only way this test can tell which real system it is talking to); nothing
+// else in this function should be read as naming a specific environment.
 func TestRemoveObjectSupport_Capability_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys

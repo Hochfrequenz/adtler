@@ -19,9 +19,9 @@ import (
 // which holds only modifiable requests — exactly the ECC situation the E071
 // fallback exists for.
 const (
-	releasedRequestNumber = "HFQK901000"
-	releasedTaskOne       = "HFQK901001"
-	releasedTaskTwo       = "HFQK901002"
+	releasedRequestNumber = "DEVK901000"
+	releasedTaskOne       = "DEVK901001"
+	releasedTaskTwo       = "DEVK901002"
 )
 
 // dataPreviewXML renders a column-oriented data preview response body — the
@@ -292,7 +292,7 @@ func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T)
 // namespaced request number — which legitimately contains "/" — passes
 // validation instead of being rejected as unsafe.
 func TestGetTransportObjects_NamespacedNumber_ReachesTheQuery(t *testing.T) {
-	const namespaced = "/ACCGO/ACMS41709FP00"
+	const namespaced = "/ZDEMO/TESTOBJ001"
 
 	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
 		if strings.Contains(sql, "FROM E070") {
@@ -330,7 +330,7 @@ func TestGetTransportObjects_PresentInWorklist_NeverQueries(t *testing.T) {
 		return http.StatusInternalServerError, ""
 	})
 
-	objs, err := client.GetTransportObjects(context.Background(), "HFQK900178")
+	objs, err := client.GetTransportObjects(context.Background(), "DEVK900178")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,10 +347,10 @@ func TestGetTransportObjects_PresentInWorklist_NeverQueries(t *testing.T) {
 // validator, with nothing sent to the data preview endpoint.
 func TestGetTransportObjects_InvalidNumber_RejectedBeforeAnyQuery(t *testing.T) {
 	for _, number := range []string{
-		"HFQK9' OR '1'='1",
-		`HFQK900178"`,
-		"HFQK9 00178",
-		"HFQK901000000000000000000", // longer than E070-TRKORR (CHAR20)
+		"DEVK9' OR '1'='1",
+		`DEVK900178"`,
+		"DEVK9 00178",
+		"DEVK901000000000000000000", // longer than E070-TRKORR (CHAR20)
 	} {
 		t.Run(number, func(t *testing.T) {
 			client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
@@ -445,14 +445,14 @@ func TestGetTransportObjects_NoE070Entry_ReportsAbsentNotEmpty(t *testing.T) {
 		return http.StatusInternalServerError, ""
 	})
 
-	objs, err := client.GetTransportObjects(context.Background(), "HFQK999999")
+	objs, err := client.GetTransportObjects(context.Background(), "DEVK999999")
 	if err == nil {
 		t.Fatalf("expected an absent error, got a successful result: %+v", objs)
 	}
 	if objs != nil {
 		t.Errorf("expected no objects alongside the error, got %+v", objs)
 	}
-	if !strings.Contains(err.Error(), "HFQK999999") ||
+	if !strings.Contains(err.Error(), "DEVK999999") ||
 		!strings.Contains(err.Error(), "transport-organizer worklist") ||
 		!strings.Contains(err.Error(), "no E070 entry on this system either") {
 		t.Errorf("error should say the request is absent from both sources: %v", err)
@@ -479,14 +479,14 @@ func TestGetTransportObjects_NoE070EntryNoColumnMetadata_ReportsAbsentNotMalform
 		return http.StatusInternalServerError, ""
 	})
 
-	_, err := client.GetTransportObjects(context.Background(), "HFQK999999")
+	_, err := client.GetTransportObjects(context.Background(), "DEVK999999")
 	if err == nil {
 		t.Fatal("expected an absent error, got a successful result")
 	}
 	if strings.Contains(err.Error(), "no TRKORR column") {
 		t.Errorf("error should report absence, not missing column metadata: %v", err)
 	}
-	if !strings.Contains(err.Error(), "HFQK999999") ||
+	if !strings.Contains(err.Error(), "DEVK999999") ||
 		!strings.Contains(err.Error(), "no E070 entry on this system either") {
 		t.Errorf("error should say the request is absent from both sources: %v", err)
 	}

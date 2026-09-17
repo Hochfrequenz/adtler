@@ -3,16 +3,17 @@
 // Integration test for adtler#125
 // (https://github.com/Hochfrequenz/adtler/issues/125): confirm that
 // RemoveFromTransport's capability gate (ensureRemoveObjectSupported) blocks
-// the write on R/3 with the typed adt.ExceptionTypeRemoveObjectUnsupported
-// error, using the real fixture arguments from
-// https://github.com/Hochfrequenz/aibap.mcp/issues/493.
+// the write on the ECC system with the typed
+// adt.ExceptionTypeRemoveObjectUnsupported error, using the real fixture
+// arguments from https://github.com/Hochfrequenz/aibap.mcp/issues/493.
 //
-// SAFETY: this test must never run against S/4 (S4U) — removal is supported
-// there, so a write would actually happen. The gate blocks the call before
-// any HTTP PUT is sent, so no write happens on HFQ (or on S4U) even if the
-// gate were to fail open, but the restriction to HFQ is enforced structurally
-// here too (skip on any system name other than HFQ), not merely relied upon
-// via the gate.
+// SAFETY: this test must never run against the S/4 system — removal is
+// supported there, so a write would actually happen. The gate blocks the
+// call before any HTTP PUT is sent, so no write happens on the ECC system
+// (or on the S/4 system) even if the gate were to fail open, but the
+// restriction to the ECC system is enforced structurally here too (skip on
+// any system name other than the one configured locally for it), not merely
+// relied upon via the gate.
 package adt_test
 
 import (
@@ -24,12 +25,16 @@ import (
 )
 
 // TestRemoveFromTransport_ECCGateBlocksWrite_Integration is the removeobject
-// capability gate's regression test. It runs RemoveFromTransport against R/3
-// (HFQ) only, using the exact task/parent/object/wbtype/position from
+// capability gate's regression test. It runs RemoveFromTransport against the
+// ECC system only, using the exact task/parent/object/wbtype/position from
 // aibap.mcp#493, and asserts on the typed error the gate
 // (ensureRemoveObjectSupported) returns — never on any side effect on the SAP
 // side, since none is expected either way.
 func TestRemoveFromTransport_ECCGateBlocksWrite_Integration(t *testing.T) {
+	// taskNumber/parentNumber/objectName are live, environment-specific
+	// identifiers that must already exist on the real ECC system this test
+	// runs against — a synthetic value would not correspond to anything
+	// there. They are the same reproducer arguments aibap.mcp#493 recorded.
 	const (
 		taskNumber   = "HFQK902953"
 		parentNumber = "HFQK902952"
@@ -43,8 +48,11 @@ func TestRemoveFromTransport_ECCGateBlocksWrite_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
+			// sys.Name is compared against the real system name configured
+			// locally for the ECC system — this is a safety allowlist, not a
+			// value that generalizes to any other reader's own config.
 			if sys.Name != "HFQ" {
-				t.Skipf("this test only ever runs against HFQ (R/3) — never against S4U; got %q", sys.Name)
+				t.Skipf("this test only ever runs against the ECC system — never against the S/4 system; got %q", sys.Name)
 			}
 
 			ctx := context.Background()
