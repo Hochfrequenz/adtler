@@ -9,19 +9,23 @@ import (
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
+// wantPreTransportURI is the ContentURI findPreTransportVersion should
+// return in every subtest below where a pre-transport version does exist.
+const wantPreTransportURI = "uri-pre"
+
 func TestFindPreTransportVersion(t *testing.T) {
 	t.Run("returns version after the transport entry", func(t *testing.T) {
 		// History is newest-first: the transport's own version, then the prior.
 		versions := []VersionInfo{
 			{VersionNumber: "2", Transport: "DEVK900100"},
-			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: "uri-pre"},
+			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: wantPreTransportURI},
 		}
 		got, err := findPreTransportVersion(versions, "DEVK900100")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "uri-pre" {
-			t.Errorf("got %q, want %q", got, "uri-pre")
+		if got != wantPreTransportURI {
+			t.Errorf("got %q, want %q", got, wantPreTransportURI)
 		}
 	})
 
@@ -29,14 +33,14 @@ func TestFindPreTransportVersion(t *testing.T) {
 		versions := []VersionInfo{
 			{VersionNumber: "3", Transport: "DEVK900100"},
 			{VersionNumber: "2", Transport: "DEVK900100"},
-			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: "uri-pre"},
+			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: wantPreTransportURI},
 		}
 		got, err := findPreTransportVersion(versions, "DEVK900100")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "uri-pre" {
-			t.Errorf("got %q, want %q", got, "uri-pre")
+		if got != wantPreTransportURI {
+			t.Errorf("got %q, want %q", got, wantPreTransportURI)
 		}
 	})
 
@@ -56,6 +60,24 @@ func TestFindPreTransportVersion(t *testing.T) {
 		}
 		if _, err := findPreTransportVersion(versions, "DEVK900100"); err == nil {
 			t.Error("expected error when there is no version before the transport")
+		}
+	})
+
+	t.Run("lowercase transport number still matches the server's uppercase Transport", func(t *testing.T) {
+		// v.Transport is always uppercase (parseVersionFeed reads it straight
+		// from the server); a caller may pass a lowercase transport number
+		// through unchanged, exactly like GetTransportObjects/
+		// matchesTransportNumber already tolerate.
+		versions := []VersionInfo{
+			{VersionNumber: "2", Transport: "DEVK900100"},
+			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: wantPreTransportURI},
+		}
+		got, err := findPreTransportVersion(versions, "devk900100")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != wantPreTransportURI {
+			t.Errorf("got %q, want %q", got, wantPreTransportURI)
 		}
 	})
 

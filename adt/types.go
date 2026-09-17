@@ -164,6 +164,13 @@ const (
 	// collision this way rather than as ExceptionResourceAlreadyExists —
 	// verified live on both S/4 and R/3 (mcp-server-abap #406 / #407).
 	ExceptionTypeResourceCreationFailure = "ExceptionResourceCreationFailure"
+	// ExceptionTypeRemoveObjectUnsupported is not a type SAP ever emits — it
+	// is synthesised locally by RemoveFromTransport's capability gate (see
+	// RemoveObjectSupport) so the resulting error carries a Type that
+	// ClassifyError/classifyByExceptionType can key on, the same way it keys
+	// on a genuine <exc:exception> Type. RemoveFromTransport never sends a
+	// request in this case, so there is no SAP-side error to relay.
+	ExceptionTypeRemoveObjectUnsupported = "ADT_TM_REMOVEOBJECT_UNSUPPORTED"
 )
 
 // ADTError is returned when SAP ADT responds with an error status.
@@ -183,10 +190,18 @@ type ADTError struct {
 }
 
 func (e *ADTError) Error() string {
-	if e.Type != "" {
+	switch {
+	case e.StatusCode == 0 && e.Type != "":
+		// No HTTP request was ever sent — e.g. RemoveFromTransport's
+		// capability gate (ExceptionTypeRemoveObjectUnsupported), which
+		// synthesises this error locally. "SAP ADT error 0" would claim an
+		// HTTP status that never happened, so this case is worded without one.
+		return fmt.Sprintf("%s: %s", e.Type, e.Message)
+	case e.Type != "":
 		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
+	default:
+		return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 	}
-	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 }
 
 // ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):
