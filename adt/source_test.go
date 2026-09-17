@@ -571,11 +571,15 @@ func TestSetIncludeSource_UsesDiscoveryAdvertisedContentType(t *testing.T) {
 	}
 }
 
-// #443: OO classes/interfaces reject header lock delivery with 403
-// ExceptionResourceNoAccess ("currently editing"); the write must retry with
-// ?lockHandle= query delivery. Verified live on S/4.
-func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
-	const ooURI = "/sap/bc/adt/oo/classes/zcl_oo_retry"
+// assertSetSourceRetriesAndSucceeds drives SetSource against a stub whose
+// write endpoint rejects header-delivered lock handle with the given
+// status/body on the first attempt, then succeeds via query-param delivery
+// on the retry. Asserts the retry actually fired (2+ attempts, lockHandle
+// seen in the query string) and the returned ETag matches. Shared by the
+// 423/403 (#443) and 400 (#494) retry-on-header-failure tests, which are
+// otherwise identical in shape and differ only in the failure response.
+func assertSetSourceRetriesAndSucceeds(t *testing.T, objectURI, source string, failStatus int, failBody, wantEtag string) {
+	t.Helper()
 	var attempts int
 	var sawQueryHandle bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -587,20 +591,20 @@ func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
 		attempts++
 		if r.URL.Query().Get("lockHandle") != "" {
 			sawQueryHandle = true
-			w.Header().Set("ETag", `"oo-new"`)
+			w.Header().Set("ETag", wantEtag)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		// Header-delivery attempt → 403 "currently editing".
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZCL_OO_RETRY</message></exc:exception>`))
+		// Header-delivery attempt → the failure under test.
+		w.WriteHeader(failStatus)
+		_, _ = w.Write([]byte(failBody))
 	}))
 	defer srv.Close()
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	etag, err := client.SetSource(context.Background(), ooURI, "CLASS zcl_oo_retry DEFINITION PUBLIC.\nENDCLASS.", "LOCKH1", "TR1", `"etag-old"`)
+	etag, err := client.SetSource(context.Background(), objectURI, source, "LOCKH1", "TR1", `"etag-old"`)
 	if err != nil {
 		t.Fatalf("SetSource should have retried with query delivery and succeeded: %v", err)
 	}
@@ -610,9 +614,22 @@ func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
 	if !sawQueryHandle {
 		t.Error("retry did not deliver the lock handle as a ?lockHandle= query parameter")
 	}
-	if etag != `"oo-new"` {
-		t.Errorf("returned ETag: got %q, want %q", etag, `"oo-new"`)
+	if etag != wantEtag {
+		t.Errorf("returned ETag: got %q, want %q", etag, wantEtag)
 	}
+}
+
+// #443: OO classes/interfaces reject header lock delivery with 403
+// ExceptionResourceNoAccess ("currently editing"); the write must retry with
+// ?lockHandle= query delivery. Verified live on S/4.
+func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
+	assertSetSourceRetriesAndSucceeds(t,
+		"/sap/bc/adt/oo/classes/zcl_oo_retry",
+		"CLASS zcl_oo_retry DEFINITION PUBLIC.\nENDCLASS.",
+		http.StatusForbidden,
+		`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZCL_OO_RETRY</message></exc:exception>`,
+		`"oo-new"`,
+	)
 }
 
 // sawQueryRetryAfter403 drives SetSource against a stub whose write endpoint
@@ -676,44 +693,13 @@ func TestSetSource_NoRetryOnBare403(t *testing.T) {
 // cover. Reproduced here as a synthetic fixture matching the reporter's
 // exact SAP response body.
 func TestSetSource_RetriesQueryDeliveryOnLockHandleParameterNotFound(t *testing.T) {
-	const progURI = "/sap/bc/adt/programs/programs/z_lockhandle_494"
-	var attempts int
-	var sawQueryHandle bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == csrfEndpoint {
-			w.Header().Set("X-CSRF-Token", "token")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		attempts++
-		if r.URL.Query().Get("lockHandle") != "" {
-			sawQueryHandle = true
-			w.Header().Set("ETag", `"prog-new"`)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		// Header-delivery attempt → 400 "Parameter lockHandle could not be found".
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionParameterNotFound"/><message lang="EN">Parameter lockHandle could not be found</message></exc:exception>`))
-	}))
-	defer srv.Close()
-
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	client := adt.NewClient(cfg)
-
-	etag, err := client.SetSource(context.Background(), progURI, "REPORT z_lockhandle_494.", "LOCKH1", "TR1", `"etag-old"`)
-	if err != nil {
-		t.Fatalf("SetSource should have retried with query delivery and succeeded: %v", err)
-	}
-	if attempts < 2 {
-		t.Errorf("expected a query-delivery retry (2 write attempts), got %d", attempts)
-	}
-	if !sawQueryHandle {
-		t.Error("retry did not deliver the lock handle as a ?lockHandle= query parameter")
-	}
-	if etag != `"prog-new"` {
-		t.Errorf("returned ETag: got %q, want %q", etag, `"prog-new"`)
-	}
+	assertSetSourceRetriesAndSucceeds(t,
+		"/sap/bc/adt/programs/programs/z_lockhandle_494",
+		"REPORT z_lockhandle_494.",
+		http.StatusBadRequest,
+		`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionParameterNotFound"/><message lang="EN">Parameter lockHandle could not be found</message></exc:exception>`,
+		`"prog-new"`,
+	)
 }
 
 // The parameter-name match is case-insensitive: SAP's own casing for this
