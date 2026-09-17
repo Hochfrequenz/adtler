@@ -190,16 +190,17 @@ type Client interface {
 }
 
 type httpClient struct {
-	cfg              sapmcpconfig.SAPSystem
-	http             *http.Client
-	httpLong         *http.Client // long-timeout client for large queries; shares transport + cookie jar
-	mu               sync.Mutex
-	csrfToken        string
-	hasSecureCookies bool                         // true if SAP sets Secure cookies on an HTTP connection
-	discovery        map[string][]string          // endpoint → accepted content types from discovery
-	accessToken      string                       // OAuth2 access token (empty = Basic Auth)
-	onTokenRefresh   func(string) (string, error) // callback to refresh token, returns new access token
-	pollInterval     time.Duration                // polling interval for background runs (default: 10s)
+	cfg                 sapmcpconfig.SAPSystem
+	http                *http.Client
+	httpLong            *http.Client // long-timeout client for large queries; shares transport + cookie jar
+	mu                  sync.Mutex
+	csrfToken           string
+	hasSecureCookies    bool                         // true if SAP sets Secure cookies on an HTTP connection
+	discovery           map[string][]string          // endpoint → accepted content types from discovery
+	removeObjectSupport RemoveObjectSupport          // cached tri-state; see cacheRemoveObjectSupport
+	accessToken         string                       // OAuth2 access token (empty = Basic Auth)
+	onTokenRefresh      func(string) (string, error) // callback to refresh token, returns new access token
+	pollInterval        time.Duration                // polling interval for background runs (default: 10s)
 }
 
 // NewClient creates a new ADT HTTP client configured from cfg.
