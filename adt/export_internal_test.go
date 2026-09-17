@@ -14,6 +14,7 @@ type TestClient interface {
 	Client
 	SourceContentTypeForTest(endpoint string) string
 	LoadDiscoveryForTest(ctx context.Context) error
+	RemoveObjectSupportForTest() RemoveObjectSupport
 }
 
 // NewClientForTest creates a TestClient from a SAPSystem config. It returns
@@ -36,4 +37,16 @@ func (c *httpClient) LoadDiscoveryForTest(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.fetchCSRFToken(ctx)
+}
+
+// RemoveObjectSupportForTest exposes the cached tri-state removeobject
+// capability (see RemoveObjectSupport and cacheRemoveObjectSupport) so tests
+// in the external adt_test package can assert on it directly, and so an
+// integration test can reach it via a type assertion to TestClient without
+// this accessor ever being part of the public Client/TransportClient
+// surface.
+func (c *httpClient) RemoveObjectSupportForTest() RemoveObjectSupport {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.removeObjectSupport
 }
