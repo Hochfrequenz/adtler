@@ -22,14 +22,7 @@ import (
 // and nobody noticed. This reproduces the server behavior and asserts
 // discovery still populates.
 func TestDiscovery_ServerRequiresAcceptHeader_StillPopulatesCache(t *testing.T) {
-	discoveryXML := `<?xml version="1.0"?>
-<app:service xmlns:app="http://www.w3.org/2007/app">
-  <app:workspace>
-    <app:collection href="/sap/bc/adt/programs/programs">
-      <app:accept>text/plain; charset=utf-8</app:accept>
-    </app:collection>
-  </app:workspace>
-</app:service>`
+	discoveryXML := discoveryXMLProgramsUTF8Only
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") == "" {
 			w.WriteHeader(http.StatusBadRequest)
