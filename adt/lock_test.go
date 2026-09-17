@@ -67,3 +67,45 @@ func TestUnlockObject(t *testing.T) {
 		t.Errorf("action: got %q, want UNLOCK", gotAction)
 	}
 }
+
+// aibap.mcp#494: the reporter's raw-HTTP diagnosis required URL-encoding the
+// lock handle in the query string, since real handles contain '+', '=', '/'.
+// UnlockObject builds its query string via raw concatenation
+// ("?_action=UNLOCK&lockHandle="+lockHandle), never through url.Values —
+// unlike every other lockHandle-in-query call site (SetIncludeSource,
+// CreateTestInclude, setSourceWithLockParam). Unescaped, this handle shape
+// breaks two different ways: a raw '+' is decoded as a space by any
+// form-urlencoded-convention query parser (Go's r.URL.Query() included),
+// and a raw '&' splits into a second, bogus query parameter, truncating the
+// handle the server actually receives. A raw '//' can also trigger an
+// unrelated encodeNamespacePath panic in the request pipeline — fixed
+// separately in #133, but this test's fixture exercises that shape too as
+// a regression guard now that #133 makes it safe to include.
+//
+// The fixture below is deliberately richer than one character class: a
+// weaker fixture (e.g. only '+') would pass against a fix that only
+// special-cased '+' without properly URL-encoding the whole value.
+func TestUnlockObject_EncodesLockHandleWithSpecialCharacters(t *testing.T) {
+	const rawHandle = `AB+C=D/E&F//G`
+	var gotHandle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		gotHandle = r.URL.Query().Get("lockHandle")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	if err := client.UnlockObject(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", rawHandle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotHandle != rawHandle {
+		t.Errorf("server received lockHandle %q, want %q (unencoded '+' corrupts to space)", gotHandle, rawHandle)
+	}
+}
