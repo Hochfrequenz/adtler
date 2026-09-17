@@ -107,6 +107,43 @@ func TestClassifyError_WrappedADTError(t *testing.T) {
 	}
 }
 
+// TestADTError_Error_Rendering pins ADTError.Error()'s three branches,
+// including the one that fixes a sibling of issue #354: a StatusCode of 0
+// alongside a non-empty Type (the shape RemoveFromTransport's capability
+// gate synthesises locally, since it never sends a request) must not render
+// as "SAP ADT error 0 (...)", which would claim an HTTP status that never
+// happened.
+func TestADTError_Error_Rendering(t *testing.T) {
+	cases := []struct {
+		name string
+		err  *adt.ADTError
+		want string
+	}{
+		{
+			name: "StatusCode 0 with a Type: no HTTP request was ever sent",
+			err:  &adt.ADTError{Type: adt.ExceptionTypeRemoveObjectUnsupported, Message: "removal not supported here"},
+			want: "ADT_TM_REMOVEOBJECT_UNSUPPORTED: removal not supported here",
+		},
+		{
+			name: "StatusCode and Type both set: the ordinary SAP exception envelope case",
+			err:  &adt.ADTError{StatusCode: 423, Type: adt.ExceptionTypeResourceLocked, Message: "locked"},
+			want: "SAP ADT error 423 (ExceptionResourceLocked): locked",
+		},
+		{
+			name: "StatusCode set, no Type: legacy/plain-text error body",
+			err:  &adt.ADTError{StatusCode: 500, Message: "internal error"},
+			want: "SAP ADT error 500: internal error",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.Error(); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestErrorKind_String(t *testing.T) {
 	cases := map[adt.ErrorKind]string{
 		adt.ErrorUnknown:                 "unknown",
