@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Common constants used across ADT operations.
@@ -171,6 +172,13 @@ const (
 	// on a genuine <exc:exception> Type. RemoveFromTransport never sends a
 	// request in this case, so there is no SAP-side error to relay.
 	ExceptionTypeRemoveObjectUnsupported = "ADT_TM_REMOVEOBJECT_UNSUPPORTED"
+	// ExceptionTypeParameterNotFound is raised (HTTP 400) when a request
+	// parameter the ADT handler expects is absent from the request it
+	// received. It is overloaded across unrelated parameters (a missing
+	// transport surfaces the same Type, see #378 finding 1), so callers must
+	// also check which parameter the message names — see
+	// isLockHandleParameterNotFound.
+	ExceptionTypeParameterNotFound = "ExceptionParameterNotFound"
 )
 
 // ADTError is returned when SAP ADT responds with an error status.
@@ -278,4 +286,32 @@ func isCurrentlyEditing(err error) bool {
 		return false
 	}
 	return adtErr.Type == ExceptionTypeResourceNoAccess
+}
+
+// isLockHandleParameterNotFound reports whether err is SAP's 400
+// ExceptionParameterNotFound naming the lockHandle parameter specifically —
+// "Parameter lockHandle could not be found". Some ECC (R/3) systems reject
+// header-delivered lock handles outright this way rather than accepting the
+// header and later 423'ing on it, so the handler never saw the parameter at
+// all. Used by trySetSource to retry with query-param delivery.
+// See aibap.mcp#494.
+//
+// ExceptionParameterNotFound is overloaded: the same Type covers an entirely
+// unrelated missing "corrNr" (transport) parameter (#378 finding 1), where a
+// query-param retry would not fix anything and would mask the real error.
+// adtler does not yet expose SAP's structured T100KEY properties that would
+// let this match structurally (see #378's ADTError.Properties follow-up), so
+// this checks the literal English parameter name in the message — the same
+// last-resort, documented trade-off as LockingTransport's message scraping.
+// Case-insensitive: SAP's own message casing for this parameter name isn't
+// guaranteed stable across releases/locales the way the Type string is.
+func isLockHandleParameterNotFound(err error) bool {
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		return false
+	}
+	if adtErr.Type != ExceptionTypeParameterNotFound {
+		return false
+	}
+	return strings.Contains(strings.ToLower(adtErr.Message), "lockhandle")
 }
