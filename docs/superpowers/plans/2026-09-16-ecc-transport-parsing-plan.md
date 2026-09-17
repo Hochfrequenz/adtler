@@ -430,7 +430,9 @@ path with an empty body, so the new capability GET leaves the state unknown; pri
 
 ## Task 8 — Integration tests and an end-to-end run against a local build
 
-Both parts use the env triple from the Global Constraints. Read-only throughout.
+Both parts use the env triple from the Global Constraints. Read-only throughout, except for
+the write-path lifecycle test named in Part A's last bullet, which is fenced behind the
+`transport` build tag and therefore runs only in the separate transport-tagged suite.
 
 **Part A — adtler integration tests** via `eachSystem(t)`:
 
@@ -445,13 +447,18 @@ Both parts use the env triple from the Global Constraints. Read-only throughout.
   regression guard for aibap.mcp#496.
 - The Task 6 capability is unsupported on R/3 and supported on S/4, reached via
   `sys.Client.(adt.TestClient)`.
-- `RemoveFromTransport` against **R/3 only** returns the typed error from Task 7, with the
-  arguments from aibap.mcp#493: task `HFQK902953`, parent `HFQK902952`, `R3TR CLAS
-  ZCL_LOCKREPRO_2`, wbtype `CLAS/OC`, position `000001` (live, environment-specific
-  identifiers on the real ECC system — see the same values in
-  `transport_removeobject_gate_integration_test.go`). Never run this against S/4. Even if
-  the gate were to fail open here, the resulting PUT writes nothing and leaks no enqueue —
-  established in the adtler#125 investigation — but assert the typed error, not the outcome.
+- `RemoveFromTransport` returns the typed error from Task 7 on a system whose capability the
+  client has already reported as `RemoveObjectSupportUnsupported`. The branch is driven by
+  that capability, never by a configured system name, so a third system gets classified
+  rather than mis-assumed. The call is skipped where the capability is `Supported` or
+  `Unknown`, because only the confirmed-unsupported state guarantees the gate returns before
+  the PUT. The object coordinates passed are synthetic — nothing is sent, so no live object
+  needs to exist. See `transport_removeobject_gate_integration_test.go`, which stays
+  read-only and therefore keeps the plain `integration` build tag. The write-path lifecycle
+  (create transport → create program → remove → verify) lives in
+  `transport_remove_integration_test.go` behind `integration && transport`; it asserts the
+  same typed error on the unsupported system and a real removal on the supported one, again
+  branching on the reported capability.
 
 Record the output in the task report.
 

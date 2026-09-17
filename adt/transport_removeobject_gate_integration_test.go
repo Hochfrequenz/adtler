@@ -1,16 +1,27 @@
 //go:build integration
 
 // Integration test for adtler#125
-// (https://github.com/Hochfrequenz/adtler/issues/125): confirm that
-// RemoveFromTransport's capability gate (ensureRemoveObjectSupported) blocks
-// the write on the ECC system with the typed
-// adt.ExceptionTypeRemoveObjectUnsupported error, using the real fixture
-// arguments from https://github.com/Hochfrequenz/aibap.mcp/issues/493.
+// (https://github.com/Hochfrequenz/adtler/issues/125): confirm, against every
+// configured system, that RemoveFromTransport's capability gate
+// (ensureRemoveObjectSupported) behaves the way the system's advertised
+// capability says it should.
 //
-// SAFETY: this test wraps the real client in a RoundTripper that refuses any
-// PUT to the transportrequests endpoint before the request can hit SAP. The
-// HFQ name check only selects the live ECC fixture system whose transport/task
-// numbers below are known to exist; it is not the safety boundary.
+// SAFETY, two independent layers, in this order:
+//
+//  1. The client is wrapped in a RoundTripper that refuses every PUT and
+//     DELETE before it can leave the process. That is the boundary. It holds
+//     on every system, whatever the gate decides and whatever this test
+//     asserts, and it is what makes exercising the supported branch safe.
+//  2. The object coordinates are synthetic. Nothing on any SAP system is
+//     addressed by them, so the test depends on no environment-specific object
+//     existing anywhere and cannot be broken by someone tidying a fixture away.
+//
+// Neither the capability gate nor the system's configured name is a safety
+// boundary here, and neither is relied on as one.
+//
+// The full create/remove/verify lifecycle — which does write — lives in
+// transport_remove_integration_test.go behind the `integration && transport`
+// build tag.
 package adt_test
 
 import (
@@ -24,64 +35,105 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-// TestRemoveFromTransport_ECCGateBlocksWrite_Integration is the removeobject
-// capability gate's regression test. It runs RemoveFromTransport against the
-// ECC system only, using the exact task/parent/object/wbtype/position from
-// aibap.mcp#493, and asserts on the typed error the gate
-// (ensureRemoveObjectSupported) returns — never on any side effect on the SAP
-// side, since none is expected either way.
-func TestRemoveFromTransport_ECCGateBlocksWrite_Integration(t *testing.T) {
-	// taskNumber/parentNumber/objectName are live, environment-specific
-	// identifiers that must already exist on the real ECC system this test
-	// runs against — a synthetic value would not correspond to anything
-	// there. They are the same reproducer arguments aibap.mcp#493 recorded.
+// errBlockedWrite is what this test's RoundTripper returns instead of letting a
+// PUT or DELETE reach SAP. Seeing it means the gate let the call through, which
+// is the correct outcome on a system that advertises the capability.
+var errBlockedWrite = errors.New("transport write blocked inside the integration test")
+
+// TestRemoveFromTransport_Gate_Integration resolves each configured system's
+// removeobject capability from the system itself — never from its configured
+// name — and asserts the branch that capability selects:
+//
+//   - Unsupported: RemoveFromTransport returns an *adt.ADTError of type
+//     adt.ExceptionTypeRemoveObjectUnsupported and issues no request at all.
+//   - Supported: the gate lets the call through, so a PUT is attempted and this
+//     test's own RoundTripper is what stops it.
+//
+// A capability still Unknown after a successful transport read is a failure,
+// not a skip: the gate deliberately fails open on Unknown, so that state would
+// send the very request this test exists to characterise.
+func TestRemoveFromTransport_Gate_Integration(t *testing.T) {
+	// Synthetic coordinates — see the SAFETY note above. They only have to
+	// satisfy the library's own transport-number validation.
 	const (
-		taskNumber   = "HFQK902953"
-		parentNumber = "HFQK902952"
+		taskNumber   = "DEVK900124"
+		parentNumber = "DEVK900123"
 		pgmID        = "R3TR"
-		objectType   = "CLAS"
-		objectName   = "ZCL_LOCKREPRO_2"
-		wbType       = "CLAS/OC"
+		objectType   = "PROG"
+		objectName   = "Z_ADT_MCP_GATE_NOOP"
+		wbType       = "PROG/P"
 		position     = "000001"
 	)
 
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
-			if sys.Name != "HFQ" {
-				t.Skipf("this test only ever runs against the ECC system — never against the S/4 system; got %q", sys.Name)
-			}
 			base := http.DefaultTransport.(*http.Transport).Clone()
 			base.TLSClientConfig = &tls.Config{InsecureSkipVerify: sys.Config.TLSSkipVerify} //nolint:gosec
 			t.Cleanup(base.CloseIdleConnections)
-			var putCount atomic.Int32
+
+			var writeCount atomic.Int32
 			client := adt.NewClientWithTransport(sys.Config, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-				if req.Method == http.MethodPut && req.URL.Path == "/sap/bc/adt/cts/transportrequests/"+taskNumber {
-					putCount.Add(1)
-					return nil, errors.New("blocked transport write in integration test")
+				if req.Method == http.MethodPut || req.Method == http.MethodDelete {
+					writeCount.Add(1)
+					return nil, errBlockedWrite
 				}
 				return base.RoundTrip(req)
 			}))
 
 			ctx := context.Background()
-			err := client.RemoveFromTransport(ctx, taskNumber, parentNumber, pgmID, objectType, objectName, wbType, position)
-			if err == nil {
-				t.Fatal("expected RemoveFromTransport to be blocked by the removeobject capability gate, got nil error")
+
+			// Warm the capability. It is a cached side effect of any successful
+			// transport read (see cacheRemoveObjectSupport), so this read is
+			// what populates it — RemoveFromTransport must not be the call that
+			// discovers it, or an unclassified system would be probed by the
+			// write itself.
+			reqs, err := client.GetTransportRequests(ctx, "", adt.TransportStatusModifiable)
+			if err != nil {
+				t.Fatalf("GetTransportRequests: %v", err)
 			}
-			t.Logf("%s: RemoveFromTransport returned (expected): %v", sys.Name, err)
-			if got := putCount.Load(); got != 0 {
-				t.Fatalf("integration safety wrapper blocked %d unexpected transport PUT(s); the gate must stop the write before it is attempted", got)
+			if len(reqs) == 0 {
+				t.Skip("no modifiable transport request on this system to read the capability from")
+			}
+			if _, err := client.GetTransportObjects(ctx, reqs[0].Number); err != nil {
+				t.Fatalf("GetTransportObjects(%s): %v", reqs[0].Number, err)
 			}
 
-			var adtErr *adt.ADTError
-			if !errors.As(err, &adtErr) {
-				t.Fatalf("expected *adt.ADTError, got %T: %v", err, err)
+			tc, ok := client.(adt.TestClient)
+			if !ok {
+				t.Fatal("client does not expose the test-only capability accessor")
 			}
-			if adtErr.Type != adt.ExceptionTypeRemoveObjectUnsupported {
-				t.Fatalf("expected Type %q, got %q (message: %s)",
-					adt.ExceptionTypeRemoveObjectUnsupported, adtErr.Type, adtErr.Message)
+			support := tc.RemoveObjectSupportForTest()
+
+			err = client.RemoveFromTransport(ctx, taskNumber, parentNumber, pgmID, objectType, objectName, wbType, position)
+
+			switch support {
+			case adt.RemoveObjectSupportUnsupported:
+				var adtErr *adt.ADTError
+				if !errors.As(err, &adtErr) {
+					t.Fatalf("capability is Unsupported, so the gate should have returned an *adt.ADTError; got %[1]T: %[1]v", err)
+				}
+				if adtErr.Type != adt.ExceptionTypeRemoveObjectUnsupported {
+					t.Errorf("error Type = %q, want %q", adtErr.Type, adt.ExceptionTypeRemoveObjectUnsupported)
+				}
+				if got := writeCount.Load(); got != 0 {
+					t.Errorf("gate reported unsupported but %d write request(s) were attempted; the whole point is that none is sent", got)
+				}
+				if got := adt.ClassifyError(err); got != adt.ErrorNotSupported {
+					t.Errorf("ClassifyError = %v, want %v — the consumer branches on this", got, adt.ErrorNotSupported)
+				}
+
+			case adt.RemoveObjectSupportSupported:
+				if !errors.Is(err, errBlockedWrite) {
+					t.Fatalf("capability is Supported, so the gate should have let the call reach a PUT this test blocks; got %v", err)
+				}
+				if got := writeCount.Load(); got != 1 {
+					t.Errorf("attempted write requests = %d, want exactly 1", got)
+				}
+
+			default:
+				t.Fatalf("capability is still %v after a successful transport read; the gate fails open on Unknown, so this state would send the request instead of refusing it", support)
 			}
-			t.Logf("%s: gate error text: %s", sys.Name, adtErr.Error())
 		})
 	}
 }
