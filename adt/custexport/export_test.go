@@ -207,6 +207,9 @@ func (m *mockClient) SystemInfo() (string, string) {
 	return "https://mock.example.com:443", "100"
 }
 func (m *mockClient) Logout(context.Context) error { panic("not implemented") }
+func (m *mockClient) SystemFlavor(context.Context) (adt.SystemFlavor, error) {
+	panic("not implemented")
+}
 
 func TestDiscoverTables(t *testing.T) {
 	var capturedSQL string

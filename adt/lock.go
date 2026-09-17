@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
@@ -44,8 +45,14 @@ func (c *httpClient) LockObject(ctx context.Context, objectURI string) (string, 
 }
 
 func (c *httpClient) UnlockObject(ctx context.Context, objectURI, lockHandle string) error {
+	// Real lock handles commonly contain '+', '=', '/' (base64-shaped).
+	// Unescaped, a '+' is decoded as a space by any form-urlencoded-convention
+	// query parser, silently corrupting the handle the server receives —
+	// see aibap.mcp#494's raw-HTTP diagnosis, which required URL-encoding to
+	// get a real release. url.QueryEscape matches how the other
+	// lockHandle-in-query call sites build their query string via url.Values.
 	resp, err := c.doMutate(ctx, http.MethodPost,
-		objectURI+"?_action=UNLOCK&lockHandle="+lockHandle,
+		objectURI+"?_action=UNLOCK&lockHandle="+url.QueryEscape(lockHandle),
 		nil,
 		map[string]string{"X-sap-adt-sessiontype": "stateful"},
 	)

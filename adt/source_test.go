@@ -19,6 +19,22 @@ const (
 	testCTTextPlainUTF8 = `text/plain; charset=utf-8`
 )
 
+// discoveryXMLProgramsUTF8Only is a minimal discovery document advertising
+// exactly one content type (the UTF-8 charset variant) for the programs
+// collection. Shared across tests (and adt/discovery_accept_header_test.go)
+// that need "discovery populated with this specific type" as their
+// discriminating signal — goconst (CI-enabled, see .github/workflows/
+// golangci-lint.yml) flags this exact literal once 3+ tests each declared
+// their own copy.
+const discoveryXMLProgramsUTF8Only = `<?xml version="1.0"?>
+<app:service xmlns:app="http://www.w3.org/2007/app">
+  <app:workspace>
+    <app:collection href="/sap/bc/adt/programs/programs">
+      <app:accept>text/plain; charset=utf-8</app:accept>
+    </app:collection>
+  </app:workspace>
+</app:service>`
+
 func TestGetSource(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/sap/bc/adt/programs/programs/ZTEST/source/main" {
@@ -206,14 +222,7 @@ func TestSetIncludeSource_KeepsIfMatchWhenUnlocked(t *testing.T) {
 func TestSetSource(t *testing.T) {
 	var gotMethod, gotIfMatch, gotContentType, gotBody string
 
-	discoveryXML := `<?xml version="1.0"?>
-<app:service xmlns:app="http://www.w3.org/2007/app">
-  <app:workspace>
-    <app:collection href="/sap/bc/adt/programs/programs">
-      <app:accept>text/plain; charset=utf-8</app:accept>
-    </app:collection>
-  </app:workspace>
-</app:service>`
+	discoveryXML := discoveryXMLProgramsUTF8Only
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -390,14 +399,7 @@ func TestSourceContentType_DiscoveryAdvertisesType_UsesIt(t *testing.T) {
 }
 
 func TestGetSource_UsesDiscoveryAdvertisedAcceptHeader(t *testing.T) {
-	discoveryXML := `<?xml version="1.0"?>
-<app:service xmlns:app="http://www.w3.org/2007/app">
-  <app:workspace>
-    <app:collection href="/sap/bc/adt/programs/programs">
-      <app:accept>text/plain; charset=utf-8</app:accept>
-    </app:collection>
-  </app:workspace>
-</app:service>`
+	discoveryXML := discoveryXMLProgramsUTF8Only
 
 	var capturedAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
