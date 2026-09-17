@@ -237,7 +237,7 @@ func TestGetTransportObjects_AbsentFromWorklist_ResolvesViaE071(t *testing.T) {
 // reach a caller. The query excludes it; this test additionally proves the
 // result is clean even when a server hands it over regardless.
 func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T) {
-	const releasedNumber = "E20K928233"
+	const releasedNumber = "DEVK900123"
 
 	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
 		if strings.Contains(sql, "FROM E070") {
@@ -247,7 +247,7 @@ func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T)
 		return http.StatusOK, dataPreviewXML(
 			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
 			[][]string{
-				{releasedNumber, "000001", "CORR", "RELE", "E20K928234 20160702 143007 U13409"},
+				{releasedNumber, "000001", "CORR", "RELE", "DEVK900124 20240101 120000 TESTUSER1"},
 				{releasedNumber, "000002", "LIMU", "METH", "ZCL_EDM_MIG_GINF              GET_GT_DATA"},
 			},
 		)
