@@ -205,17 +205,29 @@ func TestRemoveObjectSupport_Capability_Integration(t *testing.T) {
 			got := testClient.RemoveObjectSupportForTest()
 			t.Logf("%s: RemoveObjectSupport = %v", sys.Name, got)
 
-			var want adt.RemoveObjectSupport
-			switch sys.Name {
-			case "HFQ":
-				want = adt.RemoveObjectSupportUnsupported
-			case "S4U":
-				want = adt.RemoveObjectSupportSupported
-			default:
-				t.Skipf("%s: no expected capability verdict recorded for this system name", sys.Name)
+			// No per-system verdict is asserted here, deliberately. Which
+			// relations a server advertises turns out to depend on the state of
+			// the transport being read, not only on the release: a modifiable
+			// request on a system that supports removal can come back carrying
+			// none of the action relations at all, which leaves the capability
+			// Unknown. The gate is built for that — it fails open, so an
+			// unclassified system behaves exactly as it did before the gate
+			// existed — and the write path is where the verdict actually gets
+			// tested, in transport_remove_integration_test.go under the
+			// `integration && transport` tag.
+			//
+			// What this test does pin is that the derivation is deterministic:
+			// a second, independent client reading the same transport must
+			// reach the same conclusion. A capability that varied between
+			// clients would make the gate's behaviour unpredictable, which is
+			// worse than any particular verdict.
+			second := adt.NewClientForTest(sys.Config)
+			if _, err := second.GetTransportInfo(ctx, requests[0].Number); err != nil {
+				t.Fatalf("GetTransportInfo(%s) on a second client: %v", requests[0].Number, err)
 			}
-			if got != want {
-				t.Errorf("%s: RemoveObjectSupport = %v, want %v", sys.Name, got, want)
+			if again := second.RemoveObjectSupportForTest(); again != got {
+				t.Errorf("%s: two clients reading %s derived different capabilities: %v and %v",
+					sys.Name, requests[0].Number, got, again)
 			}
 		})
 	}

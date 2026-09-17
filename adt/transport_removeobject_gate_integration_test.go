@@ -132,7 +132,18 @@ func TestRemoveFromTransport_Gate_Integration(t *testing.T) {
 				}
 
 			default:
-				t.Fatalf("capability is still %v after a successful transport read; the gate fails open on Unknown, so this state would send the request instead of refusing it", support)
+				// Unknown. The gate fails open by design, so this must behave
+				// exactly like Supported: the call goes through and this test's
+				// RoundTripper is what stops it. Unknown is not an anomaly —
+				// which relations a server advertises depends on the state of
+				// the transport that was read, so a system that supports
+				// removal can legitimately leave the capability unresolved.
+				if !errors.Is(err, errBlockedWrite) {
+					t.Fatalf("capability is Unknown, so the gate must fail open and let the call reach a PUT this test blocks; got %v", err)
+				}
+				if got := writeCount.Load(); got != 1 {
+					t.Errorf("attempted write requests = %d, want exactly 1 — an unclassified system must behave as it did before the gate existed", got)
+				}
 			}
 		})
 	}

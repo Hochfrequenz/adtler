@@ -753,9 +753,13 @@ func (n atomLinkNode) collectRels(rels map[string]bool) {
 // anywhere" cannot tell ECC apart from an S/4 request that simply holds no
 // objects yet.
 //
-// The discriminator that does hold, across every captured fixture, is
-// addobject: present on every S/4 response including one with no objects at
-// all, absent from every ECC response. But "at least one other relation and
+// The discriminator used here is addobject, which appears on S/4 responses and
+// on no ECC response. It is not universal, and measurement says so: against a
+// live S/4 system a *modifiable* request came back advertising only
+// actionlogs/adturi/checkruns/self/transportchecks/transportlogs — neither
+// addobject nor removeobject. Which relations a server offers depends on the
+// state of the transport being read, not on the release alone, so this
+// discriminator resolves a system positively rather than reliably. But "at least one other relation and
 // neither addobject nor removeobject" is still not enough to conclude
 // unsupported, because a supported S/4 system can omit mutation actions for a
 // released or foreign request while still carrying unrelated links such as
