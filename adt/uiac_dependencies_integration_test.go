@@ -15,6 +15,45 @@ import (
 // scanning the whole table.
 const discoveryMaxRows = 500
 
+// nonexistentCatID is a synthetic catalog id that cannot exist as a real Fiori
+// catalog: not a real object name, not something a customer would plausibly
+// create, and clearly marked as a test fixture. Used to exercise the absent-
+// catalog path independently of catalog discovery (see
+// TestUIACDependencies_AbsentCatalog_Integration).
+const nonexistentCatID = "ZZ_ADTLER_TEST_NONEXISTENT_CAT_8F3K2Q"
+
+// TestUIACDependencies_AbsentCatalog_Integration exercises the claim this PR
+// makes about a UIAC catalog that does not exist on the target system: the
+// lookup returns no error and an empty dependency list, because uiacDeps
+// never probes SUI_TM_MM_CAT (which is absent on ECC systems) and an empty
+// SUI_TM_MM_APP result for that catalog id is already the correct answer.
+//
+// Unlike TestUIACUIADDependencies_MultiSystem_Integration, this needs no
+// discovery step and cannot be skipped: it is deterministic on every system,
+// including the R/3 (ECC) system, which has no UIAC objects at all and is
+// exactly the case this assertion exists to cover. Each system gets its own
+// call with the same synthetic id — no catalog id is carried across
+// iterations, so a failure on one system cannot be attributed to another.
+func TestUIACDependencies_AbsentCatalog_Integration(t *testing.T) {
+	ctx := context.Background()
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			res, err := sys.Client.GetObjectDependencies(ctx, "UIAC", nonexistentCatID, 0, 1)
+			if err != nil {
+				t.Fatalf("[%s] GetObjectDependencies(UIAC, absent catalog): %v", sys.Name, err)
+			}
+			if res == nil {
+				t.Fatalf("[%s] GetObjectDependencies(UIAC, absent catalog) returned nil result", sys.Name)
+			}
+			if len(res.Dependencies) != 0 {
+				t.Errorf("[%s] absent catalog %q: got %d dependencies, want 0: %+v",
+					sys.Name, nonexistentCatID, len(res.Dependencies), res.Dependencies)
+			}
+		})
+	}
+}
+
 // allowedUIADUseTypes are the five use-type constants introduced for UIAC
 // (Fiori catalog) / UIAD (app entry) dependency resolution. A UIAD
 // dependency's use type must be one of these.
