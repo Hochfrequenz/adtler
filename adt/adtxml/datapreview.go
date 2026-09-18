@@ -6,7 +6,7 @@ import "encoding/xml"
 // Content-Type: application/xml
 // The data is column-oriented: each Column has metadata and a DataSet with
 // one entry per row.
-// Verified against S/4 HANA (srvhfuhana.sap.msp.local:44300) on 2026-03-25.
+// Verified against an SAP S/4HANA on-premise system on 2026-03-25.
 type DataPreviewResult struct {
 	XMLName              xml.Name            `xml:"tableData"`
 	TotalRows            string              `xml:"totalRows"`
