@@ -54,11 +54,13 @@ func TestUIACDependencies_AbsentCatalog_Integration(t *testing.T) {
 	}
 }
 
-// allowedUIADUseTypes are the five use-type constants introduced for UIAC
-// (Fiori catalog) / UIAD (app entry) dependency resolution. A UIAD
-// dependency's use type must be one of these.
+// allowedUIADUseTypes are the four launch-target use types a UIAD (app
+// entry) lookup can report. adt.UseTypeUIApp is deliberately excluded: it is
+// what a UIAC (catalog) lookup reports for the app entries it contains, never
+// what a UIAD lookup reports for an app entry's own launch target (see
+// uiadTargetColumns in dependencies.go). Accepting it here would let a
+// UIAC/UIAD misclassification regression pass unnoticed.
 var allowedUIADUseTypes = map[string]bool{
-	adt.UseTypeUIApp:           true,
 	adt.UseTypeTransaction:     true,
 	adt.UseTypeWebDynproApp:    true,
 	adt.UseTypeWebClientTarget: true,
