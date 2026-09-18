@@ -5,7 +5,7 @@ import "encoding/xml"
 // XML types for ABAP debugger ADT REST endpoints.
 
 // BreakpointsRequest is the XML body for POST /sap/bc/adt/debugger/breakpoints.
-// Verified: 2026-03-24 against hfq.sap.msp.local:8100.
+// Verified: 2026-03-24 against an SAP ERP 6.0 EHP8 system.
 // Derived from Simple Transformation TPDA_ADT_BREAKPOINTS_REQUEST.
 type BreakpointsRequest struct {
 	XMLName       xml.Name            `xml:"dbg:breakpoints"`

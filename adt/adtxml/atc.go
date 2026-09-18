@@ -5,7 +5,7 @@ import "encoding/xml"
 // ATCCustomizing represents the ATC configuration response.
 // Endpoint: GET /sap/bc/adt/atc/customizing
 // Accept: application/vnd.sap.atc.customizing-v1+xml
-// Verified against S/4 HANA (srvhfuhana.sap.msp.local:44300) on 2026-03-24.
+// Verified against an SAP S/4HANA on-premise system on 2026-03-24.
 type ATCCustomizing struct {
 	XMLName    xml.Name      `xml:"customizing"`
 	Properties []ATCProperty `xml:"properties>property"`
