@@ -148,11 +148,11 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		return newDependencyResult(objectType, objectName, append(ddic, oo...), nil), nil
 
 	case "UIAC":
-		deps, err := c.uiacDeps(ctx, objectName, maxResults)
+		deps, warns, err := c.uiacDeps(ctx, objectName, maxResults)
 		if err != nil {
 			return nil, err
 		}
-		return newDependencyResult(objectType, objectName, deps, nil), nil
+		return newDependencyResult(objectType, objectName, deps, warns), nil
 
 	case "UIAD":
 		deps, warns, err := c.uiadDeps(ctx, objectName)
@@ -226,15 +226,23 @@ func (c *httpClient) d010tabDeps(ctx context.Context, master string, maxResults 
 // itself is not probed: SUI_TM_MM_CAT is absent on ECC systems, and an empty
 // SUI_TM_MM_APP result is already the correct answer for a catalog with no
 // app entries.
-func (c *httpClient) uiacDeps(ctx context.Context, catID string, maxResults int) ([]ObjectDependency, error) {
+//
+// RunQuery silently rewrites a non-positive maxResults to a 1000-row server
+// cap (see RunQuery in query.go) — GetObjectDependencies documents maxResults
+// == 0 as "no cap", so a catalog with more than 1000 app entries would
+// otherwise be truncated with no indication to the caller. QueryResult's
+// TotalRows carries the server-side total independently of how many rows
+// were actually returned, so a mismatch between the two is reported as a
+// warning naming both numbers.
+func (c *httpClient) uiacDeps(ctx context.Context, catID string, maxResults int) ([]ObjectDependency, []string, error) {
 	qr, err := c.RunQuery(ctx,
 		fmt.Sprintf("SELECT APP_ID FROM SUI_TM_MM_APP WHERE CAT_ID = '%s' ORDER BY APP_ID", EscapeValue(catID)),
 		maxResults)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if qr == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	idx := queryColumnIndexes(qr, "APP_ID")
 	deps := make([]ObjectDependency, 0, len(qr.Rows))
@@ -243,7 +251,11 @@ func (c *httpClient) uiacDeps(ctx context.Context, catID string, maxResults int)
 			deps = append(deps, ObjectDependency{Name: v, UseType: UseTypeUIApp})
 		}
 	}
-	return deps, nil
+	var warnings []string
+	if qr.TotalRows > len(qr.Rows) {
+		warnings = append(warnings, fmt.Sprintf("output truncated to %d entries (%d total)", len(qr.Rows), qr.TotalRows))
+	}
+	return deps, warnings, nil
 }
 
 // uiadDeps resolves the launch target of a UIAD app entry. Every target column

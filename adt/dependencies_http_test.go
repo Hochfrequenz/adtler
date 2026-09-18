@@ -31,6 +31,27 @@ func oneColumnDataPreview(name string, values ...string) string {
 	return b.String()
 }
 
+// oneColumnDataPreviewWithTotal is oneColumnDataPreview but with an explicit
+// totalRows that need not match len(values), simulating the ADT data preview
+// endpoint's server-side row cap (see RunQuery in query.go): the server
+// reports a larger total than the number of rows it actually returned.
+func oneColumnDataPreviewWithTotal(name string, totalRows int, values ...string) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>
+<dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">
+  <dataPreview:totalRows>` + strconv.Itoa(totalRows) + `</dataPreview:totalRows>
+  <dataPreview:columns>
+    <dataPreview:metadata dataPreview:name="` + name + `" dataPreview:type="C" dataPreview:description="" dataPreview:keyAttribute="true" dataPreview:colType="" dataPreview:isKeyFigure="false"/>
+    <dataPreview:dataSet>`)
+	for _, v := range values {
+		b.WriteString("<dataPreview:data>" + v + "</dataPreview:data>")
+	}
+	b.WriteString(`</dataPreview:dataSet>
+  </dataPreview:columns>
+</dataPreview:tableData>`)
+	return b.String()
+}
+
 // TestGetObjectDependencies_Prog exercises the PROG path end to end: the
 // D010TAB master query returns one table name, which DD02L then classifies as a
 // transparent table. The mock routes by inspecting the SQL in the request body.
@@ -128,6 +149,44 @@ func TestGetObjectDependencies_UIAC(t *testing.T) {
 	}
 	if res.Dependencies[1].Name != "APPTWO" {
 		t.Errorf("dep[1] name: got %q, want APPTWO", res.Dependencies[1].Name)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings: got %v, want none (server-reported total matches rows returned)", res.Warnings)
+	}
+}
+
+// TestGetObjectDependencies_UIAC_Truncated covers a UIAC catalog whose app
+// entries exceed RunQuery's server-side row cap (see RunQuery in query.go,
+// which silently rewrites a non-positive maxRows to 1000): the data preview
+// endpoint returns fewer rows than dataPreview:totalRows reports, and the
+// result must carry exactly one warning naming both numbers so a caller
+// (e.g. a transport-completeness check) sees the list is incomplete.
+func TestGetObjectDependencies_UIAC_Truncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+		_, _ = w.Write([]byte(oneColumnDataPreviewWithTotal("APP_ID", 1500, "APPONE", "APPTWO")))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	c := adt.NewClient(cfg)
+	res, err := c.GetObjectDependencies(context.Background(), "UIAC", "SAP_TC_EXAMPLE", 0, 3)
+	if err != nil {
+		t.Fatalf("GetObjectDependencies: %v", err)
+	}
+	if res.Count != 2 {
+		t.Fatalf("count: got %d, want 2", res.Count)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("warnings: got %v, want exactly one truncation warning", res.Warnings)
+	}
+	if !strings.Contains(res.Warnings[0], "truncat") || !strings.Contains(res.Warnings[0], "2") || !strings.Contains(res.Warnings[0], "1500") {
+		t.Errorf("warning: got %q, want it to mention truncation and both 2 and 1500", res.Warnings[0])
 	}
 }
 
