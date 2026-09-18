@@ -223,3 +223,34 @@ func TestGetObjectDependencies_UIAD_NoTarget(t *testing.T) {
 		t.Errorf("warnings: got %v, want one mentioning \"no launch target\"", res.Warnings)
 	}
 }
+
+// TestGetObjectDependencies_UIAD_NoEntry covers an app id with no row at all in
+// SUI_TM_MM_APP (as opposed to TestGetObjectDependencies_UIAD_NoTarget, where the
+// row exists but every target column is empty): reported as an empty list plus
+// a warning that the app id is unknown, rather than as an error.
+func TestGetObjectDependencies_UIAD_NoEntry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+		// Zero values means zero rows: the query ran but matched nothing.
+		_, _ = w.Write([]byte(oneColumnDataPreview("APP_TYPE")))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	c := adt.NewClient(cfg)
+	res, err := c.GetObjectDependencies(context.Background(), "UIAD", "APPID00000000000000000000000099", 200, 3)
+	if err != nil {
+		t.Fatalf("GetObjectDependencies: %v", err)
+	}
+	if res.Count != 0 {
+		t.Fatalf("count: got %d, want 0 (%+v)", res.Count, res.Dependencies)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "no SUI_TM_MM_APP entry") {
+		t.Errorf("warnings: got %v, want one mentioning \"no SUI_TM_MM_APP entry\"", res.Warnings)
+	}
+}
