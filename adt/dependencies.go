@@ -91,6 +91,11 @@ const (
 // tables up to maxDepth levels). maxResults caps the returned list (0 = no
 // cap). maxDepth is clamped to [1, 10] (values below 1 become 1); it is
 // ignored for the non-DDIC types. Callers choose their own default depth.
+//
+// UIAC (Fiori catalog) lists the UIAD app entries it contains, honouring
+// maxResults; UIAD lists the launch target of a single app entry and ignores
+// maxResults, since one app entry has at most four targets. Both read
+// SUI_TM_MM_APP and both ignore maxDepth.
 func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error) {
 	objectType = strings.ToUpper(objectType)
 
@@ -149,6 +154,13 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		}
 		return newDependencyResult(objectType, objectName, deps, nil), nil
 
+	case "UIAD":
+		deps, warns, err := c.uiadDeps(ctx, objectName)
+		if err != nil {
+			return nil, err
+		}
+		return newDependencyResult(objectType, objectName, deps, warns), nil
+
 	case "TABL", "DTEL", "DOMA", "TTYP":
 		if maxDepth < 1 {
 			maxDepth = 1
@@ -164,7 +176,7 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		return newDependencyResult(objectType, objectName, deps, warns), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported object type %q: supported are PROG, FUGR, FUNC, CLAS, INTF, TABL, DTEL, DOMA, TTYP, UIAC", objectType)
+		return nil, fmt.Errorf("unsupported object type %q: supported are PROG, FUGR, FUNC, CLAS, INTF, TABL, DTEL, DOMA, TTYP, UIAC, UIAD", objectType)
 	}
 }
 
@@ -232,6 +244,41 @@ func (c *httpClient) uiacDeps(ctx context.Context, catID string, maxResults int)
 		}
 	}
 	return deps, nil
+}
+
+// uiadDeps resolves the launch target of a UIAD app entry. Every target column
+// that is filled is reported; see uiadTargetColumns for why APP_TYPE is not
+// used to select one. Columns are addressed by name because the data-preview
+// endpoint may reorder or omit them. An app entry that launches no repository
+// object (a URL app) yields no dependencies and one warning.
+func (c *httpClient) uiadDeps(ctx context.Context, appID string) ([]ObjectDependency, []string, error) {
+	names := make([]string, 0, len(uiadTargetColumns)+1)
+	names = append(names, "APP_TYPE")
+	for _, t := range uiadTargetColumns {
+		names = append(names, t.Column)
+	}
+	qr, err := c.RunQuery(ctx,
+		fmt.Sprintf("SELECT %s FROM SUI_TM_MM_APP WHERE APP_ID = '%s'",
+			strings.Join(names, ", "), EscapeValue(appID)),
+		1)
+	if err != nil {
+		return nil, nil, err
+	}
+	if qr == nil || len(qr.Rows) == 0 {
+		return nil, []string{fmt.Sprintf("no SUI_TM_MM_APP entry for app id %q", appID)}, nil
+	}
+	idx := queryColumnIndexes(qr, names...)
+	row := qr.Rows[0]
+	deps := make([]ObjectDependency, 0, len(uiadTargetColumns))
+	for _, t := range uiadTargetColumns {
+		if v := queryCell(row, idx[t.Column]); v != "" {
+			deps = append(deps, ObjectDependency{Name: v, UseType: t.UseType})
+		}
+	}
+	if len(deps) == 0 {
+		return nil, []string{fmt.Sprintf("app entry has no launch target (APP_TYPE %q)", queryCell(row, idx["APP_TYPE"]))}, nil
+	}
+	return deps, nil, nil
 }
 
 // classifyDDICObjects resolves the DDIC kind of each name via two queries:

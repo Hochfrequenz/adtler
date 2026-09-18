@@ -130,3 +130,96 @@ func TestGetObjectDependencies_UIAC(t *testing.T) {
 		t.Errorf("dep[1] name: got %q, want APPTWO", res.Dependencies[1].Name)
 	}
 }
+
+// multiColumnDataPreview builds a one-row datapreview response over the given
+// column/value pairs, in the order given.
+func multiColumnDataPreview(cols [][2]string) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>` + "\n" +
+		`<dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">` + "\n" +
+		`  <dataPreview:totalRows>1</dataPreview:totalRows>`)
+	for _, c := range cols {
+		b.WriteString("\n  <dataPreview:columns>\n" +
+			`    <dataPreview:metadata dataPreview:name="` + c[0] + `" dataPreview:type="C" dataPreview:keyAttribute="false" dataPreview:colType="" dataPreview:isKeyFigure="false"/>` + "\n" +
+			`    <dataPreview:dataSet><dataPreview:data>` + c[1] + `</dataPreview:data></dataPreview:dataSet>` + "\n" +
+			"  </dataPreview:columns>")
+	}
+	b.WriteString("\n</dataPreview:tableData>")
+	return b.String()
+}
+
+// TestGetObjectDependencies_UIAD_MultipleTargets covers a Web Dynpro app entry,
+// which references both a Web Dynpro application and a transaction, so both are
+// reported. The response deliberately lists its columns in an order matching
+// neither the SELECT list nor uiadTargetColumns: the data-preview endpoint may
+// reorder columns, so the implementation has to address them by name.
+// Positional indexing passes a same-order fixture and fails this one.
+func TestGetObjectDependencies_UIAD_MultipleTargets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+		_, _ = w.Write([]byte(multiColumnDataPreview([][2]string{
+			{"UI5_APP_ID", ""},
+			{"APP_TYPE", "W"},
+			{"WD_APPL_ID", "WDA_EXAMPLE"},
+			{"TCODE", "SE38"},
+			{"WCF_TARGET_ID", ""},
+		})))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	c := adt.NewClient(cfg)
+	res, err := c.GetObjectDependencies(context.Background(), "UIAD", "APPID00000000000000000000000001", 200, 3)
+	if err != nil {
+		t.Fatalf("GetObjectDependencies: %v", err)
+	}
+	if res.Count != 2 {
+		t.Fatalf("count: got %d, want 2 (%+v)", res.Count, res.Dependencies)
+	}
+	if res.Dependencies[0].Name != "SE38" || res.Dependencies[0].UseType != adt.UseTypeTransaction {
+		t.Errorf("dep[0]: got %+v, want {SE38 TRANSACTION}", res.Dependencies[0])
+	}
+	if res.Dependencies[1].Name != "WDA_EXAMPLE" || res.Dependencies[1].UseType != adt.UseTypeWebDynproApp {
+		t.Errorf("dep[1]: got %+v, want {WDA_EXAMPLE WEB_DYNPRO_APP}", res.Dependencies[1])
+	}
+}
+
+// TestGetObjectDependencies_UIAD_NoTarget covers a URL app entry: it exists but
+// launches no repository object, reported as an empty list plus a warning
+// rather than as an error.
+func TestGetObjectDependencies_UIAD_NoTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+		_, _ = w.Write([]byte(multiColumnDataPreview([][2]string{
+			{"APP_TYPE", "R"},
+			{"TCODE", ""},
+			{"WD_APPL_ID", ""},
+			{"WCF_TARGET_ID", ""},
+			{"UI5_APP_ID", ""},
+		})))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	c := adt.NewClient(cfg)
+	res, err := c.GetObjectDependencies(context.Background(), "UIAD", "APPID00000000000000000000000001", 200, 3)
+	if err != nil {
+		t.Fatalf("GetObjectDependencies: %v", err)
+	}
+	if res.Count != 0 {
+		t.Fatalf("count: got %d, want 0 (%+v)", res.Count, res.Dependencies)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "no launch target") {
+		t.Errorf("warnings: got %v, want one mentioning \"no launch target\"", res.Warnings)
+	}
+}
