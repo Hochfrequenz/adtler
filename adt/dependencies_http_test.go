@@ -85,3 +85,48 @@ func TestGetObjectDependencies_Prog(t *testing.T) {
 		t.Errorf("dependency: got %+v, want {ZORDERS TABLE}", dep)
 	}
 }
+
+// TestGetObjectDependencies_UIAC exercises the UIAC path: the catalog query
+// returns two app ids, reported as UI_APP dependencies. SUI_TM_MM_CAT must
+// never be queried — that table is absent on ECC systems.
+func TestGetObjectDependencies_UIAC(t *testing.T) {
+	var sawCatTable bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		sql := string(bodyBytes)
+		if strings.Contains(sql, "SUI_TM_MM_CAT") {
+			sawCatTable = true
+		}
+		w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+		if strings.Contains(sql, "FROM SUI_TM_MM_APP") {
+			_, _ = w.Write([]byte(oneColumnDataPreview("APP_ID", "APPONE", "APPTWO")))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	c := adt.NewClient(cfg)
+	res, err := c.GetObjectDependencies(context.Background(), "UIAC", "SAP_TC_EXAMPLE", 200, 3)
+	if err != nil {
+		t.Fatalf("GetObjectDependencies: %v", err)
+	}
+	if sawCatTable {
+		t.Error("SUI_TM_MM_CAT was queried; it does not exist on ECC systems")
+	}
+	if res.Count != 2 {
+		t.Fatalf("count: got %d, want 2", res.Count)
+	}
+	if res.Dependencies[0].Name != "APPONE" || res.Dependencies[0].UseType != adt.UseTypeUIApp {
+		t.Errorf("dep[0]: got %+v, want {APPONE UI_APP}", res.Dependencies[0])
+	}
+	if res.Dependencies[1].Name != "APPTWO" {
+		t.Errorf("dep[1] name: got %q, want APPTWO", res.Dependencies[1].Name)
+	}
+}

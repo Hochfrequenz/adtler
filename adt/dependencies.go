@@ -142,6 +142,13 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		}
 		return newDependencyResult(objectType, objectName, append(ddic, oo...), nil), nil
 
+	case "UIAC":
+		deps, err := c.uiacDeps(ctx, objectName, maxResults)
+		if err != nil {
+			return nil, err
+		}
+		return newDependencyResult(objectType, objectName, deps, nil), nil
+
 	case "TABL", "DTEL", "DOMA", "TTYP":
 		if maxDepth < 1 {
 			maxDepth = 1
@@ -157,7 +164,7 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		return newDependencyResult(objectType, objectName, deps, warns), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported object type %q: supported are PROG, FUGR, FUNC, CLAS, INTF, TABL, DTEL, DOMA, TTYP", objectType)
+		return nil, fmt.Errorf("unsupported object type %q: supported are PROG, FUGR, FUNC, CLAS, INTF, TABL, DTEL, DOMA, TTYP, UIAC", objectType)
 	}
 }
 
@@ -198,6 +205,30 @@ func (c *httpClient) d010tabDeps(ctx context.Context, master string, maxResults 
 		classification := c.classifyDDICObjects(ctx, names)
 		for i := range deps {
 			deps[i].UseType = classification[deps[i].Name]
+		}
+	}
+	return deps, nil
+}
+
+// uiacDeps lists the UIAD app entries a UIAC catalog contains. The catalog
+// itself is not probed: SUI_TM_MM_CAT is absent on ECC systems, and an empty
+// SUI_TM_MM_APP result is already the correct answer for a catalog with no
+// app entries.
+func (c *httpClient) uiacDeps(ctx context.Context, catID string, maxResults int) ([]ObjectDependency, error) {
+	qr, err := c.RunQuery(ctx,
+		fmt.Sprintf("SELECT APP_ID FROM SUI_TM_MM_APP WHERE CAT_ID = '%s' ORDER BY APP_ID", EscapeValue(catID)),
+		maxResults)
+	if err != nil {
+		return nil, err
+	}
+	if qr == nil {
+		return nil, nil
+	}
+	idx := queryColumnIndexes(qr, "APP_ID")
+	deps := make([]ObjectDependency, 0, len(qr.Rows))
+	for _, row := range qr.Rows {
+		if v := queryCell(row, idx["APP_ID"]); v != "" {
+			deps = append(deps, ObjectDependency{Name: v, UseType: UseTypeUIApp})
 		}
 	}
 	return deps, nil
