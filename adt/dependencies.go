@@ -18,7 +18,38 @@ const (
 	UseTypeInterface   = "INTERFACE"
 	UseTypeSuperclass  = "SUPERCLASS"
 	UseTypeUnknown     = "UNKNOWN"
+	// UseTypeUIApp is a UIAD app entry contained in a UIAC catalog.
+	UseTypeUIApp = "UI_APP"
+	// UseTypeTransaction is a transaction code launched by a UIAD app entry.
+	UseTypeTransaction = "TRANSACTION"
+	// UseTypeWebDynproApp is a Web Dynpro application launched by a UIAD app entry.
+	UseTypeWebDynproApp = "WEB_DYNPRO_APP"
+	// UseTypeWebClientTarget is a WebClient UI target launched by a UIAD app entry.
+	UseTypeWebClientTarget = "WEB_CLIENT_TARGET"
+	// UseTypeUI5App is a SAPUI5 repository app launched by a UIAD app entry.
+	// Unlike the other targets it is not a TADIR object, so it cannot be
+	// classified further; it is reported as a plain reference.
+	UseTypeUI5App = "UI5_APP"
 )
+
+// uiadTarget names one SUI_TM_MM_APP column that may reference a launch target
+// and the use type reported for it.
+type uiadTarget struct {
+	Column  string
+	UseType string
+}
+
+// uiadTargetColumns lists the SUI_TM_MM_APP columns that carry a launch target,
+// in the order they are reported. Resolution is by column rather than by
+// APP_TYPE: a Web Dynpro app entry carries both WD_APPL_ID and TCODE, and a
+// WebClient UI entry carries both WCF_TARGET_ID and TCODE, so keying off
+// APP_TYPE would silently drop the second reference.
+var uiadTargetColumns = []uiadTarget{
+	{Column: "TCODE", UseType: UseTypeTransaction},
+	{Column: "WD_APPL_ID", UseType: UseTypeWebDynproApp},
+	{Column: "WCF_TARGET_ID", UseType: UseTypeWebClientTarget},
+	{Column: "UI5_APP_ID", UseType: UseTypeUI5App},
+}
 
 // ObjectDependency is a single object referenced by the queried object.
 type ObjectDependency struct {
