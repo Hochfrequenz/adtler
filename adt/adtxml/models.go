@@ -8,7 +8,7 @@ package adtxml
 
 // LockData is the DATA content of a lock response.
 // Endpoint: POST {objectURI}?_action=LOCK&accessMode=MODIFY
-// Verified: 2026-03-24 against srvhfuhana.sap.msp.local:44300
+// Verified: 2026-03-24 against an SAP S/4HANA on-premise system
 type LockData struct {
 	LockHandle          string `xml:"LOCK_HANDLE"`
 	CorrNr              string `xml:"CORRNR"`
@@ -21,7 +21,7 @@ type LockData struct {
 
 // PackageNode is a single node in a BrowsePackage response.
 // Endpoint: POST /sap/bc/adt/repository/nodestructure
-// Verified: 2026-03-23 against srvhfuhana.sap.msp.local:44300
+// Verified: 2026-03-23 against an SAP S/4HANA on-premise system
 type PackageNode struct {
 	ObjectType  string `xml:"OBJECT_TYPE"`
 	ObjectName  string `xml:"OBJECT_NAME"`
@@ -40,7 +40,7 @@ type PackageTreeContent struct {
 
 // TransportCheckData is the DATA content of a transport check response.
 // Endpoint: POST /sap/bc/adt/cts/transportchecks
-// Verified: 2026-03-23 against srvhfuhana.sap.msp.local:44300
+// Verified: 2026-03-23 against an SAP S/4HANA on-premise system
 type TransportCheckData struct {
 	PgmID      string              `xml:"PGMID"`
 	Object     string              `xml:"OBJECT"`
@@ -76,7 +76,7 @@ type TransportCheckRequest struct {
 
 // CreateTransportData is the DATA content for creating a transport request.
 // Endpoint: POST /sap/bc/adt/cts/transports
-// Verified: 2026-03-23 against srvhfuhana.sap.msp.local:44300
+// Verified: 2026-03-23 against an SAP S/4HANA on-premise system
 type CreateTransportData struct {
 	Category    string `xml:"CATEGORY"`
 	Target      string `xml:"TARGET,omitempty"`

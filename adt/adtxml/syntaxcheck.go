@@ -4,7 +4,7 @@ import "encoding/xml"
 
 // CheckRunReports is the XML response from POST /sap/bc/adt/checkruns.
 // Endpoint: POST /sap/bc/adt/checkruns
-// Verified: 2026-03-24 against srvhfuhana.sap.msp.local:44300
+// Verified: 2026-03-24 against an SAP S/4HANA on-premise system
 type CheckRunReports struct {
 	XMLName xml.Name         `xml:"checkRunReports"`
 	Reports []CheckRunReport `xml:"checkReport"`
