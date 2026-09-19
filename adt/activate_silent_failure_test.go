@@ -10,14 +10,17 @@ import (
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
-// activateVerifiedServer mocks an activation POST that returns an empty body
-// (the ECC behavior from Hochfrequenz/aibap.mcp#500 / adtler#144 — SAP
-// answers 2xx with no message body regardless of whether activation actually
-// happened) followed by a GetInactiveObjects read.
+// activateWithInactiveCheckServer mocks an activation POST followed by a
+// GetInactiveObjects read. activationBody is written verbatim as the
+// activation response (empty string reproduces the ECC "always empty" case
+// from Hochfrequenz/aibap.mcp#500 / adtler#144; a well-formed
+// zero-<msg> body reproduces the shape used by TestActivateObjectSuccess).
 //
-// inactiveEntry, if non-empty, is embedded as a still-inactive object whose
-// ref/@uri equals objectURI; pass "" for a clean inactive-objects list.
-func activateVerifiedServer(t *testing.T, objectURI, inactiveEntryURI string, inactiveStatus int) *httptest.Server {
+// inactiveEntryURI, if non-empty, is embedded as a still-inactive object's
+// ref/@uri; pass "" for a clean inactive-objects list. inactiveStatus, if
+// non-zero, makes the inactive-objects read itself fail with that HTTP
+// status instead of returning a list.
+func activateWithInactiveCheckServer(t *testing.T, activationBody, inactiveEntryURI string, inactiveStatus int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -27,7 +30,7 @@ func activateVerifiedServer(t *testing.T, objectURI, inactiveEntryURI string, in
 		case activationPath:
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
-			// No body written at all — the ECC "always empty" case.
+			_, _ = w.Write([]byte(activationBody))
 		case "/sap/bc/adt/activation/inactiveobjects":
 			if inactiveStatus != 0 {
 				w.WriteHeader(inactiveStatus)
@@ -53,19 +56,19 @@ func activateVerifiedServer(t *testing.T, objectURI, inactiveEntryURI string, in
 	}))
 }
 
-// TestActivateObjectsVerified_StillInactive is the regression guard for
-// Hochfrequenz/aibap.mcp#500: ActivateObjects alone reports Success:true for
-// any 2xx, even when the object never actually activated. Verified must
-// catch this by re-checking GetInactiveObjects.
-func TestActivateObjectsVerified_StillInactive(t *testing.T) {
+// TestActivateObjects_StillInactiveAfterEmptyBody is the regression guard
+// for Hochfrequenz/aibap.mcp#500: the activation POST returning 2xx with an
+// empty body is not proof of activation. ActivateObjects must catch the
+// silent no-op by re-checking GetInactiveObjects.
+func TestActivateObjects_StillInactiveAfterEmptyBody(t *testing.T) {
 	const objectURI = "/sap/bc/adt/oo/classes/%2fabc%2fcl_example"
-	srv := activateVerifiedServer(t, objectURI, objectURI+"/source/main", 0)
+	srv := activateWithInactiveCheckServer(t, "", objectURI+"/source/main", 0)
 	defer srv.Close()
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	result, err := client.ActivateObjectsVerified(context.Background(), []string{objectURI})
+	result, err := client.ActivateObjects(context.Background(), []string{objectURI})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,20 +83,46 @@ func TestActivateObjectsVerified_StillInactive(t *testing.T) {
 	}
 }
 
-// TestActivateObjectsVerified_EmptyBodyButActuallyActive guards against
-// over-correcting #500: an empty activation body is the common case on this
-// stack even for a genuinely successful activation (aibap.mcp#34). Verified
-// must not report failure when GetInactiveObjects confirms the object is no
-// longer inactive.
-func TestActivateObjectsVerified_EmptyBodyButActuallyActive(t *testing.T) {
+// TestActivateObjects_StillInactiveAfterWellFormedEmptyMessageBody covers the
+// gap in an earlier version of this fix: a well-formed activation response
+// with zero <msg> elements (the same shape TestActivateObjectSuccess uses)
+// looks identical to a genuine success on the wire, but must still be
+// verified — a system could return exactly this shape while silently not
+// activating the object. Gating verification on "body was empty or
+// unparseable" would skip this case entirely; ActivateObjects must verify
+// on any apparent success, not just an inconclusive one.
+func TestActivateObjects_StillInactiveAfterWellFormedEmptyMessageBody(t *testing.T) {
 	const objectURI = "/sap/bc/adt/oo/classes/%2fabc%2fcl_example"
-	srv := activateVerifiedServer(t, objectURI, "", 0)
+	wellFormedEmptyBody := `<?xml version="1.0" encoding="utf-8"?><chkl:messages xmlns:chkl="http://www.sap.com/abapxml/checklist"><chkl:properties checkExecuted="false" activationExecuted="false" generationExecuted="true"/></chkl:messages>`
+	srv := activateWithInactiveCheckServer(t, wellFormedEmptyBody, objectURI+"/source/main", 0)
 	defer srv.Close()
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	result, err := client.ActivateObjectsVerified(context.Background(), []string{objectURI})
+	result, err := client.ActivateObjects(context.Background(), []string{objectURI})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected Success=false: object is still listed as inactive despite a clean-looking activation response")
+	}
+}
+
+// TestActivateObjects_EmptyBodyButActuallyActive guards against
+// over-correcting #500: an empty activation body is the common case on this
+// stack even for a genuinely successful activation (aibap.mcp#34).
+// ActivateObjects must not report failure when GetInactiveObjects confirms
+// the object is no longer inactive.
+func TestActivateObjects_EmptyBodyButActuallyActive(t *testing.T) {
+	const objectURI = "/sap/bc/adt/oo/classes/%2fabc%2fcl_example"
+	srv := activateWithInactiveCheckServer(t, "", "", 0)
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	result, err := client.ActivateObjects(context.Background(), []string{objectURI})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,19 +131,19 @@ func TestActivateObjectsVerified_EmptyBodyButActuallyActive(t *testing.T) {
 	}
 }
 
-// TestActivateObjectsVerified_InactiveObjectsReadFails mirrors
+// TestActivateObjects_InactiveObjectsReadFails mirrors
 // ReleaseTransportVerified's optimistic fallback: if the post-activation
 // verification read itself fails, assume the (unverified) result stands
 // rather than turning a transport-layer hiccup into a false failure.
-func TestActivateObjectsVerified_InactiveObjectsReadFails(t *testing.T) {
+func TestActivateObjects_InactiveObjectsReadFails(t *testing.T) {
 	const objectURI = "/sap/bc/adt/oo/classes/%2fabc%2fcl_example"
-	srv := activateVerifiedServer(t, objectURI, "", http.StatusInternalServerError)
+	srv := activateWithInactiveCheckServer(t, "", "", http.StatusInternalServerError)
 	defer srv.Close()
 
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	result, err := client.ActivateObjectsVerified(context.Background(), []string{objectURI})
+	result, err := client.ActivateObjects(context.Background(), []string{objectURI})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,11 +152,11 @@ func TestActivateObjectsVerified_InactiveObjectsReadFails(t *testing.T) {
 	}
 }
 
-// TestActivateObjectsVerified_DoesNotOverrideExplicitError ensures a real,
+// TestActivateObjects_DoesNotVerifyOnExplicitError ensures a real,
 // well-formed error response from the activation call itself is trusted as
 // Success:false without needing (or performing) the extra verification
 // round-trip.
-func TestActivateObjectsVerified_DoesNotOverrideExplicitError(t *testing.T) {
+func TestActivateObjects_DoesNotVerifyOnExplicitError(t *testing.T) {
 	calledInactive := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -158,7 +187,7 @@ func TestActivateObjectsVerified_DoesNotOverrideExplicitError(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	result, err := client.ActivateObjectsVerified(context.Background(), []string{"/sap/bc/adt/oo/classes/%2fabc%2fcl_example"})
+	result, err := client.ActivateObjects(context.Background(), []string{"/sap/bc/adt/oo/classes/%2fabc%2fcl_example"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

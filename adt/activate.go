@@ -11,31 +11,26 @@ import (
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
 )
 
-func (c *httpClient) ActivateObjects(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
-	result, _, err := c.activateObjects(ctx, objectURIs)
-	return result, err
-}
-
-// ActivateObjectsVerified activates objects and, when the activation
-// response body did not itself carry a definitive answer (empty or
-// unparseable — the ECC behavior described in Hochfrequenz/aibap.mcp#500),
-// re-checks GetInactiveObjects to catch a silent no-op: SAP returning 2xx
-// while leaving the object inactive. If the requested object is still
-// listed as inactive, Success is forced to false with a synthesized
-// message, even though the raw activation response looked clean.
+// ActivateObjects activates one or more ABAP objects, then confirms the
+// outcome by re-checking GetInactiveObjects: some systems (notably ECC, for
+// a namespaced CLAS in a transportable package) return 2xx from the
+// activation POST with a body that never carries an error message, while
+// the object stays inactive (Hochfrequenz/aibap.mcp#500). Trusting that
+// body alone is not enough, so on any apparent success this re-reads the
+// inactive-objects list and overrides Success to false — with a synthesized
+// message — if a requested object is still listed there.
 //
-// An empty activation body is not itself proof of failure — it is also the
-// common shape for a genuinely successful activation on this stack
-// (Hochfrequenz/aibap.mcp#34) — so this only overrides the result when
-// GetInactiveObjects confirms the object did not activate. If that
-// verification read itself fails, the unverified (optimistic) result is
-// returned unchanged, mirroring ReleaseTransportVerified's fallback.
-func (c *httpClient) ActivateObjectsVerified(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
-	result, inconclusive, err := c.activateObjects(ctx, objectURIs)
+// This mirrors ReleaseTransportVerified (adt/transport.go): if the
+// activation body already carries an explicit error, verification is
+// skipped (nothing more to learn). If the verification read itself fails,
+// the unverified (optimistic) result is returned unchanged rather than
+// turning a transport-layer hiccup into a false failure.
+func (c *httpClient) ActivateObjects(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
+	result, err := c.postActivation(ctx, objectURIs)
 	if err != nil {
 		return nil, err
 	}
-	if !inconclusive || !result.Success {
+	if !result.Success {
 		return result, nil
 	}
 
@@ -61,14 +56,12 @@ func (c *httpClient) ActivateObjectsVerified(ctx context.Context, objectURIs []s
 }
 
 // stillInactiveURIs returns the subset of objectURIs that GetInactiveObjects
-// still lists — matched by prefix, since an inactive entry's URI may point
-// at a specific include (e.g. ".../source/main") nested under the requested
-// object URI rather than the object URI itself.
+// still lists, per objectURIMatches.
 func stillInactiveURIs(objectURIs []string, inactive []ObjectInfo) []string {
 	var result []string
 	for _, uri := range objectURIs {
 		for _, obj := range inactive {
-			if obj.URI == uri || (strings.HasPrefix(obj.URI, uri) && strings.HasPrefix(obj.URI[len(uri):], "/")) {
+			if objectURIMatches(uri, obj.URI) {
 				result = append(result, uri)
 				break
 			}
@@ -77,11 +70,55 @@ func stillInactiveURIs(objectURIs []string, inactive []ObjectInfo) []string {
 	return result
 }
 
-// activateObjects performs the activation POST and reports whether the
-// response body was inconclusive (empty or unparseable) — the signal
-// ActivateObjectsVerified uses to decide whether a follow-up check is
-// warranted.
-func (c *httpClient) activateObjects(ctx context.Context, objectURIs []string) (*ActivationResult, bool, error) {
+// objectURIMatches reports whether requested and candidate refer to the same
+// object, tolerating the ways two URIs for the same thing can legitimately
+// differ here:
+//   - a trailing slash, or a query/fragment suffix such as
+//     "?version=inactive" or "#start=5,0"
+//   - percent-encoding hex-digit case (%2f vs %2F) or object-name case
+//     (SAP is not guaranteed to echo namespace/name casing consistently)
+//   - one being a specific include nested under the other (an inactive
+//     entry may point at ".../source/main" while the caller requested the
+//     bare object URI, or vice versa — aibap.mcp#500's own reproduction
+//     passed an includes/* URI as the "object")
+//
+// A plain unidirectional prefix check (as an earlier version of this
+// function used) misses the last case whenever the include URI is the
+// *shorter* of the two, and is case-sensitive, so it silently fails open —
+// degrading to "not still inactive" — on any of the above. Failing open
+// only means falling back to the pre-verification optimistic behavior, not
+// a new false positive, but it defeats the point of verifying.
+func objectURIMatches(requested, candidate string) bool {
+	requested = normalizeObjectURI(requested)
+	candidate = normalizeObjectURI(candidate)
+	if strings.EqualFold(requested, candidate) {
+		return true
+	}
+	shorter, longer := requested, candidate
+	if len(longer) < len(shorter) {
+		shorter, longer = longer, shorter
+	}
+	return len(longer) > len(shorter) &&
+		strings.EqualFold(longer[:len(shorter)], shorter) &&
+		longer[len(shorter)] == '/'
+}
+
+// normalizeObjectURI strips a query string or fragment and any trailing
+// slash, so "…/source/main#start=5,0" and "…/source/main/" compare equal to
+// "…/source/main".
+func normalizeObjectURI(uri string) string {
+	if i := strings.IndexAny(uri, "?#"); i >= 0 {
+		uri = uri[:i]
+	}
+	return strings.TrimSuffix(uri, "/")
+}
+
+// postActivation performs the activation POST and parses whatever message
+// body comes back. An empty or unparseable body — the common shape on ECC
+// even for a genuinely successful activation (Hochfrequenz/aibap.mcp#34) —
+// yields Success:true with no messages, same as a body that explicitly says
+// so; ActivateObjects treats both the same way and verifies regardless.
+func (c *httpClient) postActivation(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
 	objects := make([]adtxml.ActivationObject, len(objectURIs))
 	for i, uri := range objectURIs {
 		objects[i] = adtxml.ActivationObject{URI: uri}
@@ -91,7 +128,7 @@ func (c *httpClient) activateObjects(ctx context.Context, objectURIs []string) (
 		Objects: objects,
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal activation request: %w", err)
+		return nil, fmt.Errorf("marshal activation request: %w", err)
 	}
 
 	resp, err := c.doMutate(ctx, http.MethodPost,
@@ -103,18 +140,17 @@ func (c *httpClient) activateObjects(ctx context.Context, objectURIs []string) (
 		},
 	)
 	if err != nil {
-		return nil, false, fmt.Errorf("ActivateObjects: %w", err)
+		return nil, fmt.Errorf("ActivateObjects: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	data, _ := io.ReadAll(resp.Body)
 	var msgs adtxml.ActivationMessages
-	unmarshalErr := xml.Unmarshal(data, &msgs)
-	inconclusive := len(data) == 0 || unmarshalErr != nil
+	xml.Unmarshal(data, &msgs) //nolint:errcheck // an empty/unparseable body is treated as "no messages", see doc comment
 
 	result := &ActivationResult{Success: true}
 	for _, m := range msgs.Messages {
@@ -128,7 +164,7 @@ func (c *httpClient) activateObjects(ctx context.Context, objectURIs []string) (
 			result.Success = false
 		}
 	}
-	return result, inconclusive, nil
+	return result, nil
 }
 
 func (c *httpClient) GetInactiveObjects(ctx context.Context) ([]ObjectInfo, error) {
