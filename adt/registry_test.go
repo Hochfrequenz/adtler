@@ -132,7 +132,6 @@ func allEndpointsHandler() http.Handler {
 		emptyRunResult     = `<runResult></runResult>`
 		emptyTransports    = `<tm:root xmlns:tm="http://www.sap.com/cts/adt/tm"><tm:workbench><tm:modifiable><tm:request tm:number="NPLK000001" tm:owner="USER" tm:desc="test" tm:status="D"/></tm:modifiable></tm:workbench></tm:root>`
 		emptyCompletions   = `<asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA></DATA></asx:values></asx:abap>`
-		activatePath       = "/sap/bc/adt/activation"
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -150,7 +149,7 @@ func allEndpointsHandler() http.Handler {
 			if method == http.MethodGet {
 				_, _ = w.Write([]byte("REPORT ZTEST."))
 			}
-		case path == activatePath:
+		case path == activationPath:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<chkl:messages xmlns:chkl="http://www.sap.com/abapxml/checklist"><chkl:properties checkExecuted="false" activationExecuted="false" generationExecuted="true"/></chkl:messages>`))
 		case path == searchEndpoint:

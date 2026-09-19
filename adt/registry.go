@@ -89,6 +89,9 @@ func (r *ClientRegistry) CreateTestInclude(ctx context.Context, objectURI, lockH
 func (r *ClientRegistry) ActivateObjects(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
 	return r.activeClient().ActivateObjects(ctx, objectURIs)
 }
+func (r *ClientRegistry) ActivateObjectsVerified(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
+	return r.activeClient().ActivateObjectsVerified(ctx, objectURIs)
+}
 func (r *ClientRegistry) GetInactiveObjects(ctx context.Context) ([]ObjectInfo, error) {
 	return r.activeClient().GetInactiveObjects(ctx)
 }

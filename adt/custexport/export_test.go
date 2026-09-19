@@ -49,6 +49,9 @@ func (m *mockClient) CreateTestInclude(context.Context, string, string, string) 
 func (m *mockClient) ActivateObjects(context.Context, []string) (*adt.ActivationResult, error) {
 	panic("not implemented")
 }
+func (m *mockClient) ActivateObjectsVerified(context.Context, []string) (*adt.ActivationResult, error) {
+	panic("not implemented")
+}
 func (m *mockClient) GetInactiveObjects(context.Context) ([]adt.ObjectInfo, error) {
 	panic("not implemented")
 }
