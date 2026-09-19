@@ -76,6 +76,23 @@ func TestChunkNames(t *testing.T) {
 	}
 }
 
+func TestUIADTargetColumns(t *testing.T) {
+	want := []struct{ col, use string }{
+		{"TCODE", UseTypeTransaction},
+		{"WD_APPL_ID", UseTypeWebDynproApp},
+		{"WCF_TARGET_ID", UseTypeWebClientTarget},
+		{"UI5_APP_ID", UseTypeUI5App},
+	}
+	if len(uiadTargetColumns) != len(want) {
+		t.Fatalf("uiadTargetColumns: got %d entries, want %d", len(uiadTargetColumns), len(want))
+	}
+	for i, w := range want {
+		if uiadTargetColumns[i].Column != w.col || uiadTargetColumns[i].UseType != w.use {
+			t.Errorf("uiadTargetColumns[%d]: got %+v, want {%s %s}", i, uiadTargetColumns[i], w.col, w.use)
+		}
+	}
+}
+
 func TestGetObjectDependencies_UnsupportedType(t *testing.T) {
 	// No HTTP call is made for an unsupported type.
 	cfg := sapmcpconfig.SAPSystem{Host: "http://127.0.0.1:0", User: "U", Password: "P", Client: "100"}
