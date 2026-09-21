@@ -1,11 +1,14 @@
 package adt
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -225,12 +228,84 @@ func (d *DebugSession) Attach(ctx context.Context, debuggeeID string) error {
 	return nil
 }
 
-// Step executes a debug action: stepInto, stepOver, stepReturn, continue.
+// DebuggeeEndedError is returned by Step when a step action's HTTP request
+// times out AND a follow-up check confirms no debuggee session remains.
+//
+// SAP's ADT debugger kernel call (invoked inside CL_TPDA_ADT_RES_DEBUGGER's
+// local LCL_HANDLER_CONTROL=>INVOKE) never returns an HTTP response when a
+// step action runs the debuggee past its last statement — the ABAP side
+// genuinely finishes executing, but the request itself hangs until the
+// client's own timeout fires, with no SAP-side fix available from this
+// client. See aibap.mcp#513 for the live investigation and root-cause
+// derivation (kernel-level, not an adtler/aibap.mcp bug).
+//
+// Distinguishing this from a genuine hang matters: an opaque timeout error
+// forces every caller to separately call GetDebuggeeSessions to find out
+// whether stepping actually worked. This type lets callers treat "debuggee
+// ended" as the expected, successful conclusion of a step action rather than
+// a failure.
+type DebuggeeEndedError struct {
+	Action     string // the step action that timed out, e.g. "stepContinue"
+	Underlying error  // the original timeout error
+}
+
+func (e *DebuggeeEndedError) Error() string {
+	return fmt.Sprintf("Step(%s): request timed out and no debuggee session remains — "+
+		"the debuggee likely ran to completion (see aibap.mcp#513): %v", e.Action, e.Underlying)
+}
+
+func (e *DebuggeeEndedError) Unwrap() error { return e.Underlying }
+
+// isTimeoutErr reports whether err represents an HTTP client timeout —
+// either a context deadline or a *url.Error whose Timeout() is true (the
+// shape net/http wraps http.Client.Timeout expirations in).
+func isTimeoutErr(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr interface{ Timeout() bool }
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	var urlErr *url.Error
+	return errors.As(err, &urlErr) && urlErr.Timeout()
+}
+
+// debuggeeSessionsEmpty reports whether GetDebuggeeSessions currently shows
+// no active sessions. Mirrors the emptiness check aibap.mcp's own
+// buildDebugSessionsResult uses (an empty/whitespace-only ASX body means no
+// sessions).
+//
+// Deliberately uses a fresh, detached context with its own short deadline
+// rather than the (possibly already-expired or cancelled) ctx the caller's
+// Step call was made with — reusing a dead context here would make this
+// follow-up check fail immediately regardless of the debuggee's real state.
+func (d *DebugSession) debuggeeSessionsEmpty(ctx context.Context) bool {
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	data, err := d.GetDebuggeeSessions(checkCtx)
+	if err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(data)) == 0
+}
+
+// Step executes a debug action: stepInto, stepOver, stepReturn,
+// stepContinue, stepJumpToLine, stepRunToLine.
+//
+// If the request times out and a follow-up GetDebuggeeSessions call confirms
+// no session remains, Step returns *DebuggeeEndedError instead of a bare
+// timeout — see its doc comment for why. Any other error (including a
+// timeout where a session is still alive, or where the follow-up check
+// itself fails) is returned unchanged.
 func (d *DebugSession) Step(ctx context.Context, action string) ([]byte, error) {
 	path := fmt.Sprintf("/sap/bc/adt/debugger?method=%s", action)
 	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
 		map[string]string{"Accept": "application/xml", "X-sap-adt-sessiontype": "stateful"})
 	if err != nil {
+		if isTimeoutErr(err) && d.debuggeeSessionsEmpty(ctx) {
+			return nil, &DebuggeeEndedError{Action: action, Underlying: err}
+		}
 		return nil, fmt.Errorf("Step: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
