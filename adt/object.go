@@ -23,6 +23,11 @@ const (
 // used as the objectType in searches and the type in package creation/browse.
 const ObjectTypePackage = "DEVC/K"
 
+// pkgContentType is the media type the ADT package endpoint speaks. SAP rejects
+// the POST with 400 ExceptionResourceBadRequest ("Accept header missing") when
+// the request carries only a Content-Type, so it is sent as both.
+const pkgContentType = "application/vnd.sap.adt.packages.v2+xml"
+
 var objectTypeMap = map[string]struct {
 	endpoint string
 	adtType  string
@@ -250,7 +255,7 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 	}
 	resp, err := c.doMutate(ctx, http.MethodPost, path,
 		strings.NewReader(xml.Header+string(body)),
-		map[string]string{"Content-Type": "application/vnd.sap.adt.packages.v2+xml"},
+		map[string]string{"Content-Type": pkgContentType, "Accept": pkgContentType},
 	)
 	if err != nil {
 		return fmt.Errorf("CreatePackage: %w", err)
