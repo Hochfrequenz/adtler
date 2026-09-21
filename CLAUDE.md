@@ -146,6 +146,20 @@ Where an operation cannot be undone through ADT at all, say so in README.md unde
 prevents a test from covering" and in the pull request, rather than leaving the next reader to
 infer it from a test that creates nothing.
 
+### A regression test is not one until you have seen it fail
+
+Revert the fix and run the new test. If it still passes, it does not guard the bug, whatever its
+name says — and a test whose name claims a guarantee it does not provide is worse than no test,
+because the next person stops looking. Do this for integration tests especially: they are the ones
+whose failure path depends on the server's order of checks rather than on anything in this
+repository, and that order is not guessable.
+
+#149 is the example. A live test was written to prove S/4 accepts the `Accept` header, by sending
+a request SAP was certain to reject and asserting the rejection was not the header one. Reverting
+the fix showed it passed either way: SAP checks the header **last**, so only a request that would
+otherwise have succeeded ever reaches that check. The measurement is in README.md; the point here
+is that it took forty seconds to find and would never have shown up in review.
+
 ### Exceptions
 
 The one allowed exception is a literal config value a reader has to type or the code has to hold:

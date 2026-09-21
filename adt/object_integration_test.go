@@ -85,7 +85,14 @@ func TestCreatePackage_Integration(t *testing.T) {
 		// alone — including the 400 ExceptionResourceBadRequest ("Accept
 		// header missing") that made the call impossible on S/4. A transport
 		// or authorization failure is a legitimate reason to fall back on an
-		// existing package; a request SAP refused to parse at all is not.
+		// existing package; a request SAP refused to process at all is not.
+		//
+		// This is the only live guard for #149 that exists, and it fires
+		// exactly once per system: SAP checks the Accept header last, so only
+		// a request that would otherwise have created the package reaches it.
+		// Once this package exists the call is refused earlier, as a duplicate,
+		// and the header can no longer be observed from here. See README.md,
+		// "What ADT prevents a test from covering".
 		var adtErr *adt.ADTError
 		if errors.As(err, &adtErr) && adtErr.Type == "ExceptionResourceBadRequest" {
 			t.Fatalf("CreatePackage was rejected at the HTTP layer with %s: %q — "+
