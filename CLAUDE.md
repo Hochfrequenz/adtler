@@ -74,6 +74,85 @@ If the integration test passes and CI is green:
 
 For the full label list, run `gh label list --repo Hochfrequenz/adtler`.
 
+## Public Repository — No Internal Data
+
+This repository and its issue tracker are **public**. Nothing that identifies our internal
+environment may land there — that covers commits, source, comments, docs, test fixtures, issue
+titles and bodies, issue comments, PR descriptions, and anything a workflow writes on our behalf.
+
+Never publish:
+
+- Host names, FQDNs, IP addresses, or ports of internal systems — SAP or otherwise, including
+  auth and identity infrastructure. This applies to source comments recording what an XML shape
+  was verified against: record the date and the system type, not the address
+- The internal system aliases defined in `systems.json`, including per-client and proxy
+  variants, when used to name a system in prose
+- Anything that embeds a system ID: transport and task numbers (`<SID>K9…`), lock keys, or log
+  lines carrying a host. Write `<request>` / `<task>` instead — an outside reader cannot run a
+  reproducer against our request numbers anyway
+- Object names in our own or a partner's registered SAP namespace (`/XXX/…`). The namespace
+  identifies its owner, the object name usually identifies the business domain, and a partner
+  namespace additionally discloses which add-ons we run. Use a neutral placeholder such as
+  `/ABC/CL_EXAMPLE`
+- An inventory of our landscape: client numbers, which industry or partner add-ons are
+  installed, or references to internal wikis and ticket systems. Saying that a finding was
+  reproduced "on both systems" is fine; enumerating the landscape is not
+- Credentials or tokens of any kind, and client numbers tied to a named system
+- Local filesystem paths containing a user name, and SAP logon IDs
+- Customer, project, or other company-internal identifiers
+
+Name a SAP system by **type and release level** instead, which is also more useful to an outside
+reader than an alias:
+
+- `SAP S/4HANA 2025, on-premise (SAP_BASIS 816, S4CORE 109)`
+- `SAP ERP 6.0 EHP8 (SAP_BASIS 750, SAP_APPL 618)`
+
+Read the levels from the system rather than guessing: component levels from `CVERS`
+(`SELECT COMPONENT, RELEASE, EXTRELEASE FROM CVERS WHERE COMPONENT IN ('SAP_BASIS', 'SAP_APPL',
+'S4CORE')` — note that `LIKE 'SAP%'` silently misses `S4CORE`), and the marketing release from
+`PRDVERS` (`SELECT NAME, VERSION, INSTSTATUS, DESCRIPT FROM PRDVERS`, where `INSTSTATUS = '+'`
+marks the active version). Publish the release level only — never the support-package level (the
+`EXTRELEASE` column, e.g. `SP 0034`), which maps directly onto published SAP Security Notes and
+so states which fixes are not yet applied. Where several systems appear in one document,
+introduce the type/release form once and refer back to it ("the ECC system", "on both systems").
+
+### Integration tests discover their fixtures, they do not hardcode them
+
+An integration test needs objects that exist on the target system, which is exactly how real
+object names end up in this repository. Replacing such a name with a placeholder would leave the
+test green and testing nothing, so do neither: have the test **query the system for a suitable
+object at runtime** and `t.Skip` when it finds none. Log counts and types, never object names, so
+CI logs stay clean too.
+
+Where a test genuinely cannot discover its fixture, take the name from an environment variable
+and skip when it is unset. Do not commit the value.
+
+### Exceptions
+
+The one allowed exception is a literal config value a reader has to type or the code has to hold:
+the `SAP_INTEGRATION_SYSTEMS` default set where it is documented or defined, and integration-test
+branches that key off one system's real behaviour. The prose, comments and commit messages
+*around* that value are not covered — write "the ECC system", not the alias.
+
+Unit-test fixture strings are not covered either; use `sysA` / `sysB` for system keys and generic
+placeholders for object names. This section is bound by the same rule: where an example is needed,
+write `<alias>`.
+
+`.mcp.json` is **not** an exception. It is git-ignored and may hold credentials; it must never be
+committed at all.
+
+### Before pushing
+
+Grep the diff for the shapes that matter — an internal domain suffix, a `<SID>K9…` transport
+number, a `/XXX/` namespace prefix — rather than for the alias names, so the guard itself does not
+leak them.
+
+When you find internal data already published, redact it in place (edit the issue body, or open a
+PR) rather than only noting it. For a host name, credential or logon ID, assume the value is
+already disclosed regardless: editing a file does not remove it from the commit history or from
+the notification e-mails that already went out, so rotate or renumber it instead of trusting the
+edit.
+
 ## Project Structure
 
 - `adt/` — HTTP client for the SAP ADT REST API (source, transports, locks, activation, syntax check, ATC, unit tests, ...)
@@ -92,6 +171,7 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 - **ESRDIRE enqueue after CreateObject**: S/4 leaves a session-bound enqueue. Workaround: `Logout()` after `CreateObject`.
 - **ETag charset**: SAP embeds the source Content-Type into the ETag, so `GetSource` and the validating PUT must agree on the Accept / Content-Type form. `sourceContentType` (discovery-driven, from #35) prefers `text/plain; charset=utf-8` when discovery advertises it; both sides therefore land on the same ETag form. The earlier 412 retry workaround was removed in #42 once the discovery path covered every supported system.
 - **DDIC endpoints**: DTEL/DOMA/TABL creation via `/sap/bc/adt/ddic/` requires S/4. R/3 returns 404 or 415.
+- **Runtime-load generation vs. session reuse (S/4)**: on S/4, an ADT session that just ran the create → set source → activate lifecycle **cannot generate a class's runtime load** when it then executes the class in that *same* session — classrun's `CREATE OBJECT` soft-fails as `Error: Class does not implement if_oo_adt_classrun~main method!` (issue #106 defect 1), and a changed + re-activated class serves the *stale* previously-generated load (defect 2). A **fresh** session generates the load from the current active source. `RunClass` works around this by running the classrun POST on an isolated single-use session (`freshSession` — own cookie jar + CSRF preflight), never the caller's worn session. R/3 (ECC) regenerates a persistent load on activation, so it is unaffected. **Generalises:** any operation that depends on SAP generating fresh state (a runtime load, etc.) right after a mutating lifecycle may hit this — reach for a fresh session rather than reusing the lifecycle session. Fixed in #106 / v0.3.13.
 
 ### ETag resolution
 
@@ -100,6 +180,19 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 ### Stateful sessions
 
 `X-sap-adt-sessiontype: stateful` pins requests to the same SAP work process. Used on `LockObject`, `SetSource`, `UnlockObject` to keep the lock handle valid across calls.
+
+The inverse also matters: some operations need a **fresh** session, not a reused one. `RunClass` runs on a single-use isolated session (`freshSession`) because a session that performed the create/set source/activate lifecycle cannot generate a class's runtime load on S/4 (see "Runtime-load generation vs. session reuse" under SAP system differences). If an operation depends on state SAP only generates in a clean session, give it a fresh session instead of reusing the caller's.
+
+### Long-running ABAP execution (two HTTP clients)
+
+The client holds two `*http.Client`s: `http` with a 30-second timeout for ordinary ADT calls, and `httpLong` with no timeout of its own, where the deadline comes from the context (`doReadLong`, `doMutateLong`).
+
+Any endpoint that executes **open-ended ABAP** — currently `RunQuery` (data preview) and `RunClass` (classrun) — must use both halves of the long path:
+
+1. `doMutateLong` / `doReadLong`, because 30 seconds is arbitrary for user-authored ABAP and consumers cannot raise it (`http.Client.Timeout` and the context deadline combine as `min(...)`, and the client fields are unexported), and
+2. `withDefaultDeadline(ctx)`, because the long client imposes no limit at all — without a default deadline a runaway statement hangs the caller forever.
+
+Doing only (1) trades a wrong limit for no limit. The shared default lives in `defaultLongRunTimeout` (5 minutes, just past the usual SAP dialog work-process limit so SAP aborts the step and returns a diagnosable error first); both endpoints reference it so they cannot drift apart. Fixed for `RunClass` in #114.
 
 ## Coding Pitfalls
 

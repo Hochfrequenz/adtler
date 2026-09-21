@@ -173,12 +173,28 @@ func TestAddToTransport(t *testing.T) {
 	}
 }
 
+// TestRemoveFromTransport primes the parent transport's capability read with
+// s4SingleRequestXML (removeobject and addobject both present), so
+// RemoveObjectSupport resolves to Supported and Task 7's gate in
+// RemoveFromTransport lets the PUT through unchanged. Before that gate
+// existed this server answered every path — including the capability GET —
+// with an empty 200 body, which would now leave the capability at
+// RemoveObjectSupportUnknown; priming it explicitly keeps this test on the
+// "supported" path instead of silently sliding onto the fail-open path that
+// TestRemoveFromTransport_CapabilityReadFails_StillIssuesPUT covers on
+// purpose (transport_removeobject_gate_test.go).
 func TestRemoveFromTransport(t *testing.T) {
 	var gotPath, gotMethod, gotBody, gotContentType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == csrfEndpoint {
+		switch {
+		case r.URL.Path == csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/DEVK900123":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(s4SingleRequestXML))
 			return
 		}
 		gotPath = r.URL.Path

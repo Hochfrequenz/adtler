@@ -7,7 +7,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
 )
@@ -31,7 +30,8 @@ func validateSelectOnly(sql string) error {
 
 // RunQuery executes a read-only SQL query via the ADT data preview endpoint.
 // Only single SELECT statements are allowed; anything else is rejected.
-// If the caller's context has no deadline, a 5-minute timeout is applied.
+// The request goes through the long-timeout HTTP client; if the caller's context
+// has no deadline, defaultLongRunTimeout is applied.
 func (c *httpClient) RunQuery(ctx context.Context, sql string, maxRows int) (*QueryResult, error) {
 	trimmed := strings.TrimSpace(sql)
 	if err := validateSelectOnly(trimmed); err != nil {
@@ -43,11 +43,8 @@ func (c *httpClient) RunQuery(ctx context.Context, sql string, maxRows int) (*Qu
 	}
 
 	// Apply default timeout if caller didn't set one.
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-	}
+	ctx, cancel := withDefaultDeadline(ctx)
+	defer cancel()
 
 	path := fmt.Sprintf("/sap/bc/adt/datapreview/freestyle?rowNumber=%d", maxRows)
 	headers := map[string]string{

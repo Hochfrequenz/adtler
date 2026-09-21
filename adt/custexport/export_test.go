@@ -24,6 +24,9 @@ func (m *mockClient) RunQuery(ctx context.Context, sql string, maxRows int) (*ad
 func (m *mockClient) GetObjectDependencies(context.Context, string, string, int, int) (*adt.DependencyResult, error) {
 	panic("not implemented")
 }
+func (m *mockClient) RunClass(context.Context, string) (*adt.ClassRunResult, error) {
+	panic("not implemented")
+}
 
 func (m *mockClient) GetSource(context.Context, string) (*adt.SourceResult, error) {
 	panic("not implemented")
@@ -204,6 +207,9 @@ func (m *mockClient) SystemInfo() (string, string) {
 	return "https://mock.example.com:443", "100"
 }
 func (m *mockClient) Logout(context.Context) error { panic("not implemented") }
+func (m *mockClient) SystemFlavor(context.Context) (adt.SystemFlavor, error) {
+	panic("not implemented")
+}
 
 func TestDiscoverTables(t *testing.T) {
 	var capturedSQL string

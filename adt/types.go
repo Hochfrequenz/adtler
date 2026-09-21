@@ -3,6 +3,8 @@ package adt
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 )
 
 // Common constants used across ADT operations.
@@ -147,6 +149,7 @@ type QueryColumn struct {
 // added on demand.
 const (
 	ExceptionTypeResourceInvalidLockHandle = "ExceptionResourceInvalidLockHandle"
+	ExceptionTypeResourceNoAccess          = "ExceptionResourceNoAccess" // 403 "currently editing"
 	ExceptionTypeResourceLocked            = "ExceptionResourceLocked"
 	ExceptionTypePreconditionFailed        = "ExceptionPreconditionFailed"
 	ExceptionTypeResourceWrongData         = "ExceptionResourceWrongData"
@@ -162,6 +165,20 @@ const (
 	// collision this way rather than as ExceptionResourceAlreadyExists —
 	// verified live on both S/4 and R/3 (mcp-server-abap #406 / #407).
 	ExceptionTypeResourceCreationFailure = "ExceptionResourceCreationFailure"
+	// ExceptionTypeRemoveObjectUnsupported is not a type SAP ever emits — it
+	// is synthesised locally by RemoveFromTransport's capability gate (see
+	// RemoveObjectSupport) so the resulting error carries a Type that
+	// ClassifyError/classifyByExceptionType can key on, the same way it keys
+	// on a genuine <exc:exception> Type. RemoveFromTransport never sends a
+	// request in this case, so there is no SAP-side error to relay.
+	ExceptionTypeRemoveObjectUnsupported = "ADT_TM_REMOVEOBJECT_UNSUPPORTED"
+	// ExceptionTypeParameterNotFound is raised (HTTP 400) when a request
+	// parameter the ADT handler expects is absent from the request it
+	// received. It is overloaded across unrelated parameters (a missing
+	// transport surfaces the same Type, see #378 finding 1), so callers must
+	// also check which parameter the message names — see
+	// isLockHandleParameterNotFound.
+	ExceptionTypeParameterNotFound = "ExceptionParameterNotFound"
 )
 
 // ADTError is returned when SAP ADT responds with an error status.
@@ -181,10 +198,51 @@ type ADTError struct {
 }
 
 func (e *ADTError) Error() string {
-	if e.Type != "" {
+	switch {
+	case e.StatusCode == 0 && e.Type != "":
+		// No HTTP request was ever sent — e.g. RemoveFromTransport's
+		// capability gate (ExceptionTypeRemoveObjectUnsupported), which
+		// synthesises this error locally. "SAP ADT error 0" would claim an
+		// HTTP status that never happened, so this case is worded without one.
+		return fmt.Sprintf("%s: %s", e.Type, e.Message)
+	case e.Type != "":
 		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
+	default:
+		return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 	}
-	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
+}
+
+// ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):
+// a 3-character system ID, the request-category letter 'K', then six digits.
+// This is a language-independent format, so it survives message localisation —
+// SAP's "locked in request <TR>" text is translated but the ID is not.
+var ctsRequestRe = regexp.MustCompile(`\b[A-Z][A-Z0-9]{2}K[0-9]{6}\b`)
+
+// LockingTransport returns the CTS transport request that a "locked in request
+// <TR>" conflict names, if the message contains one. It is meaningful for a
+// lock-conflict error (HTTP 409 / ExceptionResourceLockConflict) where the
+// object is registered in another open request — a lock domain distinct from
+// the runtime ENQUEUE; retargeting the write at the returned request typically
+// clears the conflict. Returns ("", false) when no request ID is present.
+// See mcp-server-abap#442.
+//
+// Yes, scraping a transport ID out of a localised, human-readable error string
+// with a regex is ugly and brittle — but SAP gives us no choice: the 409
+// carries the blocking request only inside the free-text <message>, with no
+// structured field (no <exc:properties> entry, no header) exposing it. So we
+// make the parse as robust as it can be: we key on the request-ID *format*
+// rather than the surrounding words (survives translation), and we take the
+// LAST match. The message orders the object name before the request
+// ("Object <PGMID> <TYPE> <NAME> ... locked in request <TR> ..."), so if the
+// locked object's own name happens to match the <SID>K<6-digit> shape, the
+// first match would be the object name; the request ID is always the last CTS
+// ID in the string (English "... request <TR> of user X" and German
+// "... in Auftrag <TR> von Benutzer X gesperrt" both put it last).
+func (e *ADTError) LockingTransport() (string, bool) {
+	if m := ctsRequestRe.FindAllString(e.Message, -1); len(m) > 0 {
+		return m[len(m)-1], true
+	}
+	return "", false
 }
 
 // isInvalidLockHandle returns true if the error is a 423
@@ -205,4 +263,55 @@ func isInvalidLockHandle(err error) bool {
 		return adtErr.Type == ExceptionTypeResourceInvalidLockHandle
 	}
 	return adtErr.StatusCode == 423
+}
+
+// isCurrentlyEditing reports whether err is SAP's "currently editing"
+// (ExceptionResourceNoAccess). A source write returns this when the lock handle
+// was delivered where the object's ADT handler does not read it: OO classes /
+// interfaces (and other modern handlers) expect the ?lockHandle= query
+// parameter, so the header-first attempt is treated as unlocked even though we
+// hold a valid lock. Used by trySetSource to retry with query-param delivery.
+// See aibap.mcp#443 (and #383 for the DDLS sibling).
+//
+// This matches on the TYPED exception only — never a bare 403. Unlike 423
+// (effectively monosemous → invalid lock handle), 403 is heavily overloaded
+// (generic authorization denial, transport-auth failure, HTML error pages). The
+// OO handler that triggers #443 always emits Type=ExceptionResourceNoAccess via
+// the modern exception envelope, so Type-matching covers the real case; a bare
+// 403 must NOT trigger a query retry, which on R/3 would "poison" the write into
+// a misleading 423 and hide the true 403.
+func isCurrentlyEditing(err error) bool {
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		return false
+	}
+	return adtErr.Type == ExceptionTypeResourceNoAccess
+}
+
+// isLockHandleParameterNotFound reports whether err is SAP's 400
+// ExceptionParameterNotFound naming the lockHandle parameter specifically —
+// "Parameter lockHandle could not be found". Some ECC (R/3) systems reject
+// header-delivered lock handles outright this way rather than accepting the
+// header and later 423'ing on it, so the handler never saw the parameter at
+// all. Used by trySetSource to retry with query-param delivery.
+// See aibap.mcp#494.
+//
+// ExceptionParameterNotFound is overloaded: the same Type covers an entirely
+// unrelated missing "corrNr" (transport) parameter (#378 finding 1), where a
+// query-param retry would not fix anything and would mask the real error.
+// adtler does not yet expose SAP's structured T100KEY properties that would
+// let this match structurally (see #378's ADTError.Properties follow-up), so
+// this checks the literal English parameter name in the message — the same
+// last-resort, documented trade-off as LockingTransport's message scraping.
+// Case-insensitive: SAP's own message casing for this parameter name isn't
+// guaranteed stable across releases/locales the way the Type string is.
+func isLockHandleParameterNotFound(err error) bool {
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		return false
+	}
+	if adtErr.Type != ExceptionTypeParameterNotFound {
+		return false
+	}
+	return strings.Contains(strings.ToLower(adtErr.Message), "lockhandle")
 }

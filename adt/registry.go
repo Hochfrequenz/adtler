@@ -236,6 +236,9 @@ func (r *ClientRegistry) RunQuery(ctx context.Context, sql string, maxRows int) 
 func (r *ClientRegistry) GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error) {
 	return r.activeClient().GetObjectDependencies(ctx, objectType, objectName, maxResults, maxDepth)
 }
+func (r *ClientRegistry) RunClass(ctx context.Context, className string) (*ClassRunResult, error) {
+	return r.activeClient().RunClass(ctx, className)
+}
 func (r *ClientRegistry) GetEnhancementSpot(ctx context.Context, spotName string) (*EnhancementSpotInfo, error) {
 	return r.activeClient().GetEnhancementSpot(ctx, spotName)
 }
@@ -256,6 +259,9 @@ func (r *ClientRegistry) SystemInfo() (host, client string) {
 }
 func (r *ClientRegistry) Logout(ctx context.Context) error {
 	return r.activeClient().Logout(ctx)
+}
+func (r *ClientRegistry) SystemFlavor(ctx context.Context) (SystemFlavor, error) {
+	return r.activeClient().SystemFlavor(ctx)
 }
 
 // LogoutAll calls Logout on every registered client to end stateful SAP sessions

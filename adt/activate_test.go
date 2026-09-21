@@ -17,7 +17,7 @@ func TestActivateObjectSuccess(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == "/sap/bc/adt/activation" {
+		if r.URL.Path == activationPath {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			// Empty messages = successful activation
@@ -50,7 +50,7 @@ func TestActivateObjectWithErrors(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == "/sap/bc/adt/activation" {
+		if r.URL.Path == activationPath {
 			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			// Real SAP activation error response format

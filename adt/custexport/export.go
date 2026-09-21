@@ -51,7 +51,8 @@ type TableError struct {
 const (
 	defaultPageSize = 100000
 	// defaultWorkers is the default number of parallel export workers.
-	// Benchmarked on srvhfuhana (2026-03-25, 500 tables, per-table key fetch):
+	// Benchmarked on an SAP S/4HANA on-premise system (2026-03-25, 500
+	// tables, per-table key fetch):
 	//   10 workers: 2.7 tables/sec → ~5.8h for 57K tables
 	//   20 workers: 4.5 tables/sec → ~3.5h for 57K tables (sweet spot)
 	//   30 workers: 4.3 tables/sec → no improvement, SAP saturated

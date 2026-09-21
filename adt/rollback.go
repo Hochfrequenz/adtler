@@ -38,6 +38,18 @@ var rollbackSourceTypes = map[string]bool{
 // non-R3TR entries are skipped. Objects created by the transport (no prior
 // version) are reported as failed.
 //
+// A transport recorded at sub-object granularity (e.g. a LIMU/METH row for a
+// method, rather than the R3TR class that owns it) matches neither the R3TR
+// filter nor rollbackSourceTypes, so every one of its entries is Skipped and
+// the call returns an all-skipped RollbackResult with a nil error — not a
+// signal that nothing needed restoring. Whether a transport is recorded this
+// way is a property of what SAP wrote into it, not of which system family
+// produced it or which path read it back (a live comparison of the ADT XML
+// path and the E071 query path on the same S/4 request found them agreeing on
+// granularity row-for-row — see getTransportObjectsViaQuery's doc comment).
+// Mapping sub-object types to their carrying R3TR object was considered and
+// deferred: see https://github.com/Hochfrequenz/adtler/issues/134.
+//
 // This is destructive: it overwrites current source with historical versions.
 func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*RollbackResult, error) {
 	objects, err := c.GetTransportObjects(ctx, transport)
@@ -100,12 +112,19 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 func findPreTransportVersion(versions []VersionInfo, transports []string) (string, error) {
 	set := make(map[string]bool, len(transports))
 	for _, t := range transports {
-		set[t] = true
+		set[strings.ToUpper(t)] = true
 	}
 	seenTransport := false
 	restoreURI := ""
 	for _, v := range versions {
-		if set[v.Transport] {
+		// Case-insensitive for the same reason matchesTransportNumber
+		// (transport.go) is: RollbackTransport passes the caller's transport
+		// string through unchanged, while v.Transport comes from the server
+		// and is always uppercase. A lowercase caller value used to resolve
+		// GetTransportObjects correctly (that path was already
+		// case-insensitive) and then fail to match here, so every object came
+		// back Failed instead of Restored.
+		if set[strings.ToUpper(v.Transport)] {
 			seenTransport = true
 			continue
 		}

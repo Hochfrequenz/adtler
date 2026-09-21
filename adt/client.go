@@ -40,6 +40,19 @@ type ObjectClient interface {
 }
 
 // LockClient handles object locking.
+//
+// UnlockObject caveat: SAP's UNLOCK endpoint
+// (POST {uri}?_action=UNLOCK&lockHandle=<handle>) returns HTTP 200 with an
+// empty body regardless of outcome — a real release,
+// a bogus/mismatched handle, and a double unlock are indistinguishable
+// (verified on ECC and S/4). The server-side dequeue (DEQUEUE_EADT_LOCK) is
+// handle-less and exception-less, so a 2xx from UnlockObject does NOT prove
+// the enqueue was released. There is also no ADT endpoint to read enqueue
+// state, so a release cannot be verified over REST. Secondary auto-locks on
+// coupled objects (e.g. a RAP BDEF's implementation class) are not reachable
+// by handle at all. The only reliable recovery is dropping the stateful
+// session (Logout), which releases every enqueue held under it.
+// See mcp-server-abap#383 and #58.
 type LockClient interface {
 	LockObject(ctx context.Context, objectURI string) (string, error)
 	UnlockObject(ctx context.Context, objectURI, lockHandle string) error
@@ -147,6 +160,7 @@ type EnhancementClient interface {
 type SystemClient interface {
 	SystemInfo() (host, client string)
 	Logout(ctx context.Context) error
+	SystemFlavor(ctx context.Context) (SystemFlavor, error)
 }
 
 // DependencyClient resolves the objects an ABAP object depends on.
@@ -173,19 +187,21 @@ type Client interface {
 	DumpClient
 	SystemClient
 	DependencyClient
+	ClassRunClient
 }
 
 type httpClient struct {
-	cfg              sapmcpconfig.SAPSystem
-	http             *http.Client
-	httpLong         *http.Client // long-timeout client for large queries; shares transport + cookie jar
-	mu               sync.Mutex
-	csrfToken        string
-	hasSecureCookies bool                         // true if SAP sets Secure cookies on an HTTP connection
-	discovery        map[string][]string          // endpoint → accepted content types from discovery
-	accessToken      string                       // OAuth2 access token (empty = Basic Auth)
-	onTokenRefresh   func(string) (string, error) // callback to refresh token, returns new access token
-	pollInterval     time.Duration                // polling interval for background runs (default: 10s)
+	cfg                 sapmcpconfig.SAPSystem
+	http                *http.Client
+	httpLong            *http.Client // long-timeout client for large queries; shares transport + cookie jar
+	mu                  sync.Mutex
+	csrfToken           string
+	hasSecureCookies    bool                         // true if SAP sets Secure cookies on an HTTP connection
+	discovery           map[string][]string          // endpoint → accepted content types from discovery
+	removeObjectSupport RemoveObjectSupport          // cached tri-state; see cacheRemoveObjectSupport
+	accessToken         string                       // OAuth2 access token (empty = Basic Auth)
+	onTokenRefresh      func(string) (string, error) // callback to refresh token, returns new access token
+	pollInterval        time.Duration                // polling interval for background runs (default: 10s)
 }
 
 // NewClient creates a new ADT HTTP client configured from cfg.
@@ -215,6 +231,45 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 			Jar:       jar,
 		},
 		pollInterval: pollInterval,
+	}
+}
+
+// freshSession returns a single-use *httpClient that shares this client's
+// configuration and credentials but has a brand-new cookie jar and no cached
+// CSRF token, so its first request establishes a clean SAP session.
+//
+// It exists for RunClass: on S/4 the ADT session that performed
+// create -> set source -> activate cannot generate the target class's runtime
+// load when it runs the classrun in that same session (issue #106, defect 1),
+// but a fresh session generates it and returns real output. classrun is
+// stateless, so running it on an isolated session is consistent with its
+// contract and leaves the caller's session and any locks untouched.
+//
+// The returned client is not registered anywhere and holds no locks; discard it
+// after use. An OAuth token refreshed inside this single-use session is not
+// propagated back to the parent client — acceptable for a one-shot run.
+//
+// It reuses the parent's *http.Transport (preserving any caller-supplied
+// RoundTripper from NewClientWithTransport and the existing connection pool)
+// and only swaps in a fresh cookie jar: the empty jar is what makes SAP start a
+// clean session, independent of the TCP connection reuse.
+func (c *httpClient) freshSession() *httpClient {
+	jar, _ := cookiejar.New(nil)
+	return &httpClient{
+		cfg: c.cfg,
+		http: &http.Client{
+			Timeout:   c.http.Timeout,
+			Transport: c.http.Transport,
+			Jar:       jar,
+		},
+		httpLong: &http.Client{
+			Timeout:   c.httpLong.Timeout,
+			Transport: c.httpLong.Transport,
+			Jar:       jar,
+		},
+		accessToken:    c.accessToken,
+		onTokenRefresh: c.onTokenRefresh,
+		pollInterval:   c.pollInterval,
 	}
 }
 
@@ -326,6 +381,19 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	}
 	c.setAuth(req)
 	req.Header.Set("X-CSRF-Token", "Fetch")
+	// Some systems (observed on S/4) reject this GET with 400
+	// ExceptionResourceBadRequest ("Accept header missing") when no Accept
+	// is sent at all — ECC tolerates the omission, S/4 does not. Discovery
+	// then silently stays empty for the client's whole lifetime (this
+	// function never checked the status code), which NegotiateContentType's
+	// default-fallback masks: callers keep working off hardcoded content
+	// types with no error, so the failure is invisible. The discovery
+	// document is AtomPub (RFC 5023, application/atomsvc+xml); state that
+	// preference explicitly rather than a bare "*/*", so content
+	// negotiation can't hand back some other representation this client
+	// doesn't parse — with ", */*" as a fallback in case a system's
+	// discovery endpoint doesn't recognise the vendor type.
+	req.Header.Set("Accept", "application/atomsvc+xml, */*")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -333,9 +401,14 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Parse discovery XML to cache accepted content types per endpoint.
+	// Parse discovery XML to cache accepted content types per endpoint. Only
+	// on a successful response: a non-2xx status (the 400 above, or any
+	// other failure) carries an error envelope, not a discovery document —
+	// feeding it to parseDiscovery would silently yield an empty map
+	// either way, but skipping the parse makes the intent explicit rather
+	// than relying on that as an implementation detail.
 	body, _ := io.ReadAll(resp.Body)
-	if len(body) > 0 {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && len(body) > 0 {
 		c.discovery = parseDiscovery(body)
 	}
 
@@ -458,6 +531,30 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 // Uses the default HTTP client (30-second timeout).
 func (c *httpClient) doMutate(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (*http.Response, error) {
 	return c.doMutateWith(ctx, c.http, method, path, body, headers)
+}
+
+// defaultLongRunTimeout is the deadline applied by withDefaultDeadline to
+// open-ended ABAP execution (RunQuery, RunClass) when the caller's context
+// carries none. The long-timeout HTTP client imposes no limit of its own, so
+// without this a runaway statement would hang the calling goroutine forever.
+//
+// Five minutes is chosen to sit just past the SAP dialog work-process limit
+// (rdisp/max_wprun_time, commonly 300-600 s): SAP aborts the step itself and
+// returns a diagnosable error, which is more useful than the client giving up
+// first. Both RunQuery and RunClass share this value deliberately — one default
+// for "open-ended ABAP" keeps the two endpoints from drifting apart.
+//
+// A variable rather than a constant so tests can shorten it.
+var defaultLongRunTimeout = 5 * time.Minute
+
+// withDefaultDeadline returns ctx and a cancel func to defer. If ctx already
+// carries a deadline, the caller's deadline wins and cancel is a no-op;
+// otherwise defaultLongRunTimeout is applied.
+func withDefaultDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultLongRunTimeout)
 }
 
 // doMutateLong is like doMutate but uses the long-timeout HTTP client (httpLong).
@@ -680,15 +777,23 @@ func parseHTMLErrorBody(data []byte) string {
 // a namespace object. This function converts it to the ADT-required format:
 // /sap/bc/adt/programs/programs/%2fhfq%2freport
 func encodeNamespacePath(path string) string {
-	idx := strings.Index(path, "//")
-	if idx < 0 {
-		return path
-	}
-	// Separate query string before processing
+	// Split the query off BEFORE searching for "//": a query value (a
+	// base64-shaped lock handle, say) can easily contain "//" with no
+	// genuine namespace segment anywhere in the actual path. Searching the
+	// combined string first found "//" inside the query, then sliced the
+	// query-stripped path at that (now out-of-range) index — a
+	// slice-bounds panic with no recover() above it, crashing the process.
+	// Found via adversarial review of adtler#131 (a lock-handle query
+	// encoding fix for aibap.mcp#494) — #131 only incidentally avoids
+	// triggering this; the panic itself is fixed here, in adtler#133.
 	query := ""
 	if qIdx := strings.IndexByte(path, '?'); qIdx >= 0 {
 		query = path[qIdx:]
 		path = path[:qIdx]
+	}
+	idx := strings.Index(path, "//")
+	if idx < 0 {
+		return path + query
 	}
 	prefix := path[:idx+1]
 	rest := path[idx+1:]
