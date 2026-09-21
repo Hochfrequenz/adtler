@@ -40,10 +40,23 @@ func resolveHTTPClient(c Client) *httpClient {
 	}
 }
 
-// NewDebugSession creates a debug session sharing the HTTP client from an existing Client.
+// NewDebugSession creates a debug session on an ISOLATED session derived from
+// an existing Client's HTTP transport and credentials (see freshSession).
+//
+// Isolation matters because Attach/Step/GetVariable/GetStack all carry
+// X-sap-adt-sessiontype: stateful, which pins the underlying HTTP session to
+// one backend server instance for the rest of its cookie jar's lifetime. If a
+// stateful debug call gets stuck server-side — e.g. a stepContinue that never
+// returns — every other request sharing that same cookie jar risks being
+// routed to (or blocked behind) the same stuck session, wedging unrelated
+// tool calls (GetSource, SearchObjects, ...) until the client is discarded.
+// freshSession's isolated jar contains the blast radius to this debug session
+// alone. Mirrors the isolation RunClass already uses for a different reason
+// (issue #106).
+//
 // An optional ideID can be passed to identify the debug client to SAP (default: "go-sap-adt").
 func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
-	hc := resolveHTTPClient(c)
+	hc := resolveHTTPClient(c).freshSession()
 	id := "go-sap-adt"
 	if len(ideID) > 0 && ideID[0] != "" {
 		id = ideID[0]
