@@ -146,18 +146,20 @@ Both helpers `t.Skip` cleanly when no JSON config is reachable, so
 without SAP credentials configured — the integration tests just don't
 execute.
 
-#### What ADT prevents a test from covering
+#### What this client cannot currently undo, and what that costs a test
 
-Some behaviour has no repeatable automated test, because ADT gives no way to undo
+Some behaviour has no repeatable automated test, because nothing here can undo
 the operation that would prove it. `CreatePackage` is the worked example, and the
 reasoning generalises.
 
-**A package cannot be deleted over ADT.** `DeleteObject` reads an ETag belonging
-to a different representation than the one SAP compares, so deleting a package
-comes back `412` ([#150](https://github.com/Hochfrequenz/adtler/issues/150)).
-Removal needs SE80 or SE21 on the system itself. A test that created a package
-per run would therefore strand one on every system, on every run, permanently,
-with nothing in the API able to clean up after it.
+**This client cannot currently delete a package.** `DeleteObject` reads an ETag
+belonging to a different representation than the one SAP compares, so the delete
+comes back `412` ([#150](https://github.com/Hochfrequenz/adtler/issues/150)) —
+an open bug in this library, not a limit of the ADT protocol. Nothing measured
+says a correctly formed delete would fail, and removal through SE80 or SE21 on
+the system works today. Until #150 is fixed, though, a test that created a
+package per run would strand one on every system, on every run, with nothing in
+this client able to clean up after it.
 
 **SAP checks the `Accept` header last.** Measured on SAP S/4HANA on-premise
 (SAP_BASIS 816, S4CORE 109) on 2026-09-21, by issuing the same call with and
@@ -174,7 +176,7 @@ check. Anything SAP rejects earlier answers identically either way.
 
 Those two facts combine into a trap worth knowing before writing a test here:
 **the only live request that can detect a missing `Accept` header is one that
-creates a package, and what it creates cannot be removed.** A live guard is
+creates a package, and this client cannot remove what it creates.** A live guard is
 therefore single-use per system — it works once, on a system where the package
 does not exist yet, and every run after that can only smoke-test. That is
 precisely how [#149](https://github.com/Hochfrequenz/adtler/issues/149) shipped:

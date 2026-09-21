@@ -78,9 +78,9 @@ func TestCreatePackage_Integration(t *testing.T) {
 	err := client.CreatePackage(ctx, pkgName, "Integration test package",
 		cfg.User, "HOME", "ZS4U", "")
 	if err != nil {
-		// The reuse branch below is how adtler#149 stayed invisible. Packages
-		// cannot be deleted over ADT (adtler#150), so this one survives every
-		// run; from the second run onward *any* CreatePackage failure was
+		// The reuse branch below is how adtler#149 stayed invisible. This client
+		// cannot currently delete a package (adtler#150, an open ETag bug here
+		// rather than an ADT limitation), so this one survives every run; from the second run onward *any* CreatePackage failure was
 		// swallowed here and the test passed on the strength of BrowsePackage
 		// alone — including the 400 ExceptionResourceBadRequest ("Accept
 		// header missing") that made the call impossible on S/4. A transport
@@ -92,7 +92,7 @@ func TestCreatePackage_Integration(t *testing.T) {
 		// a request that would otherwise have created the package reaches it.
 		// Once this package exists the call is refused earlier, as a duplicate,
 		// and the header can no longer be observed from here. See README.md,
-		// "What ADT prevents a test from covering".
+		// "What this client cannot currently undo".
 		var adtErr *adt.ADTError
 		if errors.As(err, &adtErr) && adtErr.Type == "ExceptionResourceBadRequest" {
 			t.Fatalf("CreatePackage was rejected at the HTTP layer with %s: %q — "+
