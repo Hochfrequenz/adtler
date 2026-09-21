@@ -146,6 +146,44 @@ Both helpers `t.Skip` cleanly when no JSON config is reachable, so
 without SAP credentials configured — the integration tests just don't
 execute.
 
+#### What ADT prevents a test from covering
+
+Some behaviour has no repeatable automated test, because ADT offers no way to
+undo the operation it performs. Where that applies, the automated test asserts
+on a **rejected** request — which still proves the request was built correctly —
+and the success path is verified by hand and recorded in the pull request.
+
+**A package cannot be deleted over ADT.** `DeleteObject` reads an ETag that
+belongs to a different representation than the one SAP compares, so deleting a
+package comes back `412` ([#150](https://github.com/Hochfrequenz/adtler/issues/150)).
+Removing one needs SE80 or SE21 on the system itself. Three things follow:
+
+- A test that created a package per run would strand one on every system on
+  every run, permanently, with nothing in the API able to clean them up.
+- The fixture package such a test reuses therefore survives forever, so a
+  fallback of the shape *"creation failed, carry on with the existing
+  package"* keeps passing even when creation is completely broken. That is
+  exactly how [#149](https://github.com/Hochfrequenz/adtler/issues/149)
+  shipped: from the second run onward, `TestCreatePackage_Integration` proved
+  only that a package created months earlier still existed. Any such fallback
+  must first rule out the failures that mean the request never worked at all.
+- `CreatePackage`'s success path consequently has no repeatable live test. Its
+  regression test (`adt/object_createpackage_accept_integration_test.go`)
+  instead sends a request SAP is certain to reject on *data* grounds and
+  asserts that it was not rejected at the *HTTP* layer. Payload validation is
+  reached only after the request is accepted, so getting that far is the proof,
+  and nothing is created.
+
+**The package endpoint does not exist on ECC.** `/sap/bc/adt/packages` is an
+S/4 collection — flavor detection uses its presence as the S/4 marker — so the
+ECC leg of a multi-system package test can only skip. Such tests are still
+written with `eachSystem(t)`, so they cover S/4 wherever they run and say why
+they skipped elsewhere.
+
+When a test or a manual verification does leave an object behind, name it in
+the commit message and the pull request, so the next developer or agent can
+pick it up rather than rediscover it.
+
 #### Running the heavy regression sweep
 
 Before tagging a release, run integration tests against **both** R/3 and S/4

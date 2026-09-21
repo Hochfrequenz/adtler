@@ -4,7 +4,10 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 func TestCreateAndDeleteObject_Integration(t *testing.T) {
@@ -75,6 +78,21 @@ func TestCreatePackage_Integration(t *testing.T) {
 	err := client.CreatePackage(ctx, pkgName, "Integration test package",
 		cfg.User, "HOME", "ZS4U", "")
 	if err != nil {
+		// The reuse branch below is how adtler#149 stayed invisible. Packages
+		// cannot be deleted over ADT (adtler#150), so this one survives every
+		// run; from the second run onward *any* CreatePackage failure was
+		// swallowed here and the test passed on the strength of BrowsePackage
+		// alone — including the 400 ExceptionResourceBadRequest ("Accept
+		// header missing") that made the call impossible on S/4. A transport
+		// or authorization failure is a legitimate reason to fall back on an
+		// existing package; a request SAP refused to parse at all is not.
+		var adtErr *adt.ADTError
+		if errors.As(err, &adtErr) && adtErr.Type == "ExceptionResourceBadRequest" {
+			t.Fatalf("CreatePackage was rejected at the HTTP layer with %s: %q — "+
+				"the request never reached SAP's payload validation, so falling back "+
+				"on an existing package would hide a call that cannot work (adtler#149)",
+				adtErr.Type, adtErr.Message)
+		}
 		// Package may already exist from a previous run.
 		if _, browseErr := client.BrowsePackage(ctx, pkgName); browseErr != nil {
 			t.Fatalf("CreatePackage failed and package does not exist: %v", err)

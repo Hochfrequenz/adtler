@@ -65,8 +65,13 @@ func TestCreatePackage_SendsAcceptHeader(t *testing.T) {
 	}
 }
 
-// Without the Accept header the server's 400 must surface as an error rather
-// than being reported as a created package.
+// A server rejection must surface as an error rather than being reported as a
+// created package.
+//
+// This is not the Accept-header guard, despite sitting beside it: the fake
+// server here rejects unconditionally, so the test passes with or without the
+// header. It covers error propagation only — TestCreatePackage_SendsAcceptHeader
+// above is what fails when the header is dropped.
 func TestCreatePackage_ServerRejectionSurfaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
