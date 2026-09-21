@@ -127,6 +127,39 @@ CI logs stay clean too.
 Where a test genuinely cannot discover its fixture, take the name from an environment variable
 and skip when it is unset. Do not commit the value.
 
+### A reuse fallback must not swallow a request that never worked
+
+An integration test that falls back on an existing object when creation fails — *"create it, and
+if that errors, carry on with the one already there"* — passes forever once the object exists.
+Where the object cannot be deleted again it always exists after the first run, so the fallback
+becomes permanent. That is how #149 shipped: `CreatePackage` could not work on S/4 at all, and
+`TestCreatePackage_Integration` reported success anyway, because packages cannot be removed over
+ADT (#150) and so the fixture from an earlier run was always there to fall back on.
+
+A fallback is legitimate for failures that say *this object is already in the way* — a duplicate,
+a lock, a missing authorization. It is never legitimate for a failure that says *SAP would not
+process this request*: a 400 the server refused to parse, an unacceptable media type, a missing
+header. Rule out that class explicitly, with `errors.As` on `*adt.ADTError` and its `Type`, before
+taking the fallback — the exception ID survives message translation, the text does not.
+
+Where an operation cannot be undone through ADT at all, say so in README.md under "What ADT
+prevents a test from covering" and in the pull request, rather than leaving the next reader to
+infer it from a test that creates nothing.
+
+### A regression test is not one until you have seen it fail
+
+Revert the fix and run the new test. If it still passes, it does not guard the bug, whatever its
+name says — and a test whose name claims a guarantee it does not provide is worse than no test,
+because the next person stops looking. Do this for integration tests especially: they are the ones
+whose failure path depends on the server's order of checks rather than on anything in this
+repository, and that order is not guessable.
+
+#149 is the example. A live test was written to prove S/4 accepts the `Accept` header, by sending
+a request SAP was certain to reject and asserting the rejection was not the header one. Reverting
+the fix showed it passed either way: SAP checks the header **last**, so only a request that would
+otherwise have succeeded ever reaches that check. The measurement is in README.md; the point here
+is that it took forty seconds to find and would never have shown up in review.
+
 ### Exceptions
 
 The one allowed exception is a literal config value a reader has to type or the code has to hold:

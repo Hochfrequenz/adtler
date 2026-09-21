@@ -146,6 +146,69 @@ Both helpers `t.Skip` cleanly when no JSON config is reachable, so
 without SAP credentials configured — the integration tests just don't
 execute.
 
+#### What ADT prevents a test from covering
+
+Some behaviour has no repeatable automated test, because ADT gives no way to undo
+the operation that would prove it. `CreatePackage` is the worked example, and the
+reasoning generalises.
+
+**A package cannot be deleted over ADT.** `DeleteObject` reads an ETag belonging
+to a different representation than the one SAP compares, so deleting a package
+comes back `412` ([#150](https://github.com/Hochfrequenz/adtler/issues/150)).
+Removal needs SE80 or SE21 on the system itself. A test that created a package
+per run would therefore strand one on every system, on every run, permanently,
+with nothing in the API able to clean up after it.
+
+**SAP checks the `Accept` header last.** Measured on SAP S/4HANA on-premise
+(SAP_BASIS 816, S4CORE 109) on 2026-09-21, by issuing the same call with and
+without the header:
+
+| Request | With `Accept` | Without `Accept` |
+|---|---|---|
+| Names an existing package | `ExceptionResourceAlreadyExists` | `ExceptionResourceAlreadyExists` |
+| Empty `adtcore:responsible` | `ExceptionInvalidData` | `ExceptionInvalidData` |
+| Otherwise valid | created | `ExceptionResourceBadRequest` ("Accept header missing") |
+
+Only a request that would otherwise have **succeeded** ever reaches the header
+check. Anything SAP rejects earlier answers identically either way.
+
+Those two facts combine into a trap worth knowing before writing a test here:
+**the only live request that can detect a missing `Accept` header is one that
+creates a package, and what it creates cannot be removed.** A live guard is
+therefore single-use per system — it works once, on a system where the package
+does not exist yet, and every run after that can only smoke-test. That is
+precisely how [#149](https://github.com/Hochfrequenz/adtler/issues/149) shipped:
+`TestCreatePackage_Integration` falls back on `BrowsePackage` when creation
+fails, its fixture package survived from an earlier run, and so it reported
+success while the call was impossible on S/4. It proved only that a package
+created earlier still existed.
+
+What this repository does instead:
+
+- The durable guard is the **unit test**
+  (`TestCreatePackage_SendsAcceptHeader`), whose fake server reproduces the real
+  rejection and which fails the moment the header is dropped. It runs on every
+  CI run, with no system involved.
+- The **live** test that runs on every sweep
+  (`TestCreatePackage_DuplicateSurfacesAsADTError_MultiSystem_Integration`)
+  names a package that already exists, so it creates nothing. It covers the
+  endpoint, authentication, marshalling and typed error surfacing — and its doc
+  comment states plainly that it cannot catch a missing header, with the
+  measurement above as the reason.
+- `TestCreatePackage_Integration` keeps the one-shot live create, and now rules
+  out `ExceptionResourceBadRequest` before falling back on an existing package,
+  so it can no longer report success for a call SAP refused to process.
+
+**The package endpoint does not exist on ECC.** `/sap/bc/adt/packages` is an S/4
+collection — flavor detection uses its presence as the S/4 marker — so the ECC
+leg of a multi-system package test can only skip. Write such tests with
+`eachSystem(t)` anyway, so they cover S/4 wherever they run and say why they
+skipped elsewhere.
+
+When a test or a manual verification does leave an object behind, name it in the
+commit message and the pull request, so the next developer or agent can pick it
+up rather than rediscover it.
+
 #### Running the heavy regression sweep
 
 Before tagging a release, run integration tests against **both** R/3 and S/4
