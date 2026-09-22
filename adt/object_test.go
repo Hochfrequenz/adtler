@@ -374,3 +374,32 @@ func TestObjectURI_ReadOnlyTypesStillResolve(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateObject_UnsupportedTypeListsOnlyCreatableTypes guards the error
+// message CreateObject gives for a type it does not know. Since adtler#65 put
+// read-only kinds into objectTypeMap, the shared supportedObjectTypes list
+// would offer BDEF, SRVD and SRVB as things to create — and CreateObject
+// refuses all three. A recovery hint that names options which cannot work is
+// worse than no hint.
+//
+// ObjectURI's own message is unaffected and must keep listing them, because
+// it really does address them. That half is asserted in
+// TestObjectURI_UnsupportedType.
+func TestCreateObject_UnsupportedTypeListsOnlyCreatableTypes(t *testing.T) {
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: "http://127.0.0.1:1", User: "U", Password: "P", Client: "100"})
+
+	err := client.CreateObject(context.Background(), "BOGUS", "ZTEST", "ZPACKAGE", "Test", "")
+	if err == nil {
+		t.Fatal("CreateObject with an unknown type: got nil error")
+	}
+	for _, want := range []string{"PROG", "CLAS", "MSAG"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should list creatable type %q", err.Error(), want)
+		}
+	}
+	for _, unwanted := range []string{"BDEF", "SRVD", "SRVB"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("error %q offers %q as creatable, but CreateObject refuses it", err.Error(), unwanted)
+		}
+	}
+}

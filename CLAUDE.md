@@ -143,6 +143,11 @@ process this request*: a 400 the server refused to parse, an unacceptable media 
 header. Rule out that class explicitly, with `errors.As` on `*adt.ADTError` and its `Type`, before
 taking the fallback — the exception ID survives message translation, the text does not.
 
+This is about a **test** falling back on a different object and calling the run a pass. It is not
+in tension with "A 406 is never a missing path" below, which is the **client** re-asking the same
+URI with a different Accept header and reporting exactly what came back. One hides a request SAP
+refused; the other corrects the request and still fails loudly if the second attempt fails.
+
 Where an operation cannot be undone, say so in README.md under "What this client cannot
 currently undo" and in the pull request, rather than leaving the next reader to infer it from a
 test that creates nothing. Say **what** cannot undo it, too: "adtler cannot delete a package
@@ -218,6 +223,11 @@ and went hunting for another URI; the URI had been right all along. Measured on 
 (SAP_BASIS 816, S4CORE 109), a service binding, a behavior definition's object document, two
 DDIC tables and both enhancement sub-kinds present all answered 406 to `application/xml` and
 200 to `*/*`.
+
+This does not license a test to paper over a refusal — see "A reuse fallback must not swallow a
+request that never worked" above. The difference is that this fallback changes the *request* and
+still surfaces whatever the second attempt returns, rather than quietly reporting a different
+object as success.
 
 So: **on a 406, fix the offer, not the path.** `readWithAcceptFallback` (adt/repository.go)
 makes the specific offer first and retries once with `*/*` on a 406 only; `GetObjectInfo` and

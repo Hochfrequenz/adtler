@@ -149,6 +149,10 @@ const acceptAnyMediaType = "*/*"
 // still made first: asking for */* up front would change what the server
 // returns for the object kinds that work today. Only 406 is retried — a 404
 // is a missing resource, and a wider Accept header cannot conjure one.
+// Callers pass a specific offer: acceptHeaderForURI returns a vendor type or
+// "application/xml", never */*, so the retry can never repeat the first
+// request. There is deliberately no guard for that case — an unreachable
+// branch and a test for an impossible state cost more than they protect.
 func (c *httpClient) readWithAcceptFallback(ctx context.Context, uri, accept string) (*http.Response, error) {
 	resp, err := c.doRead(ctx, uri, map[string]string{"Accept": accept})
 	if err != nil {
@@ -192,6 +196,17 @@ func parseGenericObjectInfo(data []byte) (*ObjectInfo, error) {
 	}
 	if err := xml.Unmarshal(data, &obj); err != nil {
 		return nil, fmt.Errorf("GetObjectInfo parsing: %w", err)
+	}
+	// Go's XML decoder happily parses a document whose elements and attributes
+	// mean nothing to this struct — an HTML page, for one — and leaves every
+	// field zero without reporting an error. Every ADT object document carries
+	// adtcore:name, so an empty name means the body was not one, and saying so
+	// beats handing back an object that reports no name, type or package as if
+	// it were real. Reachable because the */* fallback lets the server choose
+	// the representation, and discovery advertises text/html beside the vendor
+	// types. See adtler#65.
+	if obj.Name == "" {
+		return nil, fmt.Errorf("GetObjectInfo parsing: response carried no adtcore:name — it is not an ADT object document")
 	}
 	return &ObjectInfo{
 		Name:        obj.Name,

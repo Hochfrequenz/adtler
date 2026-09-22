@@ -4,11 +4,63 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )
+
+// redact removes values that must not reach a test log or a pull request.
+//
+// Two kinds of value leak through error text here. ADT messages echo the
+// requested object back verbatim — a 404 for a behavior definition reads
+// "Inactive version for BDEF <NAME> does not exist" — and Go's transport
+// errors embed the full request URL, which carries the internal host name and
+// port. Both are forbidden in this public repository, and the only path that
+// prints them is the failure path: exactly the output someone pastes into a
+// pull request.
+func redact(text, host, name string) string {
+	for _, r := range []struct{ secret, placeholder string }{
+		{host, "<host>"},
+		{name, "<name>"},
+	} {
+		if r.secret == "" {
+			continue
+		}
+		for _, variant := range []string{r.secret, strings.ToLower(r.secret), strings.ToUpper(r.secret)} {
+			text = strings.ReplaceAll(text, variant, r.placeholder)
+		}
+	}
+	return text
+}
+
+// searchFixtures runs a discovery search and separates the three outcomes that
+// look alike from the outside.
+//
+// A failed search must not become a green skip — that is the blind spot
+// adtler#149 shipped with. But "failed" is not one thing: if SAP answered and
+// the answer was an error (a rejected credential, a 500, a refused request),
+// something is wrong and the test must fail. If SAP never answered at all — a
+// timeout or a connection failure — nothing was measured and nothing can be,
+// so the test skips and says why. The ECC system reaches the second case for
+// enhancement implementations: that search does not return within this
+// client's 30-second timeout.
+func searchFixtures(t *testing.T, ctx context.Context, sys integrationSystem, adtType string) []adt.ObjectInfo {
+	t.Helper()
+	results, err := sys.Client.SearchObjects(ctx, "*", adtType, 10)
+	if err == nil {
+		return results
+	}
+	var adtErr *adt.ADTError
+	if errors.As(err, &adtErr) {
+		t.Fatalf("searching for %s objects: SAP answered with an error (status %d, type %q)",
+			adtType, adtErr.StatusCode, adtErr.Type)
+	}
+	t.Skipf("searching for %s objects never reached the system, so nothing could be measured: %s",
+		adtType, redact(err.Error(), sys.Config.Host, ""))
+	return nil
+}
 
 // TestRAPObjectURIs_Integration is the live half of adtler#65. It proves the
 // three claims the fix rests on, against whatever RAP objects the target
@@ -30,13 +82,13 @@ func TestRAPObjectURIs_Integration(t *testing.T) {
 			ctx := context.Background()
 
 			t.Run("BDEF", func(t *testing.T) {
-				assertRAPSourceReadable(t, ctx, sys.Client, "BDEF", "BDEF/BDO", "define behavior")
+				assertRAPSourceReadable(t, ctx, sys, "BDEF", "BDEF/BDO", "define behavior")
 			})
 			t.Run("SRVD", func(t *testing.T) {
-				assertRAPSourceReadable(t, ctx, sys.Client, "SRVD", "SRVD/SRV", "define service")
+				assertRAPSourceReadable(t, ctx, sys, "SRVD", "SRVD/SRV", "define service")
 			})
 			t.Run("SRVB", func(t *testing.T) {
-				assertServiceBindingReadable(t, ctx, sys.Client)
+				assertServiceBindingReadable(t, ctx, sys)
 			})
 		})
 	}
@@ -44,12 +96,9 @@ func TestRAPObjectURIs_Integration(t *testing.T) {
 
 // findRAPObject returns one object of the given ADT type from the target
 // system, or skips the test when the system holds none.
-func findRAPObject(t *testing.T, ctx context.Context, client adt.Client, adtType string) adt.ObjectInfo {
+func findRAPObject(t *testing.T, ctx context.Context, sys integrationSystem, adtType string) adt.ObjectInfo {
 	t.Helper()
-	results, err := client.SearchObjects(ctx, "*", adtType, 10)
-	if err != nil {
-		t.Skipf("searching for %s objects failed on this system (%v) — nothing to measure here", adtType, err)
-	}
+	results := searchFixtures(t, ctx, sys, adtType)
 	t.Logf("system holds %d %s object(s) in the first page of results", len(results), adtType)
 	for _, r := range results {
 		if r.Name != "" && r.URI != "" {
@@ -62,9 +111,9 @@ func findRAPObject(t *testing.T, ctx context.Context, client adt.Client, adtType
 
 // assertRAPSourceReadable checks that ObjectURI agrees with the system about
 // where the object lives, and that GetSource returns its source there.
-func assertRAPSourceReadable(t *testing.T, ctx context.Context, client adt.Client, objectType, adtType, wantKeyword string) {
+func assertRAPSourceReadable(t *testing.T, ctx context.Context, sys integrationSystem, objectType, adtType, wantKeyword string) {
 	t.Helper()
-	obj := findRAPObject(t, ctx, client, adtType)
+	obj := findRAPObject(t, ctx, sys, adtType)
 
 	built, err := adt.ObjectURI(objectType, obj.Name)
 	if err != nil {
@@ -78,9 +127,9 @@ func assertRAPSourceReadable(t *testing.T, ctx context.Context, client adt.Clien
 		t.Fatalf("%s: built URI does not match the URI the system reports (paths differ beyond case)", objectType)
 	}
 
-	src, err := client.GetSource(ctx, built)
+	src, err := sys.Client.GetSource(ctx, built)
 	if err != nil {
-		t.Fatalf("GetSource for %s: %v", objectType, err)
+		t.Fatalf("GetSource for %s: %s", objectType, redact(err.Error(), sys.Config.Host, obj.Name))
 	}
 	if strings.TrimSpace(src.Source) == "" {
 		t.Fatalf("GetSource for %s returned empty source", objectType)
@@ -94,21 +143,22 @@ func assertRAPSourceReadable(t *testing.T, ctx context.Context, client adt.Clien
 // assertServiceBindingReadable covers the kind that has no source. Reading
 // its object document is the only thing to do with it, and that request is
 // the one adtler#65 recorded as a 406 and mistook for a missing endpoint.
-func assertServiceBindingReadable(t *testing.T, ctx context.Context, client adt.Client) {
+func assertServiceBindingReadable(t *testing.T, ctx context.Context, sys integrationSystem) {
 	t.Helper()
-	obj := findRAPObject(t, ctx, client, "SRVB/SVB")
+	obj := findRAPObject(t, ctx, sys, "SRVB/SVB")
 
 	built, err := adt.ObjectURI("SRVB", obj.Name)
 	if err != nil {
-		t.Fatalf("ObjectURI(\"SRVB\", ...): %v", err)
+		t.Fatalf("ObjectURI for a service binding: %v", err)
 	}
 	if !strings.EqualFold(built, obj.URI) {
 		t.Fatalf("SRVB: built URI does not match the URI the system reports")
 	}
 
-	info, err := client.GetObjectInfo(ctx, built)
+	info, err := sys.Client.GetObjectInfo(ctx, built)
 	if err != nil {
-		t.Fatalf("GetObjectInfo for SRVB: %v — this is the 406 adtler#65 recorded", err)
+		t.Fatalf("GetObjectInfo for SRVB: %s — this is the 406 adtler#65 recorded",
+			redact(err.Error(), sys.Config.Host, obj.Name))
 	}
 	if !strings.EqualFold(info.Name, obj.Name) {
 		t.Errorf("GetObjectInfo returned a different object than the one requested")
@@ -117,7 +167,7 @@ func assertServiceBindingReadable(t *testing.T, ctx context.Context, client adt.
 	// A service binding is configuration and carries no source. Recorded
 	// here so the absence stays a measured fact rather than an assumption
 	// the next reader has to re-establish.
-	if _, err := client.GetSource(ctx, built); err == nil {
+	if _, err := sys.Client.GetSource(ctx, built); err == nil {
 		t.Errorf("GetSource for SRVB succeeded — a service binding was measured to have no source; re-check adtler#65")
 	}
 }
@@ -139,10 +189,7 @@ func TestAcceptFallback_UnmappedObjectKind_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
-			results, err := sys.Client.SearchObjects(ctx, "*", "ENHO", 10)
-			if err != nil {
-				t.Skipf("searching for enhancement implementations failed on this system: %v", err)
-			}
+			results := searchFixtures(t, ctx, sys, "ENHO")
 			var target adt.ObjectInfo
 			for _, r := range results {
 				if r.URI != "" && r.Name != "" {
@@ -157,7 +204,8 @@ func TestAcceptFallback_UnmappedObjectKind_Integration(t *testing.T) {
 
 			info, err := sys.Client.GetObjectInfo(ctx, target.URI)
 			if err != nil {
-				t.Fatalf("GetObjectInfo on an unmapped object kind: %v — the 406 fallback did not save it", err)
+				t.Fatalf("GetObjectInfo on an unmapped object kind: %s — the 406 fallback did not save it",
+					redact(err.Error(), sys.Config.Host, target.Name))
 			}
 			if !strings.EqualFold(info.Name, target.Name) {
 				t.Errorf("GetObjectInfo returned a different object than the one requested")

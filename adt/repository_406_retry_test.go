@@ -159,3 +159,38 @@ func TestGetObjectInfo_DoesNotRetryOnNotFound(t *testing.T) {
 		t.Errorf("server saw %d requests, want 1: a 404 must not be retried", requests)
 	}
 }
+
+// TestGetObjectInfo_RejectsUnparseableBody covers the risk the */* fallback
+// introduces. Discovery advertises text/html alongside the vendor XML type
+// for these collections, and */* lets the server pick. SAP picks its
+// preferred type in practice, but "in practice" is not a guarantee, and a
+// zero-valued ObjectInfo returned with a nil error is the worst possible
+// outcome: the caller reads an object that reports no name, no type and no
+// package, and nothing says anything went wrong.
+func TestGetObjectInfo_RejectsUnparseableBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !strings.Contains(r.Header.Get("Accept"), acceptAnything) {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(notAcceptableXML))
+			return
+		}
+		// The server took */* as leave to send the human-readable form.
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<html><head><title>Service Binding</title></head><body><p>ZSB_EXAMPLE</p></body></html>`))
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	client := adt.NewClient(cfg)
+
+	info, err := client.GetObjectInfo(context.Background(), "/sap/bc/adt/businessservices/bindings/zsb_example")
+	if err == nil {
+		t.Fatalf("GetObjectInfo on an HTML body: got nil error and %+v — a nameless object must not pass as a result", info)
+	}
+}

@@ -39,10 +39,15 @@ const ObjectTypePackage = "DEVC/K"
 // the request carries only a Content-Type, so it is sent as both.
 const pkgContentType = "application/vnd.sap.adt.packages.v2+xml"
 
-var objectTypeMap = map[string]struct {
+// objectTypeInfo is where an object type lives in the ADT REST tree and what
+// ADT calls it. Being in this map makes a type addressable and readable; being
+// creatable additionally needs an arm in marshalCreateBody.
+type objectTypeInfo struct {
 	endpoint string
 	adtType  string
-}{
+}
+
+var objectTypeMap = map[string]objectTypeInfo{
 	"PROG":      {"/sap/bc/adt/programs/programs", "PROG/P"},
 	"CLAS":      {"/sap/bc/adt/oo/classes", "CLAS/OC"},
 	"INTF":      {"/sap/bc/adt/oo/interfaces", "INTF/OI"},
@@ -84,12 +89,12 @@ func ObjectURI(objectType, name string) (string, error) {
 	return info.endpoint + "/" + strings.ToLower(name), nil
 }
 
-func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
-	info, ok := objectTypeMap[strings.ToUpper(objectType)]
-	if !ok {
-		return fmt.Errorf("unsupported object type %q, supported: %s", objectType, strings.Join(supportedObjectTypes(), ", "))
-	}
-
+// marshalCreateBody builds the ADT create request body for an object type, or
+// returns a nil body for a type that has no create arm. It is the single
+// source of truth for which types this client can create: both CreateObject's
+// refusal and creatableObjectTypes read their answer from here, so neither can
+// drift from the arms below.
+func marshalCreateBody(objectType, name, packageName, description string, info objectTypeInfo) ([]byte, error) {
 	var body []byte
 	var err error
 	pkgRef := adtxml.PackageRef{Name: packageName}
@@ -140,6 +145,31 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
 		})
 	}
+	return body, err
+}
+
+// creatableObjectTypes returns the object types CreateObject can actually
+// build a request for, sorted. It asks marshalCreateBody rather than consulting
+// a list, so a type added to objectTypeMap for reading never turns up in a
+// message offering it as something to create.
+func creatableObjectTypes() []string {
+	creatable := make([]string, 0, len(objectTypeMap))
+	for objectType, info := range objectTypeMap {
+		if body, err := marshalCreateBody(objectType, "PROBE", "PROBE", "probe", info); err == nil && body != nil {
+			creatable = append(creatable, objectType)
+		}
+	}
+	sort.Strings(creatable)
+	return creatable
+}
+
+func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
+	info, ok := objectTypeMap[strings.ToUpper(objectType)]
+	if !ok {
+		return fmt.Errorf("unsupported object type %q, creatable types: %s", objectType, strings.Join(creatableObjectTypes(), ", "))
+	}
+
+	body, err := marshalCreateBody(objectType, name, packageName, description, info)
 	if err != nil {
 		return fmt.Errorf("CreateObject marshal: %w", err)
 	}
