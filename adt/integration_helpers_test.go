@@ -123,6 +123,7 @@ func newIntegrationClient(t *testing.T) adt.Client {
 // a ready-to-use adt.Client built from that system's credentials.
 type integrationSystem struct {
 	Name   string
+	Config sapmcpconfig.SAPSystem
 	Client adt.Client
 }
 
@@ -228,6 +229,7 @@ func eachSystem(t *testing.T) []integrationSystem {
 		sys.TLSSkipVerify = true
 		systems = append(systems, integrationSystem{
 			Name:   name,
+			Config: sys,
 			Client: adt.NewClient(sys),
 		})
 	}

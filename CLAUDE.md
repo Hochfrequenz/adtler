@@ -74,6 +74,121 @@ If the integration test passes and CI is green:
 
 For the full label list, run `gh label list --repo Hochfrequenz/adtler`.
 
+## Public Repository — No Internal Data
+
+This repository and its issue tracker are **public**. Nothing that identifies our internal
+environment may land there — that covers commits, source, comments, docs, test fixtures, issue
+titles and bodies, issue comments, PR descriptions, and anything a workflow writes on our behalf.
+
+Never publish:
+
+- Host names, FQDNs, IP addresses, or ports of internal systems — SAP or otherwise, including
+  auth and identity infrastructure. This applies to source comments recording what an XML shape
+  was verified against: record the date and the system type, not the address
+- The internal system aliases defined in `systems.json`, including per-client and proxy
+  variants, when used to name a system in prose
+- Anything that embeds a system ID: transport and task numbers (`<SID>K9…`), lock keys, or log
+  lines carrying a host. Write `<request>` / `<task>` instead — an outside reader cannot run a
+  reproducer against our request numbers anyway
+- Object names in our own or a partner's registered SAP namespace (`/XXX/…`). The namespace
+  identifies its owner, the object name usually identifies the business domain, and a partner
+  namespace additionally discloses which add-ons we run. Use a neutral placeholder such as
+  `/ABC/CL_EXAMPLE`
+- An inventory of our landscape: client numbers, which industry or partner add-ons are
+  installed, or references to internal wikis and ticket systems. Saying that a finding was
+  reproduced "on both systems" is fine; enumerating the landscape is not
+- Credentials or tokens of any kind, and client numbers tied to a named system
+- Local filesystem paths containing a user name, and SAP logon IDs
+- Customer, project, or other company-internal identifiers
+
+Name a SAP system by **type and release level** instead, which is also more useful to an outside
+reader than an alias:
+
+- `SAP S/4HANA 2025, on-premise (SAP_BASIS 816, S4CORE 109)`
+- `SAP ERP 6.0 EHP8 (SAP_BASIS 750, SAP_APPL 618)`
+
+Read the levels from the system rather than guessing: component levels from `CVERS`
+(`SELECT COMPONENT, RELEASE, EXTRELEASE FROM CVERS WHERE COMPONENT IN ('SAP_BASIS', 'SAP_APPL',
+'S4CORE')` — note that `LIKE 'SAP%'` silently misses `S4CORE`), and the marketing release from
+`PRDVERS` (`SELECT NAME, VERSION, INSTSTATUS, DESCRIPT FROM PRDVERS`, where `INSTSTATUS = '+'`
+marks the active version). Publish the release level only — never the support-package level (the
+`EXTRELEASE` column, e.g. `SP 0034`), which maps directly onto published SAP Security Notes and
+so states which fixes are not yet applied. Where several systems appear in one document,
+introduce the type/release form once and refer back to it ("the ECC system", "on both systems").
+
+### Integration tests discover their fixtures, they do not hardcode them
+
+An integration test needs objects that exist on the target system, which is exactly how real
+object names end up in this repository. Replacing such a name with a placeholder would leave the
+test green and testing nothing, so do neither: have the test **query the system for a suitable
+object at runtime** and `t.Skip` when it finds none. Log counts and types, never object names, so
+CI logs stay clean too.
+
+Where a test genuinely cannot discover its fixture, take the name from an environment variable
+and skip when it is unset. Do not commit the value.
+
+### A reuse fallback must not swallow a request that never worked
+
+An integration test that falls back on an existing object when creation fails — *"create it, and
+if that errors, carry on with the one already there"* — passes forever once the object exists.
+Where the object cannot be deleted again it always exists after the first run, so the fallback
+becomes permanent. That is how #149 shipped: `CreatePackage` could not work on S/4 at all, and
+`TestCreatePackage_Integration` reported success anyway, because this client cannot currently
+delete a package (#150, open — an ETag bug here, not an ADT limitation) and so the fixture from
+an earlier run was always there to fall back on.
+
+A fallback is legitimate for failures that say *this object is already in the way* — a duplicate,
+a lock, a missing authorization. It is never legitimate for a failure that says *SAP would not
+process this request*: a 400 the server refused to parse, an unacceptable media type, a missing
+header. Rule out that class explicitly, with `errors.As` on `*adt.ADTError` and its `Type`, before
+taking the fallback — the exception ID survives message translation, the text does not.
+
+Where an operation cannot be undone, say so in README.md under "What this client cannot
+currently undo" and in the pull request, rather than leaving the next reader to infer it from a
+test that creates nothing. Say **what** cannot undo it, too: "adtler cannot delete a package
+(#150)" is a bug someone can fix, while "a package cannot be deleted over ADT" reads as a
+permanent property of SAP and quietly discourages anyone from trying.
+
+### A regression test is not one until you have seen it fail
+
+Revert the fix and run the new test. If it still passes, it does not guard the bug, whatever its
+name says — and a test whose name claims a guarantee it does not provide is worse than no test,
+because the next person stops looking. Do this for integration tests especially: they are the ones
+whose failure path depends on the server's order of checks rather than on anything in this
+repository, and that order is not guessable.
+
+#149 is the example. A live test was written to prove S/4 accepts the `Accept` header, by sending
+a request SAP was certain to reject and asserting the rejection was not the header one. Reverting
+the fix showed it passed either way: SAP checks the header **last**, so only a request that would
+otherwise have succeeded ever reaches that check. The measurement is in README.md; the point here
+is that it took forty seconds to find and would never have shown up in review.
+
+### Exceptions
+
+The one allowed exception is a literal config value a reader has to type or the code has to hold:
+the `SAP_INTEGRATION_SYSTEMS` default set where it is documented or defined, and integration-test
+branches that key off one system's real behaviour. The prose, comments and commit messages
+*around* that value are not covered — write "the ECC system", not the alias.
+
+Unit-test fixture strings are not covered either; use `sysA` / `sysB` for system keys and generic
+placeholders for object names. This section is bound by the same rule: where an example is needed,
+write `<alias>`.
+
+`.mcp.json` is **not** an exception. It is git-ignored and may hold credentials; it must never be
+committed at all.
+
+### Before pushing
+
+Grep the diff for the shapes that matter — an internal domain suffix, a `<SID>K9…` transport
+number, a `/XXX/` namespace prefix — rather than for the alias names, so the guard itself does not
+leak them.
+
+When you find internal data already published, redact it in place (edit the issue body, or open a
+PR) rather than only noting it. For a host name, credential or logon ID, assume the value is
+already disclosed regardless: editing a file does not remove it from the commit history or from
+the notification e-mails that already went out, so rotate or renumber it instead of trusting the
+edit.
+
 ## Project Structure
 
 - `adt/` — HTTP client for the SAP ADT REST API (source, transports, locks, activation, syntax check, ATC, unit tests, ...)

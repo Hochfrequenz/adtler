@@ -18,14 +18,14 @@ type ActivationObject struct {
 // ActivationMessages is the response from POST /sap/bc/adt/activation.
 // SAP returns <chkl:messages xmlns:chkl="http://www.sap.com/abapxml/checklist">
 // with <msg> children when there are errors/warnings.
-// Verified: 2026-03-24 against hfq.sap.msp.local:8100
+// Verified: 2026-03-24 against an SAP ERP 6.0 EHP8 system
 type ActivationMessages struct {
 	XMLName  xml.Name            `xml:"messages"`
 	Messages []ActivationMessage `xml:"msg"`
 }
 
 // ActivationMessage is a single message in an activation response.
-// Verified: 2026-03-24 against hfq.sap.msp.local:8100
+// Verified: 2026-03-24 against an SAP ERP 6.0 EHP8 system
 type ActivationMessage struct {
 	ObjDescr       string `xml:"objDescr,attr"`
 	Type           string `xml:"type,attr"`

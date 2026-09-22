@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Common constants used across ADT operations.
@@ -164,6 +165,20 @@ const (
 	// collision this way rather than as ExceptionResourceAlreadyExists —
 	// verified live on both S/4 and R/3 (mcp-server-abap #406 / #407).
 	ExceptionTypeResourceCreationFailure = "ExceptionResourceCreationFailure"
+	// ExceptionTypeRemoveObjectUnsupported is not a type SAP ever emits — it
+	// is synthesised locally by RemoveFromTransport's capability gate (see
+	// RemoveObjectSupport) so the resulting error carries a Type that
+	// ClassifyError/classifyByExceptionType can key on, the same way it keys
+	// on a genuine <exc:exception> Type. RemoveFromTransport never sends a
+	// request in this case, so there is no SAP-side error to relay.
+	ExceptionTypeRemoveObjectUnsupported = "ADT_TM_REMOVEOBJECT_UNSUPPORTED"
+	// ExceptionTypeParameterNotFound is raised (HTTP 400) when a request
+	// parameter the ADT handler expects is absent from the request it
+	// received. It is overloaded across unrelated parameters (a missing
+	// transport surfaces the same Type, see #378 finding 1), so callers must
+	// also check which parameter the message names — see
+	// isLockHandleParameterNotFound.
+	ExceptionTypeParameterNotFound = "ExceptionParameterNotFound"
 )
 
 // ADTError is returned when SAP ADT responds with an error status.
@@ -183,10 +198,18 @@ type ADTError struct {
 }
 
 func (e *ADTError) Error() string {
-	if e.Type != "" {
+	switch {
+	case e.StatusCode == 0 && e.Type != "":
+		// No HTTP request was ever sent — e.g. RemoveFromTransport's
+		// capability gate (ExceptionTypeRemoveObjectUnsupported), which
+		// synthesises this error locally. "SAP ADT error 0" would claim an
+		// HTTP status that never happened, so this case is worded without one.
+		return fmt.Sprintf("%s: %s", e.Type, e.Message)
+	case e.Type != "":
 		return fmt.Sprintf("SAP ADT error %d (%s): %s", e.StatusCode, e.Type, e.Message)
+	default:
+		return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 	}
-	return fmt.Sprintf("SAP ADT error %d: %s", e.StatusCode, e.Message)
 }
 
 // ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):
@@ -263,4 +286,32 @@ func isCurrentlyEditing(err error) bool {
 		return false
 	}
 	return adtErr.Type == ExceptionTypeResourceNoAccess
+}
+
+// isLockHandleParameterNotFound reports whether err is SAP's 400
+// ExceptionParameterNotFound naming the lockHandle parameter specifically —
+// "Parameter lockHandle could not be found". Some ECC (R/3) systems reject
+// header-delivered lock handles outright this way rather than accepting the
+// header and later 423'ing on it, so the handler never saw the parameter at
+// all. Used by trySetSource to retry with query-param delivery.
+// See aibap.mcp#494.
+//
+// ExceptionParameterNotFound is overloaded: the same Type covers an entirely
+// unrelated missing "corrNr" (transport) parameter (#378 finding 1), where a
+// query-param retry would not fix anything and would mask the real error.
+// adtler does not yet expose SAP's structured T100KEY properties that would
+// let this match structurally (see #378's ADTError.Properties follow-up), so
+// this checks the literal English parameter name in the message — the same
+// last-resort, documented trade-off as LockingTransport's message scraping.
+// Case-insensitive: SAP's own message casing for this parameter name isn't
+// guaranteed stable across releases/locales the way the Type string is.
+func isLockHandleParameterNotFound(err error) bool {
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		return false
+	}
+	if adtErr.Type != ExceptionTypeParameterNotFound {
+		return false
+	}
+	return strings.Contains(strings.ToLower(adtErr.Message), "lockhandle")
 }

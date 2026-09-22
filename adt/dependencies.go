@@ -18,7 +18,38 @@ const (
 	UseTypeInterface   = "INTERFACE"
 	UseTypeSuperclass  = "SUPERCLASS"
 	UseTypeUnknown     = "UNKNOWN"
+	// UseTypeUIApp is a UIAD app entry contained in a UIAC catalog.
+	UseTypeUIApp = "UI_APP"
+	// UseTypeTransaction is a transaction code launched by a UIAD app entry.
+	UseTypeTransaction = "TRANSACTION"
+	// UseTypeWebDynproApp is a Web Dynpro application launched by a UIAD app entry.
+	UseTypeWebDynproApp = "WEB_DYNPRO_APP"
+	// UseTypeWebClientTarget is a WebClient UI target launched by a UIAD app entry.
+	UseTypeWebClientTarget = "WEB_CLIENT_TARGET"
+	// UseTypeUI5App is a SAPUI5 repository app launched by a UIAD app entry.
+	// Unlike the other targets it is not a TADIR object, so it cannot be
+	// classified further; it is reported as a plain reference.
+	UseTypeUI5App = "UI5_APP"
 )
+
+// uiadTarget names one SUI_TM_MM_APP column that may reference a launch target
+// and the use type reported for it.
+type uiadTarget struct {
+	Column  string
+	UseType string
+}
+
+// uiadTargetColumns lists the SUI_TM_MM_APP columns that carry a launch target,
+// in the order they are reported. Resolution is by column rather than by
+// APP_TYPE: a Web Dynpro app entry carries both WD_APPL_ID and TCODE, and a
+// WebClient UI entry carries both WCF_TARGET_ID and TCODE, so keying off
+// APP_TYPE would silently drop the second reference.
+var uiadTargetColumns = []uiadTarget{
+	{Column: "TCODE", UseType: UseTypeTransaction},
+	{Column: "WD_APPL_ID", UseType: UseTypeWebDynproApp},
+	{Column: "WCF_TARGET_ID", UseType: UseTypeWebClientTarget},
+	{Column: "UI5_APP_ID", UseType: UseTypeUI5App},
+}
 
 // ObjectDependency is a single object referenced by the queried object.
 type ObjectDependency struct {
@@ -60,6 +91,11 @@ const (
 // tables up to maxDepth levels). maxResults caps the returned list (0 = no
 // cap). maxDepth is clamped to [1, 10] (values below 1 become 1); it is
 // ignored for the non-DDIC types. Callers choose their own default depth.
+//
+// UIAC (Fiori catalog) lists the UIAD app entries it contains, honouring
+// maxResults; UIAD lists the launch target of a single app entry and ignores
+// maxResults, since one app entry has at most four targets. Both read
+// SUI_TM_MM_APP and both ignore maxDepth.
 func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, objectName string, maxResults, maxDepth int) (*DependencyResult, error) {
 	objectType = strings.ToUpper(objectType)
 
@@ -111,6 +147,20 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		}
 		return newDependencyResult(objectType, objectName, append(ddic, oo...), nil), nil
 
+	case "UIAC":
+		deps, warns, err := c.uiacDeps(ctx, objectName, maxResults)
+		if err != nil {
+			return nil, err
+		}
+		return newDependencyResult(objectType, objectName, deps, warns), nil
+
+	case "UIAD":
+		deps, warns, err := c.uiadDeps(ctx, objectName)
+		if err != nil {
+			return nil, err
+		}
+		return newDependencyResult(objectType, objectName, deps, warns), nil
+
 	case "TABL", "DTEL", "DOMA", "TTYP":
 		if maxDepth < 1 {
 			maxDepth = 1
@@ -126,7 +176,7 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		return newDependencyResult(objectType, objectName, deps, warns), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported object type %q: supported are PROG, FUGR, FUNC, CLAS, INTF, TABL, DTEL, DOMA, TTYP", objectType)
+		return nil, fmt.Errorf("unsupported object type %q: supported are PROG, FUGR, FUNC, CLAS, INTF, TABL, DTEL, DOMA, TTYP, UIAC, UIAD", objectType)
 	}
 }
 
@@ -170,6 +220,77 @@ func (c *httpClient) d010tabDeps(ctx context.Context, master string, maxResults 
 		}
 	}
 	return deps, nil
+}
+
+// uiacDeps lists the UIAD app entries a UIAC catalog contains. The catalog
+// itself is not probed: SUI_TM_MM_CAT is absent on ECC systems, and an empty
+// SUI_TM_MM_APP result is already the correct answer for a catalog with no
+// app entries.
+//
+// RunQuery silently rewrites a non-positive maxResults to a 1000-row server
+// cap (see RunQuery in query.go) — GetObjectDependencies documents maxResults
+// == 0 as "no cap", so a catalog with more than 1000 app entries would
+// otherwise be truncated with no indication to the caller. QueryResult's
+// TotalRows carries the server-side total independently of how many rows
+// were actually returned, so a mismatch between the two is reported as a
+// warning naming both numbers.
+func (c *httpClient) uiacDeps(ctx context.Context, catID string, maxResults int) ([]ObjectDependency, []string, error) {
+	qr, err := c.RunQuery(ctx,
+		fmt.Sprintf("SELECT APP_ID FROM SUI_TM_MM_APP WHERE CAT_ID = '%s' ORDER BY APP_ID", EscapeValue(catID)),
+		maxResults)
+	if err != nil {
+		return nil, nil, err
+	}
+	if qr == nil {
+		return nil, nil, nil
+	}
+	idx := queryColumnIndexes(qr, "APP_ID")
+	deps := make([]ObjectDependency, 0, len(qr.Rows))
+	for _, row := range qr.Rows {
+		if v := queryCell(row, idx["APP_ID"]); v != "" {
+			deps = append(deps, ObjectDependency{Name: v, UseType: UseTypeUIApp})
+		}
+	}
+	var warnings []string
+	if qr.TotalRows > len(qr.Rows) {
+		warnings = append(warnings, fmt.Sprintf("output truncated to %d entries (%d total)", len(qr.Rows), qr.TotalRows))
+	}
+	return deps, warnings, nil
+}
+
+// uiadDeps resolves the launch target of a UIAD app entry. Every target column
+// that is filled is reported; see uiadTargetColumns for why APP_TYPE is not
+// used to select one. Columns are addressed by name because the data-preview
+// endpoint may reorder or omit them. An app entry that launches no repository
+// object (a URL app) yields no dependencies and one warning.
+func (c *httpClient) uiadDeps(ctx context.Context, appID string) ([]ObjectDependency, []string, error) {
+	names := make([]string, 0, len(uiadTargetColumns)+1)
+	names = append(names, "APP_TYPE")
+	for _, t := range uiadTargetColumns {
+		names = append(names, t.Column)
+	}
+	qr, err := c.RunQuery(ctx,
+		fmt.Sprintf("SELECT %s FROM SUI_TM_MM_APP WHERE APP_ID = '%s'",
+			strings.Join(names, ", "), EscapeValue(appID)),
+		1)
+	if err != nil {
+		return nil, nil, err
+	}
+	if qr == nil || len(qr.Rows) == 0 {
+		return nil, []string{fmt.Sprintf("no SUI_TM_MM_APP entry for app id %q", appID)}, nil
+	}
+	idx := queryColumnIndexes(qr, names...)
+	row := qr.Rows[0]
+	deps := make([]ObjectDependency, 0, len(uiadTargetColumns))
+	for _, t := range uiadTargetColumns {
+		if v := queryCell(row, idx[t.Column]); v != "" {
+			deps = append(deps, ObjectDependency{Name: v, UseType: t.UseType})
+		}
+	}
+	if len(deps) == 0 {
+		return nil, []string{fmt.Sprintf("app entry has no launch target (APP_TYPE %q)", queryCell(row, idx["APP_TYPE"]))}, nil
+	}
+	return deps, nil, nil
 }
 
 // classifyDDICObjects resolves the DDIC kind of each name via two queries:

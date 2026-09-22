@@ -390,14 +390,19 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
 	// Retry with query-param lock delivery when the header-first attempt is
 	// rejected in a way that means the handler didn't read the header handle:
-	//   - 423 ExceptionResourceInvalidLockHandle (programs on S/4), and
+	//   - 423 ExceptionResourceInvalidLockHandle (programs on S/4),
 	//   - 403 ExceptionResourceNoAccess "currently editing" (OO classes /
 	//     interfaces, whose modern handler expects ?lockHandle= — aibap.mcp#443;
-	//     verified on S/4: header delivery 403s, query delivery succeeds).
+	//     verified on S/4: header delivery 403s, query delivery succeeds), and
+	//   - 400 ExceptionParameterNotFound naming lockHandle (some ECC/R3
+	//     systems reject the header outright rather than 423'ing on it —
+	//     aibap.mcp#494; not reproduced on our own R/3 systems, but confirmed
+	//     via the reporter's raw-HTTP diagnosis that query delivery works).
 	// Gated on lockHandle != "" so we only retry a delivery artefact, never a
 	// genuine lock/authz conflict (which would have failed at lock time). R/3,
 	// where the header IS read, succeeds on the first attempt and never retries.
-	if err != nil && lockHandle != "" && (isInvalidLockHandle(err) || isCurrentlyEditing(err)) {
+	if err != nil && lockHandle != "" &&
+		(isInvalidLockHandle(err) || isCurrentlyEditing(err) || isLockHandleParameterNotFound(err)) {
 		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
 	}
 	return newETag, err

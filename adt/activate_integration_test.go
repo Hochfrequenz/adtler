@@ -7,21 +7,34 @@ import (
 	"testing"
 )
 
+// TestActivateObjects_Clean_Integration exercises ActivateObjects (which now
+// always re-checks GetInactiveObjects on apparent success — see
+// Hochfrequenz/aibap.mcp#500) against a real, already-consistent object on
+// both R/3 and S/4. It cannot reproduce the exact SAP-side silent-no-op this
+// fix targets (a namespaced CLAS in a transportable package on ECC), since
+// the shared Z_ADT_MCP_TEST fixture package has no namespaced objects to
+// exercise that precondition. That failure path is instead covered by the
+// httptest-mocked tests in activate_silent_failure_test.go, which reproduce
+// the mechanism directly. This test's job is only to confirm the added
+// verification step does not regress the common, genuinely-successful
+// activation path on either system.
 func TestActivateObjects_Clean_Integration(t *testing.T) {
-	client := newIntegrationClient(t)
-	ctx := context.Background()
-
-	// Activate the test report which should have valid source.
-	result, err := client.ActivateObjects(ctx, []string{testReportURI})
-	if err != nil {
-		t.Fatalf("ActivateObjects failed: %v", err)
-	}
-	t.Logf("success=%v messages=%d", result.Success, len(result.Messages))
-	if !result.Success {
-		for _, m := range result.Messages {
-			t.Logf("  [%s] %s (uri=%s)", m.Type, m.Text, m.ObjectURI)
-		}
-		t.Error("expected success for valid source")
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+			result, err := sys.Client.ActivateObjects(ctx, []string{testReportURI})
+			if err != nil {
+				t.Fatalf("ActivateObjects failed: %v", err)
+			}
+			t.Logf("success=%v messages=%d", result.Success, len(result.Messages))
+			if !result.Success {
+				for _, m := range result.Messages {
+					t.Logf("  [%s] %s (uri=%s)", m.Type, m.Text, m.ObjectURI)
+				}
+				t.Error("expected success for an already-active object")
+			}
+		})
 	}
 }
 
