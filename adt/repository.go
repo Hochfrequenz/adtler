@@ -54,24 +54,25 @@ func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]O
 
 // objectTypeAcceptHeaders maps ADT URI path prefixes to their required Accept headers.
 var objectTypeAcceptHeaders = map[string]string{
-	"/sap/bc/adt/programs/programs":      "application/vnd.sap.adt.programs.programs.v2+xml",
-	"/sap/bc/adt/programs/includes":      "application/vnd.sap.adt.programs.includes.v2+xml",
-	"/sap/bc/adt/oo/classes":             "application/vnd.sap.adt.oo.classes.v4+xml",
-	"/sap/bc/adt/oo/interfaces":          "application/vnd.sap.adt.oo.interfaces.v5+xml",
-	"/sap/bc/adt/functions/groups":       "application/vnd.sap.adt.functions.groups.v3+xml",
-	"/sap/bc/adt/ddic/dataelements":      "application/vnd.sap.adt.dataelements.v2+xml",
-	"/sap/bc/adt/ddic/domains":           "application/vnd.sap.adt.domains.v2+xml",
-	"/sap/bc/adt/ddic/tables":            "application/vnd.sap.adt.tables.v2+xml",
-	"/sap/bc/adt/ddic/tabletypes":        "application/vnd.sap.adt.tabletype.v1+xml",
-	"/sap/bc/adt/ddic/typegroups":        "application/vnd.sap.adt.ddic.typegroups.v2+xml",
-	"/sap/bc/adt/ddic/ddl/sources":       "application/vnd.sap.adt.ddlSource+xml",
-	"/sap/bc/adt/ddic/ddlx/sources":      "application/vnd.sap.adt.ddic.ddlx.v1+xml",
-	"/sap/bc/adt/ddic/ddla/sources":      "application/vnd.sap.adt.ddic.ddla.v1+xml",
-	"/sap/bc/adt/ddic/srvd/sources":      "application/vnd.sap.adt.ddic.srvd.v1+xml",
-	"/sap/bc/adt/packages":               "application/vnd.sap.adt.packages.v2+xml",
-	"/sap/bc/adt/bo/behaviordefinitions": "application/vnd.sap.adt.blues.v1+xml",
-	"/sap/bc/adt/acm/dcl/sources":        "application/vnd.sap.adt.dclSource+xml",
-	"/sap/bc/adt/vit/wb/object_type":     vitObjectPropertiesContentType,
+	"/sap/bc/adt/programs/programs":         "application/vnd.sap.adt.programs.programs.v2+xml",
+	"/sap/bc/adt/programs/includes":         "application/vnd.sap.adt.programs.includes.v2+xml",
+	"/sap/bc/adt/oo/classes":                "application/vnd.sap.adt.oo.classes.v4+xml",
+	"/sap/bc/adt/oo/interfaces":             "application/vnd.sap.adt.oo.interfaces.v5+xml",
+	"/sap/bc/adt/functions/groups":          "application/vnd.sap.adt.functions.groups.v3+xml",
+	"/sap/bc/adt/ddic/dataelements":         "application/vnd.sap.adt.dataelements.v2+xml",
+	"/sap/bc/adt/ddic/domains":              "application/vnd.sap.adt.domains.v2+xml",
+	"/sap/bc/adt/ddic/tables":               "application/vnd.sap.adt.tables.v2+xml",
+	"/sap/bc/adt/ddic/tabletypes":           "application/vnd.sap.adt.tabletype.v1+xml",
+	"/sap/bc/adt/ddic/typegroups":           "application/vnd.sap.adt.ddic.typegroups.v2+xml",
+	"/sap/bc/adt/ddic/ddl/sources":          "application/vnd.sap.adt.ddlSource+xml",
+	"/sap/bc/adt/ddic/ddlx/sources":         "application/vnd.sap.adt.ddic.ddlx.v1+xml",
+	"/sap/bc/adt/ddic/ddla/sources":         "application/vnd.sap.adt.ddic.ddla.v1+xml",
+	"/sap/bc/adt/ddic/srvd/sources":         "application/vnd.sap.adt.ddic.srvd.v1+xml",
+	"/sap/bc/adt/packages":                  "application/vnd.sap.adt.packages.v2+xml",
+	"/sap/bc/adt/bo/behaviordefinitions":    "application/vnd.sap.adt.blues.v1+xml",
+	"/sap/bc/adt/businessservices/bindings": "application/vnd.sap.adt.businessservices.servicebinding.v2+xml",
+	"/sap/bc/adt/acm/dcl/sources":           "application/vnd.sap.adt.dclSource+xml",
+	"/sap/bc/adt/vit/wb/object_type":        vitObjectPropertiesContentType,
 }
 
 // fugrIncludeContentType is the vendor MIME type S/4 requires for function
@@ -128,9 +129,47 @@ func (c *httpClient) acceptHeaderForURI(objectURI string) string {
 	return hardcoded + ", application/xml"
 }
 
+// acceptAnyMediaType is the Accept header a read falls back to when ADT
+// refuses the first, specific offer with 406. See readWithAcceptFallback.
+const acceptAnyMediaType = "*/*"
+
+// readWithAcceptFallback GETs uri with the given Accept header and, if ADT
+// answers 406, asks once more with */*.
+//
+// An ADT 406 means the Accept header is wrong, never that the resource is
+// missing — ADT publishes exactly one media type per object kind and will
+// produce nothing else. It is easy to misread: adtler#65 recorded a service
+// binding's 406 as a missing endpoint and went looking for another path,
+// when the path had been right all along and only the offer was wrong. The
+// same run saw a behavior definition's object document and two DDIC tables
+// answer 406 to "application/xml" and 200 to */*.
+//
+// No client can know every vendor media type SAP will ever publish, so on a
+// 406 it stops guessing and lets the server choose. The specific offer is
+// still made first: asking for */* up front would change what the server
+// returns for the object kinds that work today. Only 406 is retried — a 404
+// is a missing resource, and a wider Accept header cannot conjure one.
+// Callers pass a specific offer: acceptHeaderForURI returns a vendor type or
+// "application/xml", never */*, so the retry can never repeat the first
+// request. There is deliberately no guard for that case — an unreachable
+// branch and a test for an impossible state cost more than they protect.
+func (c *httpClient) readWithAcceptFallback(ctx context.Context, uri, accept string) (*http.Response, error) {
+	resp, err := c.doRead(ctx, uri, map[string]string{"Accept": accept})
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusNotAcceptable {
+		return resp, nil
+	}
+	// Drain and close before reusing the connection for the retry.
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return c.doRead(ctx, uri, map[string]string{"Accept": acceptAnyMediaType})
+}
+
 func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*ObjectInfo, error) {
 	accept := c.acceptHeaderForURI(objectURI)
-	resp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
+	resp, err := c.readWithAcceptFallback(ctx, objectURI, accept)
 	if err != nil {
 		return nil, fmt.Errorf("GetObjectInfo: %w", err)
 	}
@@ -157,6 +196,17 @@ func parseGenericObjectInfo(data []byte) (*ObjectInfo, error) {
 	}
 	if err := xml.Unmarshal(data, &obj); err != nil {
 		return nil, fmt.Errorf("GetObjectInfo parsing: %w", err)
+	}
+	// Go's XML decoder happily parses a document whose elements and attributes
+	// mean nothing to this struct — an HTML page, for one — and leaves every
+	// field zero without reporting an error. Every ADT object document carries
+	// adtcore:name, so an empty name means the body was not one, and saying so
+	// beats handing back an object that reports no name, type or package as if
+	// it were real. Reachable because the */* fallback lets the server choose
+	// the representation, and discovery advertises text/html beside the vendor
+	// types. See adtler#65.
+	if obj.Name == "" {
+		return nil, fmt.Errorf("GetObjectInfo parsing: response carried no adtcore:name — it is not an ADT object document")
 	}
 	return &ObjectInfo{
 		Name:        obj.Name,
