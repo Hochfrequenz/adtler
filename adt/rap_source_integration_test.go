@@ -5,6 +5,7 @@ package adt_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -100,10 +101,26 @@ func findRAPObject(t *testing.T, ctx context.Context, sys integrationSystem, adt
 	t.Helper()
 	results := searchFixtures(t, ctx, sys, adtType)
 	t.Logf("system holds %d %s object(s) in the first page of results", len(results), adtType)
+	namespaced := 0
 	for _, r := range results {
-		if r.Name != "" && r.URI != "" {
-			return r
+		if r.Name == "" || r.URI == "" {
+			continue
 		}
+		// A name in a registered namespace is deliberately not a fixture here.
+		// ObjectURI appends the name verbatim and documents escaping as the
+		// caller's job, while ADT reports such a URI percent-encoded
+		// ("/%2fns%2fname"), so the two would not compare equal and this test
+		// would fail on a difference it does not exist to measure. Namespace
+		// handling in ObjectURI is its own question; picking a plain name
+		// keeps this test about the endpoints.
+		if strings.HasPrefix(r.Name, "/") {
+			namespaced++
+			continue
+		}
+		return r
+	}
+	if namespaced > 0 {
+		t.Skipf("the %d %s object(s) on this system are all in a registered namespace, which ObjectURI does not escape", namespaced, adtType)
 	}
 	t.Skipf("no %s object on this system — RAP objects need S/4HANA and a suitable client", adtType)
 	return adt.ObjectInfo{}
@@ -167,8 +184,25 @@ func assertServiceBindingReadable(t *testing.T, ctx context.Context, sys integra
 	// A service binding is configuration and carries no source. Recorded
 	// here so the absence stays a measured fact rather than an assumption
 	// the next reader has to re-establish.
-	if _, err := sys.Client.GetSource(ctx, built); err == nil {
+	//
+	// The failure has to be the *right* failure. Accepting any error would
+	// let an expired authorization or a 500 stand in for the 404 this claims
+	// to have measured, and the test would keep passing while measuring
+	// nothing — the same trap as swallowing a search error.
+	_, err = sys.Client.GetSource(ctx, built)
+	if err == nil {
 		t.Errorf("GetSource for SRVB succeeded — a service binding was measured to have no source; re-check adtler#65")
+		return
+	}
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) {
+		t.Errorf("GetSource for SRVB failed before reaching SAP, so the absence of a source was not measured: %s",
+			redact(err.Error(), sys.Config.Host, obj.Name))
+		return
+	}
+	if adtErr.StatusCode != http.StatusNotFound {
+		t.Errorf("GetSource for SRVB failed with status %d (type %q), not the 404 that means there is no source",
+			adtErr.StatusCode, adtErr.Type)
 	}
 }
 
