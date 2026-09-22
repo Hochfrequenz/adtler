@@ -16,6 +16,9 @@ import (
 // adt) since the external test package's own constant isn't visible here.
 const stepEndpointPath = "/sap/bc/adt/debugger"
 
+// stepContinueMethod is the ADT debugger step action under test.
+const stepContinueMethod = "stepContinue"
+
 // TestStep_TimeoutWithNoRemainingSessions_ReturnsDebuggeeEndedError guards
 // the fix for aibap.mcp#513: SAP's ADT debugger kernel call never returns an
 // HTTP response when a step action (most commonly stepContinue) runs the
@@ -33,7 +36,7 @@ func TestStep_TimeoutWithNoRemainingSessions_ReturnsDebuggeeEndedError(t *testin
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == "stepContinue" {
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == stepContinueMethod {
 			select {
 			case <-time.After(200 * time.Millisecond):
 			case <-r.Context().Done():
@@ -57,7 +60,7 @@ func TestStep_TimeoutWithNoRemainingSessions_ReturnsDebuggeeEndedError(t *testin
 
 	dbg := NewDebugSession(c, "U")
 
-	_, err := dbg.Step(context.Background(), "stepContinue")
+	_, err := dbg.Step(context.Background(), stepContinueMethod)
 	if err == nil {
 		t.Fatal("expected an error (timeout), got nil")
 	}
@@ -65,7 +68,7 @@ func TestStep_TimeoutWithNoRemainingSessions_ReturnsDebuggeeEndedError(t *testin
 	if !errors.As(err, &endedErr) {
 		t.Fatalf("expected *DebuggeeEndedError, got %T: %v", err, err)
 	}
-	if endedErr.Action != "stepContinue" {
+	if endedErr.Action != stepContinueMethod {
 		t.Errorf("Action: got %q, want stepContinue", endedErr.Action)
 	}
 }
@@ -82,7 +85,7 @@ func TestStep_TimeoutWithRemainingSessions_ReturnsPlainError(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == "stepContinue" {
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == stepContinueMethod {
 			select {
 			case <-time.After(200 * time.Millisecond):
 			case <-r.Context().Done():
@@ -107,7 +110,7 @@ func TestStep_TimeoutWithRemainingSessions_ReturnsPlainError(t *testing.T) {
 
 	dbg := NewDebugSession(c, "U")
 
-	_, err := dbg.Step(context.Background(), "stepContinue")
+	_, err := dbg.Step(context.Background(), stepContinueMethod)
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -127,7 +130,7 @@ func TestStep_NonTimeoutError_ReturnsPlainError(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == "stepContinue" {
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == stepContinueMethod {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="AdiFailed"/><message>boom</message></exc:exception>`))
 			return
@@ -139,7 +142,7 @@ func TestStep_NonTimeoutError_ReturnsPlainError(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	dbg := NewDebugSession(NewClient(cfg), "U")
 
-	_, err := dbg.Step(context.Background(), "stepContinue")
+	_, err := dbg.Step(context.Background(), stepContinueMethod)
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
