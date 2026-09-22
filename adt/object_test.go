@@ -306,3 +306,71 @@ func TestDeleteObject_ETagFetchHTTPError(t *testing.T) {
 		t.Errorf("error should contain the SAP message body, got: %v", err)
 	}
 }
+
+// TestCreateObject_ReadOnlyTypesAreRefused guards the trap that adtler#65
+// opened. Adding BDEF, SRVD and SRVB to objectTypeMap makes ObjectURI able
+// to address them — but that same map gates CreateObject, whose body-marshal
+// switch has no arm for them. Without an explicit refusal, CreateObject
+// would POST an empty body to a real endpoint and report whatever SAP made
+// of it, instead of saying that this client cannot create the type.
+//
+// The refusal must happen before any request goes out, and it must name the
+// issue tracking the missing arm so the reader knows this is a gap in this
+// client rather than a limitation of ADT.
+func TestCreateObject_ReadOnlyTypesAreRefused(t *testing.T) {
+	cases := []struct {
+		objectType  string
+		wantMention string
+	}{
+		{"BDEF", "#148"},
+		{"SRVD", "#148"},
+		{"SRVB", "#148"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.objectType, func(t *testing.T) {
+			requested := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == csrfEndpoint {
+					w.Header().Set("X-CSRF-Token", "token")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				if r.URL.Path == logoffPath {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				requested = true
+				w.WriteHeader(http.StatusCreated)
+			}))
+			defer srv.Close()
+
+			cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+			client := adt.NewClient(cfg)
+
+			err := client.CreateObject(context.Background(), tc.objectType, "ZTEST", "ZPACKAGE", "Test", "")
+			if err == nil {
+				t.Fatalf("CreateObject(%q): got nil error, want a refusal", tc.objectType)
+			}
+			if requested {
+				t.Errorf("CreateObject(%q) sent a request to the server; it must refuse before any request goes out", tc.objectType)
+			}
+			if !strings.Contains(err.Error(), tc.objectType) {
+				t.Errorf("error %q should name the object type", err.Error())
+			}
+			if !strings.Contains(err.Error(), tc.wantMention) {
+				t.Errorf("error %q should point at %s, the issue tracking the missing create arm", err.Error(), tc.wantMention)
+			}
+		})
+	}
+}
+
+// TestObjectURI_ReadOnlyTypesStillResolve is the other half of the pair
+// above: refusing to create these types must not cost the ability to
+// address them, which is the whole point of adtler#65.
+func TestObjectURI_ReadOnlyTypesStillResolve(t *testing.T) {
+	for _, objectType := range []string{"BDEF", "SRVD", "SRVB"} {
+		if _, err := adt.ObjectURI(objectType, "ZTEST"); err != nil {
+			t.Errorf("ObjectURI(%q): unexpected error: %v", objectType, err)
+		}
+	}
+}

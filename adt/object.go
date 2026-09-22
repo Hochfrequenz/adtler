@@ -19,6 +19,17 @@ const (
 	objTypeDDLS = "DDLS"
 )
 
+// Object type constants for the RAP types. These are read-only here: this
+// client can address and read them, but cannot create them (see adtler#148
+// for BDEF). Their endpoints were measured against SAP S/4HANA on-premise
+// (SAP_BASIS 816, S4CORE 109) on 2026-09-22 and match the collections the
+// system's own discovery document publishes. See adtler#65.
+const (
+	objTypeBDEF = "BDEF"
+	objTypeSRVD = "SRVD"
+	objTypeSRVB = "SRVB"
+)
+
 // ObjectTypePackage is the ADT object type code for a package (DEVCLASS),
 // used as the objectType in searches and the type in package creation/browse.
 const ObjectTypePackage = "DEVC/K"
@@ -41,6 +52,9 @@ var objectTypeMap = map[string]struct {
 	objTypeTABL: {"/sap/bc/adt/ddic/tables", "TABL/DT"},
 	objTypeDDLS: {"/sap/bc/adt/ddic/ddl/sources", "DDLS/STOB"},
 	"MSAG":      {"/sap/bc/adt/messageclass", "MSAG/N"},
+	objTypeBDEF: {"/sap/bc/adt/bo/behaviordefinitions", "BDEF/BDO"},
+	objTypeSRVD: {"/sap/bc/adt/ddic/srvd/sources", "SRVD/SRV"},
+	objTypeSRVB: {"/sap/bc/adt/businessservices/bindings", "SRVB/SVB"},
 }
 
 // supportedObjectTypes returns the object-type keys known to objectTypeMap,
@@ -128,6 +142,21 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 	}
 	if err != nil {
 		return fmt.Errorf("CreateObject marshal: %w", err)
+	}
+	// A type can be in objectTypeMap — so ObjectURI can address it and the
+	// read paths work — without the switch above having an arm to build its
+	// create request. BDEF, SRVD and SRVB are exactly that (adtler#65 added
+	// their endpoints for reading). Refuse here rather than POST an empty
+	// body and report back whatever SAP made of it.
+	//
+	// The check reads the marshal result instead of a separate "creatable"
+	// flag on purpose: a flag is a second source of truth that drifts the
+	// first time someone adds an endpoint and forgets to set it, whereas a
+	// nil body is the missing arm itself.
+	if body == nil {
+		return fmt.Errorf("CreateObject: this client cannot create %s objects — it can address and read them, "+
+			"but no ADT create request body for this type has been measured yet (see adtler#148 for the RAP object types)",
+			strings.ToUpper(objectType))
 	}
 
 	// DDIC objects need specific content types on S4

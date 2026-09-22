@@ -23,6 +23,16 @@ func TestObjectURI(t *testing.T) {
 		{"table", "TABL", "ZTAB", "/sap/bc/adt/ddic/tables/ztab"},
 		{"ddl source", "DDLS", "ZCDS", "/sap/bc/adt/ddic/ddl/sources/zcds"},
 		{"message class", "MSAG", "ZMSG", "/sap/bc/adt/messageclass/zmsg"},
+		// RAP object types. The paths below were measured against SAP
+		// S/4HANA on-premise (SAP_BASIS 816, S4CORE 109) on 2026-09-22 and
+		// cross-checked against the system's own /sap/bc/adt/discovery
+		// document, which publishes these collections. See adtler#65 — the
+		// paths guessed from ADT documentation
+		// (/sap/bc/adt/businessservices/behaviors and
+		// .../servicedefinitions) answer 404.
+		{"behavior definition", "BDEF", "ZBD", "/sap/bc/adt/bo/behaviordefinitions/zbd"},
+		{"service definition", "SRVD", "ZSD", "/sap/bc/adt/ddic/srvd/sources/zsd"},
+		{"service binding", "SRVB", "ZSB", "/sap/bc/adt/businessservices/bindings/zsb"},
 		// Object type is matched case-insensitively, name is lower-cased.
 		{"lowercase type", "prog", "ZFOO", "/sap/bc/adt/programs/programs/zfoo"},
 		{"already lower name", "PROG", "zfoo", "/sap/bc/adt/programs/programs/zfoo"},
