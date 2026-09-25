@@ -4,8 +4,11 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 // Tests in this file exercise ReleaseTransportVerified and RollbackTransport
@@ -78,7 +81,11 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	}
 	t.Logf("[1] T1=%s", t1)
 	t.Cleanup(func() {
-		_ = client.ReleaseTransportWithTasks(context.Background(), t1)
+		if r, releaseErr := client.ReleaseTransportVerified(context.Background(), t1, true); releaseErr != nil {
+			t.Logf("cleanup: ReleaseTransportVerified(%s) failed: %v", t1, releaseErr)
+		} else if !r.Released {
+			t.Logf("cleanup: %s still modifiable after release (ECC silent-release-failure) — release via SE09 or the next run will find the fixture locked", t1)
+		}
 	})
 
 	if err := client.CreateObject(ctx, "PROG", objName, testPackage, "Rollback test", t1); err != nil {
@@ -113,15 +120,51 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	// *before* the given transport. T1 is the first activation so there is no
 	// version before it — rolling back T1 would error. Rolling back T2 returns v1.
 	//
-	// ReleaseTransportWithTasks internally polls until the background job finishes,
-	// so when it returns nil the transport is already released — no extra polling needed.
-	if err := client.ReleaseTransportWithTasks(ctx, t1); err != nil {
-		t.Fatalf("[2] ReleaseTransportWithTasks T1: %v", err)
+	// ReleaseTransportWithTasks reports success whenever the release endpoint
+	// returns 2xx — but ECC has a documented silent-failure mode where the
+	// request stays modifiable despite that 2xx (see transport.go's
+	// ReleaseTransportVerified doc). Use the verified call and fail loudly
+	// instead of racing into Phase 3 against an object still locked in T1.
+	releaseResult, err := client.ReleaseTransportVerified(ctx, t1, true)
+	if err != nil {
+		t.Fatalf("[2] ReleaseTransportVerified T1: %v", err)
+	}
+	if !releaseResult.Released {
+		// ECC's silent-release-failure (documented on ReleaseTransportVerified in
+		// transport.go). The object still needs freeing from T1 for Phase 3, so
+		// try RemoveFromTransport as a second ADT-only path before giving up.
+		// This is not the #149 fallback-swallows-a-never-worked-request pattern:
+		// we only reach here after a positive, typed signal (Released == false)
+		// that release genuinely didn't happen, and if RemoveFromTransport also
+		// can't run, we t.Skip — visibly, not a silent pass.
+		tasks, taskErr := client.GetTransportTasks(ctx, t1)
+		if taskErr != nil {
+			t.Fatalf("[2] T1 (%s) still modifiable after release, and GetTransportTasks failed: %v", t1, taskErr)
+		}
+		removed := false
+		var lastErr error
+		for _, task := range tasks {
+			if rmErr := client.RemoveFromTransport(ctx, task, t1, "R3TR", "PROG", objName, "PROG/P", ""); rmErr != nil {
+				lastErr = rmErr
+				continue
+			}
+			removed = true
+			break
+		}
+		if !removed {
+			var adtErr *adt.ADTError
+			if errors.As(lastErr, &adtErr) && adtErr.Type == adt.ExceptionTypeRemoveObjectUnsupported {
+				t.Skipf("[2] T1 (%s) still modifiable after release (ECC silent-release-failure), and this system's ADT predates the remove-object operation (AS ABAP 7.53 SP00 / ABAP Platform 1809) — neither ADT-only path can free %s from T1 on this system. Release T1 manually (SE09) and rerun, or run against a newer system.", t1, objName)
+			}
+			t.Fatalf("[2] T1 (%s) still modifiable after release, and RemoveFromTransport could not free %s: %v", t1, objName, lastErr)
+		}
+		t.Logf("[2] T1 still modifiable, but %s freed from it via RemoveFromTransport", objName)
+	} else {
+		t.Logf("[2] T1 released")
 	}
 	// On S/4, ReleaseTransportWithTasks leaves a session-bound lock on the transport
 	// organizer. Logout clears it so the next CreateTransport can proceed.
 	_ = client.Logout(ctx)
-	t.Logf("[2] T1 released")
 
 	// ── Phase 3: Create T2, add object, write v2 source, activate ──────────
 	t2, err := client.CreateTransport(ctx, "K", "DUM", "MCP Rollback test T2", testPackage)
@@ -145,8 +188,13 @@ func TestRollbackTransport_Integration(t *testing.T) {
 				}
 			}
 		}
-		_ = client.ReleaseTransportWithTasks(bgCtx, t2)
-		t.Logf("cleanup: released T2 (%s)", t2)
+		if r, releaseErr := client.ReleaseTransportVerified(bgCtx, t2, true); releaseErr != nil {
+			t.Logf("cleanup: ReleaseTransportVerified(%s) failed: %v", t2, releaseErr)
+		} else if !r.Released {
+			t.Logf("cleanup: %s still modifiable after release (ECC silent-release-failure) — release via SE09 or the next run will find the fixture locked", t2)
+		} else {
+			t.Logf("cleanup: released T2 (%s)", t2)
+		}
 		_ = client.Logout(bgCtx)
 	})
 
