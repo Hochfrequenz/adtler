@@ -168,19 +168,7 @@ func (c *httpClient) DeleteTransport(ctx context.Context, transportNumber string
 	return checkResponse(resp)
 }
 
-// ReleaseTransport releases a transport request or task.
-// If the request has unreleased tasks, it returns an error listing them.
-func (c *httpClient) ReleaseTransport(ctx context.Context, transportNumber string) error {
-	return c.releaseTransport(ctx, transportNumber, false)
-}
-
-// ReleaseTransportWithTasks releases a transport request including all its tasks.
-// Each task is released first, then the request itself.
-func (c *httpClient) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) error {
-	return c.releaseTransport(ctx, transportNumber, true)
-}
-
-// ReleaseResult reports the outcome of a verified transport release.
+// ReleaseResult reports the outcome of a transport release.
 type ReleaseResult struct {
 	Transport string `json:"transport"`
 	// Released is true when the request is confirmed no longer modifiable
@@ -190,28 +178,35 @@ type ReleaseResult struct {
 	Released bool `json:"released"`
 }
 
-// ReleaseTransportVerified releases a transport request (optionally including
-// its tasks) and then confirms the outcome by re-reading the request status.
+// ReleaseTransport releases a transport request or task, then confirms the
+// outcome by re-reading the request status.
 //
-// The plain ReleaseTransport reports success whenever the release endpoint
-// returns 2xx and its release report carries no error — but some systems
-// (notably ECC) return 200 while leaving the request modifiable. This method
-// detects that by checking the post-release status: a request still in the
-// modifiable ("D") state is reported as Released=false (with a nil error) so
-// callers can fall back to another release mechanism. A genuine release error
-// is returned unchanged.
+// If the request has unreleased tasks, it returns an error listing them.
+//
+// The release endpoint reports success whenever it returns 2xx and its
+// release report carries no error — but some systems (notably ECC) return
+// 200 while leaving the request modifiable. This method detects that by
+// checking the post-release status: a request still in the modifiable ("D")
+// state is reported as Released=false (with a nil error) so callers can fall
+// back to another release mechanism. A genuine release error is returned
+// unchanged.
 //
 // If the post-release status read fails, the release is assumed to have
 // succeeded (Released=true) — the optimistic behavior callers had before
-// verification existed.
-func (c *httpClient) ReleaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error) {
-	var err error
-	if includeTasks {
-		err = c.ReleaseTransportWithTasks(ctx, transportNumber)
-	} else {
-		err = c.ReleaseTransport(ctx, transportNumber)
-	}
-	if err != nil {
+// verification existed. This mirrors ActivateObjects (adt/activate.go).
+func (c *httpClient) ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
+	return c.releaseTransportVerified(ctx, transportNumber, false)
+}
+
+// ReleaseTransportWithTasks releases a transport request including all its
+// tasks, then verifies the outcome exactly as ReleaseTransport does. Each
+// task is released first, then the request itself.
+func (c *httpClient) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
+	return c.releaseTransportVerified(ctx, transportNumber, true)
+}
+
+func (c *httpClient) releaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error) {
+	if err := c.releaseTransport(ctx, transportNumber, includeTasks); err != nil {
 		return nil, err
 	}
 

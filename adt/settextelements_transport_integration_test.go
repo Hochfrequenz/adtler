@@ -45,7 +45,7 @@ func TestSetTextElements_WithTransport_MultiSystem(t *testing.T) {
 			}
 			t.Logf("[%s] created transport %s", sys.Name, transport)
 			t.Cleanup(func() {
-				if err := sys.Client.ReleaseTransportWithTasks(context.Background(), transport); err != nil {
+				if _, err := sys.Client.ReleaseTransportWithTasks(context.Background(), transport); err != nil {
 					t.Logf("[%s] release transport %s: %v (manual cleanup may be needed)", sys.Name, transport, err)
 				}
 			})

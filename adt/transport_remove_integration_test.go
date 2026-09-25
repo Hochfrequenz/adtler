@@ -62,7 +62,7 @@ func TestRemoveFromTransport_Integration(t *testing.T) {
 			}
 			t.Logf("[1] created transport: %s", trNumber)
 			t.Cleanup(func() {
-				if err := sys.Client.ReleaseTransportWithTasks(context.Background(), trNumber); err != nil {
+				if _, err := sys.Client.ReleaseTransportWithTasks(context.Background(), trNumber); err != nil {
 					t.Logf("[cleanup] release transport %s: %v (manual cleanup may be needed)", trNumber, err)
 				} else {
 					t.Logf("[cleanup] released transport %s", trNumber)

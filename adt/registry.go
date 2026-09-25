@@ -152,7 +152,7 @@ func (r *ClientRegistry) CreateTransportTask(ctx context.Context, parentTranspor
 func (r *ClientRegistry) DeleteTransport(ctx context.Context, transportNumber string) error {
 	return r.activeClient().DeleteTransport(ctx, transportNumber)
 }
-func (r *ClientRegistry) ReleaseTransport(ctx context.Context, transportNumber string) error {
+func (r *ClientRegistry) ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return r.activeClient().ReleaseTransport(ctx, transportNumber)
 }
 func (r *ClientRegistry) GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error) {
@@ -179,11 +179,8 @@ func (r *ClientRegistry) AddToTransport(ctx context.Context, objectURI, transpor
 func (r *ClientRegistry) RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error {
 	return r.activeClient().RemoveFromTransport(ctx, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position)
 }
-func (r *ClientRegistry) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) error {
+func (r *ClientRegistry) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return r.activeClient().ReleaseTransportWithTasks(ctx, transportNumber)
-}
-func (r *ClientRegistry) ReleaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error) {
-	return r.activeClient().ReleaseTransportVerified(ctx, transportNumber, includeTasks)
 }
 func (r *ClientRegistry) RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error) {
 	return r.activeClient().RollbackTransport(ctx, transportNumber)

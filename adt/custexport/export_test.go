@@ -139,16 +139,13 @@ func (m *mockClient) CreateTransportTask(context.Context, string, string, string
 func (m *mockClient) DeleteTransport(context.Context, string) error {
 	panic("not implemented")
 }
-func (m *mockClient) ReleaseTransport(context.Context, string) error {
-	panic("not implemented")
-}
-func (m *mockClient) ReleaseTransportVerified(context.Context, string, bool) (*adt.ReleaseResult, error) {
+func (m *mockClient) ReleaseTransport(context.Context, string) (*adt.ReleaseResult, error) {
 	panic("not implemented")
 }
 func (m *mockClient) RollbackTransport(context.Context, string) (*adt.RollbackResult, error) {
 	panic("not implemented")
 }
-func (m *mockClient) ReleaseTransportWithTasks(context.Context, string) error {
+func (m *mockClient) ReleaseTransportWithTasks(context.Context, string) (*adt.ReleaseResult, error) {
 	panic("not implemented")
 }
 func (m *mockClient) GetTransportTasks(context.Context, string) ([]string, error) {

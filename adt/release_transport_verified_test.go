@@ -11,10 +11,10 @@ import (
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
-// releaseVerifiedServer mocks a synchronous release followed by a status read.
+// releaseTransportServer mocks a synchronous release followed by a status read.
 // postReleaseStatus is the tm:status attribute returned by the status GET; pass
 // "" to make the status read fail (no <request> element).
-func releaseVerifiedServer(t *testing.T, transport, postReleaseStatus string) *httptest.Server {
+func releaseTransportServer(t *testing.T, transport, postReleaseStatus string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -43,7 +43,7 @@ func releaseVerifiedServer(t *testing.T, transport, postReleaseStatus string) *h
 	}))
 }
 
-func TestReleaseTransportVerified(t *testing.T) {
+func TestReleaseTransport_Verified(t *testing.T) {
 	cases := []struct {
 		name              string
 		postReleaseStatus string
@@ -56,13 +56,13 @@ func TestReleaseTransportVerified(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			const transport = "DEVK900123"
-			srv := releaseVerifiedServer(t, transport, tc.postReleaseStatus)
+			srv := releaseTransportServer(t, transport, tc.postReleaseStatus)
 			defer srv.Close()
 
 			cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 			client := adt.NewClient(cfg)
 
-			res, err := client.ReleaseTransportVerified(context.Background(), transport, false)
+			res, err := client.ReleaseTransport(context.Background(), transport)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -76,21 +76,21 @@ func TestReleaseTransportVerified(t *testing.T) {
 	}
 }
 
-// TestReleaseTransportVerified_ECCWorklistStatusRead_ReportsModifiable is the
+// TestReleaseTransport_ECCWorklistStatusRead_ReportsModifiable is the
 // regression guard for aibap.mcp#496: on ECC the post-release status read
 // (GetTransportInfo) does not come back as a Format 1 single-request body —
 // it comes back as the whole transport-organizer worklist (eccWorklistXML),
 // nesting requests under <tm:workbench>/<tm:modifiable>. Before Task 5,
 // parseTransportInfo only bound a request as a direct child of the root, so
 // it never found DEVK902952 in that shape and GetTransportInfo always
-// errored on ECC; ReleaseTransportVerified treats a failed status read as
-// "assume released" (see its doc comment), so the silent-failure detection
-// this method exists for never fired on the one system it targets. With
+// errored on ECC; ReleaseTransport treats a failed status read as "assume
+// released" (see its doc comment), so the silent-failure detection this
+// method exists for never fired on the one system it targets. With
 // parseTransportInfo fixed, the status read succeeds, finds DEVK902952 still
 // at status "D" (modifiable — see eccWorklistXML), and this test asserts the
 // caller now gets Released: false instead of the false-positive Released:
 // true.
-func TestReleaseTransportVerified_ECCWorklistStatusRead_ReportsModifiable(t *testing.T) {
+func TestReleaseTransport_ECCWorklistStatusRead_ReportsModifiable(t *testing.T) {
 	const transport = "DEVK902952"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -118,7 +118,7 @@ func TestReleaseTransportVerified_ECCWorklistStatusRead_ReportsModifiable(t *tes
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	res, err := client.ReleaseTransportVerified(context.Background(), transport, false)
+	res, err := client.ReleaseTransport(context.Background(), transport)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestReleaseTransportVerified_ECCWorklistStatusRead_ReportsModifiable(t *tes
 	}
 }
 
-func TestReleaseTransportVerified_ReleaseErrorPropagates(t *testing.T) {
+func TestReleaseTransport_ReleaseErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
@@ -147,7 +147,7 @@ func TestReleaseTransportVerified_ReleaseErrorPropagates(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	res, err := client.ReleaseTransportVerified(context.Background(), "DEVK900123", false)
+	res, err := client.ReleaseTransport(context.Background(), "DEVK900123")
 	if err == nil {
 		t.Fatalf("expected error, got result %+v", res)
 	}

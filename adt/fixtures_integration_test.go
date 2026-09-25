@@ -132,7 +132,7 @@ func TestMain(m *testing.M) {
 		}
 		// Release transport including tasks (test cleanup).
 		if transport != "" {
-			if err := client.ReleaseTransportWithTasks(ctx, transport); err != nil {
+			if _, err := client.ReleaseTransportWithTasks(ctx, transport); err != nil {
 				fmt.Printf("  [transport release failed] %s: %v\n", transport, err)
 			} else {
 				fmt.Printf("  [transport released] %s\n", transport)

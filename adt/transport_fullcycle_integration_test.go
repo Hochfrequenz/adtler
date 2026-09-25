@@ -65,7 +65,7 @@ func TestReleaseTransport_Integration(t *testing.T) {
 	}
 	t.Logf("created transport: %s", trNumber)
 
-	err = client.ReleaseTransportWithTasks(ctx, trNumber)
+	_, err = client.ReleaseTransportWithTasks(ctx, trNumber)
 	if err != nil {
 		t.Fatalf("ReleaseTransportWithTasks failed: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestAddToTransport_Integration(t *testing.T) {
 		t.Fatalf("CreateTransport: %v", err)
 	}
 	t.Logf("created transport: %s", trNumber)
-	t.Cleanup(func() { _ = client.ReleaseTransportWithTasks(context.Background(), trNumber) })
+	t.Cleanup(func() { _, _ = client.ReleaseTransportWithTasks(context.Background(), trNumber) })
 
 	const objName = "Z_ADT_MCP_TR_ADD_TST"
 	objectURI := "/sap/bc/adt/programs/programs/" + objName
@@ -182,7 +182,7 @@ func TestTransportFullCycle_Integration(t *testing.T) {
 	err = client.CreateObject(ctx, "PROG", objName, testPackage, "Full cycle test", trNumber)
 	if err != nil {
 		if _, infoErr := client.GetObjectInfo(ctx, objectURI); infoErr != nil {
-			_ = client.ReleaseTransportWithTasks(ctx, trNumber)
+			_, _ = client.ReleaseTransportWithTasks(ctx, trNumber)
 			t.Fatalf("CreateObject failed and object does not exist: %v", err)
 		}
 		// Object exists from a previous aborted run. It may be locked in
@@ -296,7 +296,7 @@ func TestTransportFullCycle_Integration(t *testing.T) {
 	}
 
 	// 7. Release the transport and verify status
-	err = client.ReleaseTransportWithTasks(ctx, trNumber)
+	_, err = client.ReleaseTransportWithTasks(ctx, trNumber)
 	if err != nil {
 		t.Logf("[7] release failed: %v", err)
 		return
