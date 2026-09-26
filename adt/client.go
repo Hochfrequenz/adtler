@@ -127,9 +127,8 @@ type TransportClient interface {
 	CreateTransport(ctx context.Context, category, target, description, devClass string) (string, error)
 	CreateTransportTask(ctx context.Context, parentTransport, owner, description string) (string, error)
 	DeleteTransport(ctx context.Context, transportNumber string) error
-	ReleaseTransport(ctx context.Context, transportNumber string) error
-	ReleaseTransportWithTasks(ctx context.Context, transportNumber string) error
-	ReleaseTransportVerified(ctx context.Context, transportNumber string, includeTasks bool) (*ReleaseResult, error)
+	ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error)
+	ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error)
 	RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error)
 	GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error)
 	AddToTransport(ctx context.Context, objectURI, transport string) error

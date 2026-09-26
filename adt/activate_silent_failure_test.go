@@ -131,8 +131,8 @@ func TestActivateObjects_EmptyBodyButActuallyActive(t *testing.T) {
 	}
 }
 
-// TestActivateObjects_InactiveObjectsReadFails mirrors
-// ReleaseTransportVerified's optimistic fallback: if the post-activation
+// TestActivateObjects_InactiveObjectsReadFails mirrors ReleaseTransport's
+// optimistic fallback: if the post-activation
 // verification read itself fails, assume the (unverified) result stands
 // rather than turning a transport-layer hiccup into a false failure.
 func TestActivateObjects_InactiveObjectsReadFails(t *testing.T) {

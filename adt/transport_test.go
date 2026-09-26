@@ -418,7 +418,7 @@ func TestReleaseTransportAsync(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClientWithPollInterval(cfg, 10*time.Millisecond)
 
-	err := client.ReleaseTransport(context.Background(), "DEVK900123")
+	_, err := client.ReleaseTransport(context.Background(), "DEVK900123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -479,8 +479,11 @@ func TestDeleteAndReleaseTransport(t *testing.T) {
 			wantPath:   "/sap/bc/adt/cts/transportrequests/DEVK900123",
 		},
 		{
-			name:       "release",
-			call:       func(c adt.Client) error { return c.ReleaseTransport(context.Background(), "DEVK900123") },
+			name: "release",
+			call: func(c adt.Client) error {
+				_, err := c.ReleaseTransport(context.Background(), "DEVK900123")
+				return err
+			},
 			wantMethod: http.MethodPost,
 			wantPath:   "/sap/bc/adt/cts/transportrequests/DEVK900123/newreleasejobs",
 		},
@@ -495,8 +498,13 @@ func TestDeleteAndReleaseTransport(t *testing.T) {
 					w.WriteHeader(http.StatusOK)
 					return
 				}
-				gotPath = r.URL.Path
-				gotMethod = r.Method
+				// ReleaseTransport also issues a post-release status GET to
+				// verify the release stuck; only record the call under test,
+				// not that follow-up read, so it doesn't clobber gotPath/gotMethod.
+				if r.Method == tt.wantMethod && r.URL.Path == tt.wantPath {
+					gotPath = r.URL.Path
+					gotMethod = r.Method
+				}
 				w.WriteHeader(http.StatusOK)
 			}))
 			defer srv.Close()

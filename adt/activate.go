@@ -20,7 +20,7 @@ import (
 // inactive-objects list and overrides Success to false — with a synthesized
 // message — if a requested object is still listed there.
 //
-// This mirrors ReleaseTransportVerified (adt/transport.go): if the
+// This mirrors ReleaseTransport (adt/transport.go): if the
 // activation body already carries an explicit error, verification is
 // skipped (nothing more to learn). If the verification read itself fails,
 // the unverified (optimistic) result is returned unchanged rather than
