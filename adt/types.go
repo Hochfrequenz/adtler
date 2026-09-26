@@ -384,9 +384,10 @@ func isCurrentlyEditing(err error) bool {
 // ExceptionParameterNotFound is overloaded: the same Type covers an entirely
 // unrelated missing "corrNr" (transport) parameter (#378 finding 1), where a
 // query-param retry would not fix anything and would mask the real error.
-// adtler does not yet expose SAP's structured T100KEY properties that would
-// let this match structurally (see #378's ADTError.Properties follow-up), so
-// this checks the literal English parameter name in the message — the same
+// ADTError.Properties/T100KeyID/T100KeyNo now expose SAP's structured T100KEY
+// (see #56), but which parameter name a T100KEY-Vn placeholder names for
+// this Type has not been confirmed against a live system, so this still
+// checks the literal English parameter name in the message — the same
 // last-resort, documented trade-off as LockingTransport's message scraping.
 // Case-insensitive: SAP's own message casing for this parameter name isn't
 // guaranteed stable across releases/locales the way the Type string is.

@@ -40,8 +40,11 @@ func TestADTError_EnqueueLockProperties_MultiSystem(t *testing.T) {
 				}
 			}()
 
-			_, err = contender.LockObject(ctx, testReportURI)
+			contenderHandle, err := contender.LockObject(ctx, testReportURI)
 			if err == nil {
+				// Unexpected on both systems, but if the collision doesn't
+				// materialize, don't leave a second lock behind.
+				_ = contender.UnlockObject(context.Background(), testReportURI, contenderHandle)
 				t.Fatalf("[%s] expected second-session LockObject to fail while the first session holds the lock", sys.Name)
 			}
 
