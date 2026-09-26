@@ -23,9 +23,9 @@ Every fix or feature follows this cycle.
 - Implement the fix with unit tests (httptest mocks for ADT endpoints)
 - Add a multi-system integration test using `eachSystem(t)` — the test must exercise the bug's exact failure path against both R/3 and S/4
 - Run `go test ./...`, `go build -tags integration ./adt/...`, `go vet -tags integration ./adt/...`
-- Commit, push, open PR linking the adtler issue AND the mcp-server-abap consumer issue, add the `needs:integration-test` label
-  - Link the adtler issue with a closing keyword (`Closes #N`) — this PR is what resolves it.
-  - Link the consumer issue as `Related: aibap.mcp#N` — never `Closes`, `Fixes`, or `Resolves`. A cross-repo closing keyword fires the moment *this* PR merges, not when aibap.mcp actually consumes the fix by bumping its adtler dependency. Closing the consumer issue is aibap.mcp's own responsibility, done in the PR that performs that bump (see aibap.mcp's CLAUDE.md, "Cross-Repo Issue Tracking (adtler)"). Getting this wrong shows a bug as fixed on the consumer's tracker while the shipped binary still has it (#138).
+- Commit, push, open PR linking the adtler issue AND the aibap.mcp (mcp-server-abap) consumer issue, add the `needs:integration-test` label
+  - Link the adtler issue with a closing keyword (`Closes #N`) when this PR fully resolves it.
+  - Link the consumer issue as `Related: Hochfrequenz/aibap.mcp#N` — the owner-qualified form, or it won't autolink at all — and never as `Closes`, `Fixes`, or `Resolves`. A cross-repo closing keyword fires the moment *this* PR merges, not when aibap.mcp actually consumes the fix by bumping its adtler dependency. Closing the consumer issue is aibap.mcp's own responsibility, done in the PR that performs that bump (see aibap.mcp's CLAUDE.md, "Cross-Repo Issue Tracking (adtler)"). Getting this wrong shows a bug as fixed on the consumer's tracker while the shipped binary still has it (#138).
   - General principle: never attach a closing keyword to an issue that tracks or is tracked by multiple sub-items (a cross-repo pair, an umbrella/tracking issue with a checklist) unless every sub-item is actually resolved at merge time.
 
 #### 2. Independent reviewer agent confirms the code
