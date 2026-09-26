@@ -179,6 +179,24 @@ const (
 	// also check which parameter the message names — see
 	// isLockHandleParameterNotFound.
 	ExceptionTypeParameterNotFound = "ExceptionParameterNotFound"
+	// ExceptionTypeResourceSaveFailure is raised (HTTP 500) when a save
+	// cannot complete. Like ExceptionTypeResourceCreationFailure, it is
+	// overloaded across unrelated causes — IsTransportLocked additionally
+	// requires the structural CTS_WBO_API/020 T100KEY before treating it as a
+	// transport conflict. See aibap.mcp#378.
+	ExceptionTypeResourceSaveFailure = "ExceptionResourceSaveFailure"
+)
+
+// T100 message-key identifiers adtler's predicates match against. A T100 key
+// (id + number) is SAP's stable, language-independent identifier for a
+// specific message variant — the ADT equivalent of an ABAP MSGID/MSGNO pair,
+// carried in ADTError.T100KeyID / T100KeyNo. See aibap.mcp#378 for the live
+// reproducers these were taken from.
+const (
+	t100KeyIDEU              = "EU"          // ExceptionResourceNoAccess "currently editing"
+	t100KeyNoEnqueueLock     = "510"         // EU/510: own- or other-user enqueue collision
+	t100KeyIDCTSWBOAPI       = "CTS_WBO_API" // ExceptionResourceSaveFailure transport conflicts
+	t100KeyNoTransportLocked = "020"         // CTS_WBO_API/020: object locked in another request
 )
 
 // ADTError is returned when SAP ADT responds with an error status.
@@ -195,6 +213,24 @@ type ADTError struct {
 	Namespace  string // e.g. "com.sap.adt" — empty if unknown
 	Type       string // e.g. "ExceptionResourceLocked" — empty if unknown
 	Message    string
+
+	// Properties carries the raw <properties><entry key="…">value</entry>
+	// pairs from a modern <exc:exception> envelope, nil when the body carried
+	// none (legacy envelopes, HTML/plain-text errors, or a modern envelope
+	// with an empty <properties>). ECC bodies are typically sparser than S/4
+	// ones (e.g. only "corrNr", no T100KEY-* at all) — callers must not
+	// assume any key is present.
+	Properties map[string]string
+	// T100KeyID and T100KeyNo are Properties["T100KEY-ID"] /
+	// Properties["T100KEY-NO"] promoted for convenience — SAP's stable,
+	// language-independent identifier for the error variant (e.g. "EU"/"510").
+	// Empty when the body carried no T100KEY.
+	T100KeyID string
+	T100KeyNo string
+	// T100Vars are Properties["T100KEY-V1"] through "T100KEY-V4" promoted for
+	// convenience — placeholder substitutions (user names, object names,
+	// transport numbers, lock handles). An unset placeholder is "".
+	T100Vars [4]string
 }
 
 func (e *ADTError) Error() string {
@@ -245,24 +281,73 @@ func (e *ADTError) LockingTransport() (string, bool) {
 	return "", false
 }
 
+// IsInvalidLockHandle returns true if the error is a 423
+// ExceptionResourceInvalidLockHandle from SAP (aibap.mcp#378 reproducer:
+// SADT_RESOURCE/026). When Type is populated this is a structural check;
+// when Type is empty (legacy <ExceptionText> responses) it falls back to the
+// status-code check that predates the structured envelope support.
+func (e *ADTError) IsInvalidLockHandle() bool {
+	if e.Type != "" {
+		return e.Type == ExceptionTypeResourceInvalidLockHandle
+	}
+	return e.StatusCode == 423
+}
+
+// IsEnqueueLock reports whether the error is SAP's EU/510 "currently
+// editing" enqueue collision (ExceptionResourceNoAccess with T100KEY
+// EU/510) and, if so, returns the user holding the lock and the object name
+// — both promoted from the structured T100KEY-V1/V2 placeholders, never
+// scraped from the localised message. V1 is often the calling user's own
+// stale enqueue rather than a real concurrent editor; callers should compare
+// user against the active session's user before deciding to unlock. See
+// aibap.mcp#378 finding 2.
+func (e *ADTError) IsEnqueueLock() (user string, object string, ok bool) {
+	if e.Type != ExceptionTypeResourceNoAccess {
+		return "", "", false
+	}
+	if e.T100KeyID != t100KeyIDEU || e.T100KeyNo != t100KeyNoEnqueueLock {
+		return "", "", false
+	}
+	return e.T100Vars[0], e.T100Vars[1], true
+}
+
+// IsTransportLocked reports whether the error is SAP's CTS_WBO_API/020
+// transport conflict (ExceptionResourceSaveFailure with that T100KEY) and,
+// if so, returns the blocking transport request and the user who holds it.
+// ExceptionResourceSaveFailure is overloaded across unrelated save failures
+// the same way ExceptionResourceCreationFailure is, so the T100KEY check is
+// required, not optional — Type alone is not enough to know this is a
+// transport conflict.
+//
+// The transport comes from the top-level "corrNr" property, a structured
+// field distinct from LockingTransport's message-regex fallback (which
+// exists because ordinary 409 lock-conflict bodies carry no corrNr at all).
+// Prefer this method when the error is a save failure; fall back to
+// LockingTransport only for 409s where SAP gives no structured field. See
+// aibap.mcp#378 finding 3.
+func (e *ADTError) IsTransportLocked() (corrNr string, owner string, ok bool) {
+	if e.Type != ExceptionTypeResourceSaveFailure {
+		return "", "", false
+	}
+	if e.T100KeyID != t100KeyIDCTSWBOAPI || e.T100KeyNo != t100KeyNoTransportLocked {
+		return "", "", false
+	}
+	return e.Properties["corrNr"], e.T100Vars[3], true
+}
+
 // isInvalidLockHandle returns true if the error is a 423
 // ExceptionResourceInvalidLockHandle from SAP. Used by SetSource to
 // decide whether to retry with a different lock handle delivery
 // mechanism (header vs query param). See adtler#4.
 //
-// When the error carries a populated Type, this is a structural check
-// against ExceptionTypeResourceInvalidLockHandle. When Type is empty
-// (legacy <ExceptionText> responses), the function falls back to the
-// status-code check that predates the structured envelope support.
+// Thin wrapper around ADTError.IsInvalidLockHandle for call sites that only
+// have the generic error, not an already-asserted *ADTError.
 func isInvalidLockHandle(err error) bool {
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
 		return false
 	}
-	if adtErr.Type != "" {
-		return adtErr.Type == ExceptionTypeResourceInvalidLockHandle
-	}
-	return adtErr.StatusCode == 423
+	return adtErr.IsInvalidLockHandle()
 }
 
 // isCurrentlyEditing reports whether err is SAP's "currently editing"
