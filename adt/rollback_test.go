@@ -20,7 +20,7 @@ func TestFindPreTransportVersion(t *testing.T) {
 			{VersionNumber: "2", Transport: "DEVK900100"},
 			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: wantPreTransportURI},
 		}
-		got, err := findPreTransportVersion(versions, "DEVK900100")
+		got, err := findPreTransportVersion(versions, []string{"DEVK900100"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -35,7 +35,7 @@ func TestFindPreTransportVersion(t *testing.T) {
 			{VersionNumber: "2", Transport: "DEVK900100"},
 			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: wantPreTransportURI},
 		}
-		got, err := findPreTransportVersion(versions, "DEVK900100")
+		got, err := findPreTransportVersion(versions, []string{"DEVK900100"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -49,7 +49,7 @@ func TestFindPreTransportVersion(t *testing.T) {
 			{VersionNumber: "2", Transport: "DEVK900001"},
 			{VersionNumber: "1", Transport: "DEVK900000"},
 		}
-		if _, err := findPreTransportVersion(versions, "DEVK900100"); err == nil {
+		if _, err := findPreTransportVersion(versions, []string{"DEVK900100"}); err == nil {
 			t.Error("expected error when transport is absent from history")
 		}
 	})
@@ -58,7 +58,7 @@ func TestFindPreTransportVersion(t *testing.T) {
 		versions := []VersionInfo{
 			{VersionNumber: "1", Transport: "DEVK900100"},
 		}
-		if _, err := findPreTransportVersion(versions, "DEVK900100"); err == nil {
+		if _, err := findPreTransportVersion(versions, []string{"DEVK900100"}); err == nil {
 			t.Error("expected error when there is no version before the transport")
 		}
 	})
@@ -72,7 +72,7 @@ func TestFindPreTransportVersion(t *testing.T) {
 			{VersionNumber: "2", Transport: "DEVK900100"},
 			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: wantPreTransportURI},
 		}
-		got, err := findPreTransportVersion(versions, "devk900100")
+		got, err := findPreTransportVersion(versions, []string{"devk900100"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -86,8 +86,23 @@ func TestFindPreTransportVersion(t *testing.T) {
 			{VersionNumber: "2", Transport: "DEVK900100"},
 			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: ""},
 		}
-		if _, err := findPreTransportVersion(versions, "DEVK900100"); err == nil {
+		if _, err := findPreTransportVersion(versions, []string{"DEVK900100"}); err == nil {
 			t.Error("expected error when the earlier version has no ContentURI")
+		}
+	})
+
+	t.Run("matches task number when request number is absent (S/4 VRSD behaviour)", func(t *testing.T) {
+		// S/4 records the task number (DEVK900101) rather than the request (DEVK900100).
+		versions := []VersionInfo{
+			{VersionNumber: "2", Transport: "DEVK900101"},
+			{VersionNumber: "1", Transport: "DEVK900001", ContentURI: "uri-pre"},
+		}
+		got, err := findPreTransportVersion(versions, []string{"DEVK900100", "DEVK900101"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "uri-pre" {
+			t.Errorf("got %q, want %q", got, "uri-pre")
 		}
 	})
 }

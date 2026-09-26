@@ -42,16 +42,16 @@ var errBlockedWrite = errors.New("transport write blocked inside the integration
 
 // TestRemoveFromTransport_Gate_Integration resolves each configured system's
 // removeobject capability from the system itself — never from its configured
-// name — and asserts the branch that capability selects:
+// name — and asserts the runtime branch that capability currently selects:
 //
 //   - Unsupported: RemoveFromTransport returns an *adt.ADTError of type
 //     adt.ExceptionTypeRemoveObjectUnsupported and issues no request at all.
 //   - Supported: the gate lets the call through, so a PUT is attempted and this
 //     test's own RoundTripper is what stops it.
 //
-// A capability still Unknown after a successful transport read is a failure,
-// not a skip: the gate deliberately fails open on Unknown, so that state would
-// send the very request this test exists to characterise.
+// A capability that remains Unknown after warming is still a meaningful state
+// to test: the gate deliberately fails open there, so this test asserts the
+// same observable branch as Supported (one blocked write attempt).
 func TestRemoveFromTransport_Gate_Integration(t *testing.T) {
 	// Synthetic coordinates — see the SAFETY note above. They only have to
 	// satisfy the library's own transport-number validation.
