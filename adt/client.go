@@ -697,16 +697,37 @@ func parseADTError(statusCode int, body io.Reader) error {
 		Type struct {
 			ID string `xml:"id,attr"`
 		} `xml:"type"`
-		Message string `xml:"message"`
+		Message    string `xml:"message"`
+		Properties struct {
+			Entry []struct {
+				Key   string `xml:"key,attr"`
+				Value string `xml:",chardata"`
+			} `xml:"entry"`
+		} `xml:"properties"`
 	}
 	if err := xml.Unmarshal(data, &excEnv); err == nil && excEnv.Message != "" {
 		if excEnv.XMLName.Space == modernExcNS {
-			return &ADTError{
+			adtErr := &ADTError{
 				StatusCode: statusCode,
 				Namespace:  excEnv.Namespace.ID,
 				Type:       excEnv.Type.ID,
 				Message:    excEnv.Message,
 			}
+			if len(excEnv.Properties.Entry) > 0 {
+				adtErr.Properties = make(map[string]string, len(excEnv.Properties.Entry))
+				for _, entry := range excEnv.Properties.Entry {
+					adtErr.Properties[entry.Key] = entry.Value
+				}
+				adtErr.T100KeyID = adtErr.Properties["T100KEY-ID"]
+				adtErr.T100KeyNo = adtErr.Properties["T100KEY-NO"]
+				adtErr.T100Vars = [4]string{
+					adtErr.Properties["T100KEY-V1"],
+					adtErr.Properties["T100KEY-V2"],
+					adtErr.Properties["T100KEY-V3"],
+					adtErr.Properties["T100KEY-V4"],
+				}
+			}
+			return adtErr
 		}
 		// Old-namespace envelope: extract message only, leave Namespace/Type empty.
 		return &ADTError{StatusCode: statusCode, Message: excEnv.Message}
