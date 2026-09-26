@@ -146,6 +146,71 @@ Both helpers `t.Skip` cleanly when no JSON config is reachable, so
 without SAP credentials configured — the integration tests just don't
 execute.
 
+#### What this client cannot currently undo, and what that costs a test
+
+Some behaviour has no repeatable automated test, because nothing here can undo
+the operation that would prove it. `CreatePackage` is the worked example, and the
+reasoning generalises.
+
+**This client cannot currently delete a package.** `DeleteObject` reads an ETag
+belonging to a different representation than the one SAP compares, so the delete
+comes back `412` ([#150](https://github.com/Hochfrequenz/adtler/issues/150)) —
+an open bug in this library, not a limit of the ADT protocol. Nothing measured
+says a correctly formed delete would fail, and removal through SE80 or SE21 on
+the system works today. Until #150 is fixed, though, a test that created a
+package per run would strand one on every system, on every run, with nothing in
+this client able to clean up after it.
+
+**SAP checks the `Accept` header last.** Measured on SAP S/4HANA on-premise
+(SAP_BASIS 816, S4CORE 109) on 2026-09-21, by issuing the same call with and
+without the header:
+
+| Request | With `Accept` | Without `Accept` |
+|---|---|---|
+| Names an existing package | `ExceptionResourceAlreadyExists` | `ExceptionResourceAlreadyExists` |
+| Empty `adtcore:responsible` | `ExceptionInvalidData` | `ExceptionInvalidData` |
+| Otherwise valid | created | `ExceptionResourceBadRequest` ("Accept header missing") |
+
+Only a request that would otherwise have **succeeded** ever reaches the header
+check. Anything SAP rejects earlier answers identically either way.
+
+Those two facts combine into a trap worth knowing before writing a test here:
+**the only live request that can detect a missing `Accept` header is one that
+creates a package, and this client cannot remove what it creates.** A live guard is
+therefore single-use per system — it works once, on a system where the package
+does not exist yet, and every run after that can only smoke-test. That is
+precisely how [#149](https://github.com/Hochfrequenz/adtler/issues/149) shipped:
+`TestCreatePackage_Integration` falls back on `BrowsePackage` when creation
+fails, its fixture package survived from an earlier run, and so it reported
+success while the call was impossible on S/4. It proved only that a package
+created earlier still existed.
+
+What this repository does instead:
+
+- The durable guard is the **unit test**
+  (`TestCreatePackage_SendsAcceptHeader`), whose fake server reproduces the real
+  rejection and which fails the moment the header is dropped. It runs on every
+  CI run, with no system involved.
+- The **live** test that runs on every sweep
+  (`TestCreatePackage_DuplicateSurfacesAsADTError_MultiSystem_Integration`)
+  names a package that already exists, so it creates nothing. It covers the
+  endpoint, authentication, marshalling and typed error surfacing — and its doc
+  comment states plainly that it cannot catch a missing header, with the
+  measurement above as the reason.
+- `TestCreatePackage_Integration` keeps the one-shot live create, and now rules
+  out `ExceptionResourceBadRequest` before falling back on an existing package,
+  so it can no longer report success for a call SAP refused to process.
+
+**The package endpoint does not exist on ECC.** `/sap/bc/adt/packages` is an S/4
+collection — flavor detection uses its presence as the S/4 marker — so the ECC
+leg of a multi-system package test can only skip. Write such tests with
+`eachSystem(t)` anyway, so they cover S/4 wherever they run and say why they
+skipped elsewhere.
+
+When a test or a manual verification does leave an object behind, name it in the
+commit message and the pull request, so the next developer or agent can pick it
+up rather than rediscover it.
+
 #### Running the heavy regression sweep
 
 Before tagging a release, run integration tests against **both** R/3 and S/4
@@ -157,6 +222,53 @@ SAP_INTEGRATION_SYSTEMS=hfq,s4u go test -tags=integration -v ./adt/...
 
 Where `hfq` and `s4u` are the keys of your R/3 and S/4 entries in
 `systems.json`.
+
+## Reading RAP objects, and what a 406 means
+
+A behavior definition (`BDEF`), a service definition (`SRVD`) and a service
+binding (`SRVB`) can be addressed with `adt.ObjectURI` and read like any other
+object. Their endpoints are not the ones the common ADT documentation suggests;
+these were measured against SAP S/4HANA on-premise (SAP_BASIS 816, S4CORE 109)
+and match the collections the system's own `/sap/bc/adt/discovery` document
+publishes:
+
+| Type | Endpoint | Source |
+|---|---|---|
+| `BDEF` | `/sap/bc/adt/bo/behaviordefinitions` | `…/source/main` returns the whole `.asbdef` |
+| `SRVD` | `/sap/bc/adt/ddic/srvd/sources` | `…/source/main` |
+| `SRVB` | `/sap/bc/adt/businessservices/bindings` | **none** — see below |
+
+Two things follow that are easy to get wrong.
+
+**An ADT 406 means the Accept header is wrong, never that the path is.** ADT
+publishes one media type per object kind and will produce nothing else, so a
+request for the wrong type is refused with *406 Not Acceptable* — which reads
+exactly like a door that is not there. A service binding's URI was recorded as
+a dead end for this reason; the same URI answers `200` when asked with `*/*`.
+`GetObjectInfo` and `FetchETag` therefore make their specific offer first and,
+on a 406 only, ask once more with `*/*`. That keeps object kinds this client
+has no catalogue entry for readable — enhancement implementations, for one,
+which behave the same way.
+
+**A service binding has no source at all.** It is configuration; its object
+document is the only thing to read, and `…/source/main` is a genuine 404.
+
+Two further measurements worth knowing when handling fetched source:
+
+- **A behavior definition has no `objectstructure`** (404), so there is no
+  includes walk — `…/source/main` returns the complete document for both a
+  managed root and a projection.
+- **Line endings are not uniform.** In one run the two behavior-definition
+  sources came back `LF` while the CDS, class and service-definition sources
+  came back `CRLF`. Anything that compares or hashes fetched source has to cope
+  with both.
+
+**These three types can be read, but not created.** `CreateObject` refuses them
+before sending anything: the ADT create envelope for them has not been
+measured, and measuring it needs an Eclipse capture of the *New Behavior
+Definition* wizard (adtler#148). The refusal is derived from the absence of a
+request body rather than from a hand-maintained list, so any endpoint added for
+reading is refused for creation until someone writes its create arm.
 
 ## Status
 

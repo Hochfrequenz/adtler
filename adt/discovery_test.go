@@ -146,3 +146,45 @@ func TestAcceptHeaderForURI_FUGRBare(t *testing.T) {
 		t.Errorf("bare FUGR: got %q, want %q", got, want)
 	}
 }
+
+// TestAcceptHeaderForURI_RAPTypes covers the three object kinds adtler#65
+// added. The Accept header is the whole story for a service binding: asking
+// its URI for "application/xml" — which is what the fallback below returns
+// for an unknown prefix — answers 406, and the issue read that 406 as a
+// missing endpoint. The path was right all along.
+//
+// Media types measured against SAP S/4HANA on-premise (SAP_BASIS 816,
+// S4CORE 109) on 2026-09-22, and cross-checked against the app:accept
+// entries the system's own /sap/bc/adt/discovery document publishes for
+// these collections.
+func TestAcceptHeaderForURI_RAPTypes(t *testing.T) {
+	c := &httpClient{}
+	cases := []struct {
+		name string
+		uri  string
+		want string
+	}{
+		{
+			"behavior definition",
+			"/sap/bc/adt/bo/behaviordefinitions/zbd",
+			"application/vnd.sap.adt.blues.v1+xml, application/xml",
+		},
+		{
+			"service definition",
+			"/sap/bc/adt/ddic/srvd/sources/zsd",
+			"application/vnd.sap.adt.ddic.srvd.v1+xml, application/xml",
+		},
+		{
+			"service binding",
+			"/sap/bc/adt/businessservices/bindings/zsb",
+			"application/vnd.sap.adt.businessservices.servicebinding.v2+xml, application/xml",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := c.acceptHeaderForURI(tc.uri); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

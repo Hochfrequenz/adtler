@@ -19,14 +19,35 @@ const (
 	objTypeDDLS = "DDLS"
 )
 
+// Object type constants for the RAP types. These are read-only here: this
+// client can address and read them, but cannot create them (see adtler#148
+// for BDEF). Their endpoints were measured against SAP S/4HANA on-premise
+// (SAP_BASIS 816, S4CORE 109) on 2026-09-22 and match the collections the
+// system's own discovery document publishes. See adtler#65.
+const (
+	objTypeBDEF = "BDEF"
+	objTypeSRVD = "SRVD"
+	objTypeSRVB = "SRVB"
+)
+
 // ObjectTypePackage is the ADT object type code for a package (DEVCLASS),
 // used as the objectType in searches and the type in package creation/browse.
 const ObjectTypePackage = "DEVC/K"
 
-var objectTypeMap = map[string]struct {
+// pkgContentType is the media type the ADT package endpoint speaks. SAP rejects
+// the POST with 400 ExceptionResourceBadRequest ("Accept header missing") when
+// the request carries only a Content-Type, so it is sent as both.
+const pkgContentType = "application/vnd.sap.adt.packages.v2+xml"
+
+// objectTypeInfo is where an object type lives in the ADT REST tree and what
+// ADT calls it. Being in this map makes a type addressable and readable; being
+// creatable additionally needs an arm in marshalCreateBody.
+type objectTypeInfo struct {
 	endpoint string
 	adtType  string
-}{
+}
+
+var objectTypeMap = map[string]objectTypeInfo{
 	"PROG":      {"/sap/bc/adt/programs/programs", "PROG/P"},
 	"CLAS":      {"/sap/bc/adt/oo/classes", "CLAS/OC"},
 	"INTF":      {"/sap/bc/adt/oo/interfaces", "INTF/OI"},
@@ -36,6 +57,9 @@ var objectTypeMap = map[string]struct {
 	objTypeTABL: {"/sap/bc/adt/ddic/tables", "TABL/DT"},
 	objTypeDDLS: {"/sap/bc/adt/ddic/ddl/sources", "DDLS/STOB"},
 	"MSAG":      {"/sap/bc/adt/messageclass", "MSAG/N"},
+	objTypeBDEF: {"/sap/bc/adt/bo/behaviordefinitions", "BDEF/BDO"},
+	objTypeSRVD: {"/sap/bc/adt/ddic/srvd/sources", "SRVD/SRV"},
+	objTypeSRVB: {"/sap/bc/adt/businessservices/bindings", "SRVB/SVB"},
 }
 
 // supportedObjectTypes returns the object-type keys known to objectTypeMap,
@@ -65,12 +89,12 @@ func ObjectURI(objectType, name string) (string, error) {
 	return info.endpoint + "/" + strings.ToLower(name), nil
 }
 
-func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
-	info, ok := objectTypeMap[strings.ToUpper(objectType)]
-	if !ok {
-		return fmt.Errorf("unsupported object type %q, supported: %s", objectType, strings.Join(supportedObjectTypes(), ", "))
-	}
-
+// marshalCreateBody builds the ADT create request body for an object type, or
+// returns a nil body for a type that has no create arm. It is the single
+// source of truth for which types this client can create: both CreateObject's
+// refusal and creatableObjectTypes read their answer from here, so neither can
+// drift from the arms below.
+func marshalCreateBody(objectType, name, packageName, description string, info objectTypeInfo) ([]byte, error) {
 	var body []byte
 	var err error
 	pkgRef := adtxml.PackageRef{Name: packageName}
@@ -121,8 +145,48 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
 		})
 	}
+	return body, err
+}
+
+// creatableObjectTypes returns the object types CreateObject can actually
+// build a request for, sorted. It asks marshalCreateBody rather than consulting
+// a list, so a type added to objectTypeMap for reading never turns up in a
+// message offering it as something to create.
+func creatableObjectTypes() []string {
+	creatable := make([]string, 0, len(objectTypeMap))
+	for objectType, info := range objectTypeMap {
+		if body, err := marshalCreateBody(objectType, "PROBE", "PROBE", "probe", info); err == nil && body != nil {
+			creatable = append(creatable, objectType)
+		}
+	}
+	sort.Strings(creatable)
+	return creatable
+}
+
+func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
+	info, ok := objectTypeMap[strings.ToUpper(objectType)]
+	if !ok {
+		return fmt.Errorf("unsupported object type %q, creatable types: %s", objectType, strings.Join(creatableObjectTypes(), ", "))
+	}
+
+	body, err := marshalCreateBody(objectType, name, packageName, description, info)
 	if err != nil {
 		return fmt.Errorf("CreateObject marshal: %w", err)
+	}
+	// A type can be in objectTypeMap — so ObjectURI can address it and the
+	// read paths work — without the switch above having an arm to build its
+	// create request. BDEF, SRVD and SRVB are exactly that (adtler#65 added
+	// their endpoints for reading). Refuse here rather than POST an empty
+	// body and report back whatever SAP made of it.
+	//
+	// The check reads the marshal result instead of a separate "creatable"
+	// flag on purpose: a flag is a second source of truth that drifts the
+	// first time someone adds an endpoint and forgets to set it, whereas a
+	// nil body is the missing arm itself.
+	if body == nil {
+		return fmt.Errorf("CreateObject: this client cannot create %s objects — it can address and read them, "+
+			"but no ADT create request body for this type has been measured yet (see adtler#148 for the RAP object types)",
+			strings.ToUpper(objectType))
 	}
 
 	// DDIC objects need specific content types on S4
@@ -250,7 +314,7 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 	}
 	resp, err := c.doMutate(ctx, http.MethodPost, path,
 		strings.NewReader(xml.Header+string(body)),
-		map[string]string{"Content-Type": "application/vnd.sap.adt.packages.v2+xml"},
+		map[string]string{"Content-Type": pkgContentType, "Accept": pkgContentType},
 	)
 	if err != nil {
 		return fmt.Errorf("CreatePackage: %w", err)

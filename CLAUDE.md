@@ -127,6 +127,47 @@ CI logs stay clean too.
 Where a test genuinely cannot discover its fixture, take the name from an environment variable
 and skip when it is unset. Do not commit the value.
 
+### A reuse fallback must not swallow a request that never worked
+
+An integration test that falls back on an existing object when creation fails — *"create it, and
+if that errors, carry on with the one already there"* — passes forever once the object exists.
+Where the object cannot be deleted again it always exists after the first run, so the fallback
+becomes permanent. That is how #149 shipped: `CreatePackage` could not work on S/4 at all, and
+`TestCreatePackage_Integration` reported success anyway, because this client cannot currently
+delete a package (#150, open — an ETag bug here, not an ADT limitation) and so the fixture from
+an earlier run was always there to fall back on.
+
+A fallback is legitimate for failures that say *this object is already in the way* — a duplicate,
+a lock, a missing authorization. It is never legitimate for a failure that says *SAP would not
+process this request*: a 400 the server refused to parse, an unacceptable media type, a missing
+header. Rule out that class explicitly, with `errors.As` on `*adt.ADTError` and its `Type`, before
+taking the fallback — the exception ID survives message translation, the text does not.
+
+This is about a **test** falling back on a different object and calling the run a pass. It is not
+in tension with "A 406 is never a missing path" below, which is the **client** re-asking the same
+URI with a different Accept header and reporting exactly what came back. One hides a request SAP
+refused; the other corrects the request and still fails loudly if the second attempt fails.
+
+Where an operation cannot be undone, say so in README.md under "What this client cannot
+currently undo" and in the pull request, rather than leaving the next reader to infer it from a
+test that creates nothing. Say **what** cannot undo it, too: "adtler cannot delete a package
+(#150)" is a bug someone can fix, while "a package cannot be deleted over ADT" reads as a
+permanent property of SAP and quietly discourages anyone from trying.
+
+### A regression test is not one until you have seen it fail
+
+Revert the fix and run the new test. If it still passes, it does not guard the bug, whatever its
+name says — and a test whose name claims a guarantee it does not provide is worse than no test,
+because the next person stops looking. Do this for integration tests especially: they are the ones
+whose failure path depends on the server's order of checks rather than on anything in this
+repository, and that order is not guessable.
+
+#149 is the example. A live test was written to prove S/4 accepts the `Accept` header, by sending
+a request SAP was certain to reject and asserting the rejection was not the header one. Reverting
+the fix showed it passed either way: SAP checks the header **last**, so only a request that would
+otherwise have succeeded ever reaches that check. The measurement is in README.md; the point here
+is that it took forty seconds to find and would never have shown up in review.
+
 ### Exceptions
 
 The one allowed exception is a literal config value a reader has to type or the code has to hold:
@@ -167,11 +208,48 @@ edit.
 R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always test against both. Known differences:
 
 - **Lock handle delivery**: R/3 reads `X-SAP-Lock-Handle` header; S/4 reads `?lockHandle=` query param. `SetSource` retries with query param on 423.
-- **Accept headers**: S/4 is stricter — requires vendor MIME types (e.g. `application/vnd.sap.adt.mc.messageclass+xml`). R/3 often accepts `application/xml`.
+- **Accept headers**: S/4 is stricter — requires vendor MIME types (e.g. `application/vnd.sap.adt.mc.messageclass+xml`). R/3 often accepts `application/xml`. See "A 406 is never a missing path" below.
 - **ESRDIRE enqueue after CreateObject**: S/4 leaves a session-bound enqueue. Workaround: `Logout()` after `CreateObject`.
 - **ETag charset**: SAP embeds the source Content-Type into the ETag, so `GetSource` and the validating PUT must agree on the Accept / Content-Type form. `sourceContentType` (discovery-driven, from #35) prefers `text/plain; charset=utf-8` when discovery advertises it; both sides therefore land on the same ETag form. The earlier 412 retry workaround was removed in #42 once the discovery path covered every supported system.
 - **DDIC endpoints**: DTEL/DOMA/TABL creation via `/sap/bc/adt/ddic/` requires S/4. R/3 returns 404 or 415.
 - **Runtime-load generation vs. session reuse (S/4)**: on S/4, an ADT session that just ran the create → set source → activate lifecycle **cannot generate a class's runtime load** when it then executes the class in that *same* session — classrun's `CREATE OBJECT` soft-fails as `Error: Class does not implement if_oo_adt_classrun~main method!` (issue #106 defect 1), and a changed + re-activated class serves the *stale* previously-generated load (defect 2). A **fresh** session generates the load from the current active source. `RunClass` works around this by running the classrun POST on an isolated single-use session (`freshSession` — own cookie jar + CSRF preflight), never the caller's worn session. R/3 (ECC) regenerates a persistent load on activation, so it is unaffected. **Generalises:** any operation that depends on SAP generating fresh state (a runtime load, etc.) right after a mutating lifecycle may hit this — reach for a fresh session rather than reusing the lifecycle session. Fixed in #106 / v0.3.13.
+
+### A 406 is never a missing path
+
+ADT publishes **one media type per object kind** and produces nothing else, so a
+request naming the wrong type comes back *406 Not Acceptable* — which reads exactly like a
+door that is not there. adtler#65 recorded a service binding as unreachable for this reason
+and went hunting for another URI; the URI had been right all along. Measured on S/4HANA
+(SAP_BASIS 816, S4CORE 109), a service binding, a behavior definition's object document, two
+DDIC tables and both enhancement sub-kinds present all answered 406 to `application/xml` and
+200 to `*/*`.
+
+This does not license a test to paper over a refusal — see "A reuse fallback must not swallow a
+request that never worked" above. The difference is that this fallback changes the *request* and
+still surfaces whatever the second attempt returns, rather than quietly reporting a different
+object as success.
+
+So: **on a 406, fix the offer, not the path.** `readWithAcceptFallback` (adt/repository.go)
+makes the specific offer first and retries once with `*/*` on a 406 only; `GetObjectInfo` and
+`FetchETag` go through it. Do not ask for `*/*` up front — that changes what the server
+returns for the kinds that already work — and do not retry any other status, because a 404 is
+a missing resource and a wider Accept header cannot conjure one.
+
+The authority for an endpoint's media type is the system itself: `GET /sap/bc/adt/discovery`
+publishes every collection with its `app:accept` entries. It is one ~400 KB line, so grep it
+rather than read it. Prefer it over ADT documentation, which is where adtler#65's wrong paths
+came from.
+
+### Read-only object types
+
+`objectTypeMap` (adt/object.go) serves both `ObjectURI` and `CreateObject`, but an entry only
+needs an endpoint to be *readable*. BDEF, SRVD and SRVB are in the map with no create arm in
+`CreateObject`'s marshal switch, and `CreateObject` refuses a type whose body came back nil.
+
+Keep that shape when adding an endpoint: the refusal is derived from the missing arm itself,
+never from a separate `creatable` flag, because a flag is a second source of truth that drifts
+the first time someone forgets to set it. Without the check, `CreateObject` POSTs an empty body
+and reports whatever SAP makes of it — which is what it did before adtler#65 caught it.
 
 ### ETag resolution
 
