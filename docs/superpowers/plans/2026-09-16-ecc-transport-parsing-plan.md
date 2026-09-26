@@ -450,15 +450,15 @@ the write-path lifecycle test named in Part A's last bullet, which is fenced beh
 - `RemoveFromTransport` returns the typed error from Task 7 on a system whose capability the
   client has already reported as `RemoveObjectSupportUnsupported`. The branch is driven by
   that capability, never by a configured system name, so a third system gets classified
-  rather than mis-assumed. The call is skipped where the capability is `Supported` or
-  `Unknown`, because only the confirmed-unsupported state guarantees the gate returns before
-  the PUT. The object coordinates passed are synthetic — nothing is sent, so no live object
-  needs to exist. See `transport_removeobject_gate_integration_test.go`, which stays
-  read-only and therefore keeps the plain `integration` build tag. The write-path lifecycle
-  (create transport → create program → remove → verify) lives in
-  `transport_remove_integration_test.go` behind `integration && transport`; it asserts the
-  same typed error on the unsupported system and a real removal on the supported one, again
-  branching on the reported capability.
+  rather than mis-assumed. Where the capability is `Supported` **or** still `Unknown`, the
+  integration test asserts the gate's fail-open branch instead: one write attempt reaches the
+  test's blocking RoundTripper and is stopped there. The object coordinates passed are
+  synthetic — nothing is sent, so no live object needs to exist. See
+  `transport_removeobject_gate_integration_test.go`, which stays read-only and therefore
+  keeps the plain `integration` build tag. The write-path lifecycle (create transport →
+  create program → remove → verify) lives in `transport_remove_integration_test.go` behind
+  `integration && transport`; it asserts the same typed error on the unsupported system and
+  a real removal on the supported one, again branching on the reported capability.
 
 Record the output in the task report.
 

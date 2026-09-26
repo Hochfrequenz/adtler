@@ -25,7 +25,10 @@ import (
 // for CLAS on S/4, 404 for DTEL/DOMA). See adtler#9, adtler#14.
 func (c *httpClient) FetchETag(ctx context.Context, objectURI string) (string, error) {
 	accept := c.acceptHeaderForURI(objectURI)
-	resp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
+	// Retries once with */* if ADT refuses the offer with 406 — the object
+	// kinds that have no /source/main, which is exactly why FetchETag
+	// exists, are the ones most likely to answer 406. See adtler#65.
+	resp, err := c.readWithAcceptFallback(ctx, objectURI, accept)
 	if err != nil {
 		return "", fmt.Errorf("FetchETag: %w", err)
 	}
