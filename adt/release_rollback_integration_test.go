@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )
@@ -129,14 +130,48 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[2] ReleaseTransportVerified T1: %v", err)
 	}
-	if !releaseResult.Released {
-		// ECC's silent-release-failure (documented on ReleaseTransportVerified in
-		// transport.go). The object still needs freeing from T1 for Phase 3, so
-		// try RemoveFromTransport as a second ADT-only path before giving up.
+	t1Free := releaseResult.Released
+	if t1Free {
+		t.Logf("[2] T1 released")
+	}
+
+	// ECC's silent-release-failure (documented on ReleaseTransportVerified in
+	// transport.go): release itself is not impossible on this system, just not
+	// reachable via ADT. Give a manual release (e.g. via SE09) a window to land
+	// before falling back further — matching the poll pattern
+	// TestReleaseTransport_Integration already uses for background-job
+	// completion, just wider, since a human has to act within it.
+	const manualReleasePollInterval = 10 * time.Second
+	const manualReleasePollAttempts = 6 // ~60s
+	for i := 0; !t1Free && i < manualReleasePollAttempts; i++ {
+		t.Logf("[2] T1 (%s) still modifiable after ADT release — release it manually now if you want Phase 3/4 to run for real; polling for up to %s", t1, manualReleasePollInterval*manualReleasePollAttempts)
+		time.Sleep(manualReleasePollInterval)
+		info, infoErr := client.GetTransportInfo(ctx, t1)
+		if infoErr != nil {
+			continue
+		}
+		// Require a terminal released status specifically — this system has an
+		// intermediate non-modifiable state ("O", release started/cofile export
+		// in progress) where the object is still locked, so "!= D" alone is not
+		// enough to prove Phase 3 can proceed. "R" is this system's actual
+		// terminal status (observed live); TestReleaseTransport_Integration
+		// already treats "L" or "R" as released for the same reason.
+		if info.Status == adt.TransportStatusReleased || info.Status == "R" {
+			t1Free = true
+			t.Logf("[2] T1 released (manually, observed after %d poll(s), status=%q)", i+1, info.Status)
+		} else {
+			t.Logf("[2] T1 status=%q (not yet released), continuing to poll", info.Status)
+		}
+	}
+
+	if !t1Free {
+		// The object still needs freeing from T1 for Phase 3, so try
+		// RemoveFromTransport as the only other ADT-only path before giving up.
 		// This is not the #149 fallback-swallows-a-never-worked-request pattern:
-		// we only reach here after a positive, typed signal (Released == false)
-		// that release genuinely didn't happen, and if RemoveFromTransport also
-		// can't run, we t.Skip — visibly, not a silent pass.
+		// we only reach here after a positive, typed signal (Released == false,
+		// confirmed by polling) that release genuinely didn't happen, and if
+		// RemoveFromTransport also can't run, we t.Skip — visibly, not a silent
+		// pass.
 		tasks, taskErr := client.GetTransportTasks(ctx, t1)
 		if taskErr != nil {
 			t.Fatalf("[2] T1 (%s) still modifiable after release, and GetTransportTasks failed: %v", t1, taskErr)
@@ -154,13 +189,11 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		if !removed {
 			var adtErr *adt.ADTError
 			if errors.As(lastErr, &adtErr) && adtErr.Type == adt.ExceptionTypeRemoveObjectUnsupported {
-				t.Skipf("[2] T1 (%s) still modifiable after release (ECC silent-release-failure), and this system's ADT predates the remove-object operation (AS ABAP 7.53 SP00 / ABAP Platform 1809) — neither ADT-only path can free %s from T1 on this system. Release T1 manually (SE09) and rerun, or run against a newer system.", t1, objName)
+				t.Skipf("[2] T1 (%s) still modifiable after release (ECC silent-release-failure), and this system's ADT predates the remove-object operation (AS ABAP 7.53 SP00 / ABAP Platform 1809) — neither ADT-only path can free %s from T1 on this system, and no manual release landed within the poll window. Release T1 manually (SE09) and rerun, or run against a newer system.", t1, objName)
 			}
 			t.Fatalf("[2] T1 (%s) still modifiable after release, and RemoveFromTransport could not free %s: %v", t1, objName, lastErr)
 		}
 		t.Logf("[2] T1 still modifiable, but %s freed from it via RemoveFromTransport", objName)
-	} else {
-		t.Logf("[2] T1 released")
 	}
 	// On S/4, ReleaseTransportWithTasks leaves a session-bound lock on the transport
 	// organizer. Logout clears it so the next CreateTransport can proceed.
