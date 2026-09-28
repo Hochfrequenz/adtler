@@ -168,3 +168,18 @@ func TestCrossOriginRedirectHintsAtHTTPS(t *testing.T) {
 		t.Fatalf("want the HTTPS hint, got %v", err)
 	}
 }
+
+// TestCrossOriginOnLastHopReportsSentinel: when the redirect that reaches
+// the hop limit is also cross-origin, the sentinel is reported, not the
+// generic limit error.
+func TestCrossOriginOnLastHopReportsSentinel(t *testing.T) {
+	var via []*http.Request
+	for i := 0; i < maxRedirects; i++ {
+		r, _ := http.NewRequest(http.MethodGet, "http://sap.example:8000/x", nil)
+		via = append(via, r)
+	}
+	next, _ := http.NewRequest(http.MethodGet, "http://elsewhere.example:8000/x", nil)
+	if err := sameOriginRedirect(next, via); !errors.Is(err, ErrCrossOriginRedirect) {
+		t.Fatalf("want ErrCrossOriginRedirect, got %v", err)
+	}
+}

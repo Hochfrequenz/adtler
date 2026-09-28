@@ -30,9 +30,8 @@ const maxRedirects = 10
 // Hosts compare case-insensitively; an explicit default port still counts
 // as a different host (fail closed).
 func sameOriginRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return fmt.Errorf("adt: stopped after %d redirects", maxRedirects)
-	}
+	// Origin first, so a cross-origin redirect reports the sentinel even
+	// when it is also the hop that reaches the limit.
 	origin := via[0].URL
 	if req.URL.Scheme != origin.Scheme || !strings.EqualFold(req.URL.Host, origin.Host) {
 		hint := ""
@@ -41,6 +40,9 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 		}
 		return fmt.Errorf("%w: %s://%s redirected to %s://%s%s",
 			ErrCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host, hint)
+	}
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("adt: stopped after %d redirects", maxRedirects)
 	}
 	return nil
 }
