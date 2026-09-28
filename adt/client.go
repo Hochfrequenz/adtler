@@ -220,14 +220,16 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 	return &httpClient{
 		cfg: cfg,
 		http: &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: transport,
-			Jar:       jar,
+			Timeout:       30 * time.Second,
+			Transport:     transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		httpLong: &http.Client{
-			Timeout:   0, // no timeout; caller controls via context deadline
-			Transport: transport,
-			Jar:       jar,
+			Timeout:       0, // no timeout; caller controls via context deadline
+			Transport:     transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		pollInterval: pollInterval,
 	}
@@ -257,14 +259,16 @@ func (c *httpClient) freshSession() *httpClient {
 	return &httpClient{
 		cfg: c.cfg,
 		http: &http.Client{
-			Timeout:   c.http.Timeout,
-			Transport: c.http.Transport,
-			Jar:       jar,
+			Timeout:       c.http.Timeout,
+			Transport:     c.http.Transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		httpLong: &http.Client{
-			Timeout:   c.httpLong.Timeout,
-			Transport: c.httpLong.Transport,
-			Jar:       jar,
+			Timeout:       c.httpLong.Timeout,
+			Transport:     c.httpLong.Transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		accessToken:    c.accessToken,
 		onTokenRefresh: c.onTokenRefresh,
@@ -284,14 +288,16 @@ func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefres
 	return &httpClient{
 		cfg: cfg,
 		http: &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: transport,
-			Jar:       jar,
+			Timeout:       30 * time.Second,
+			Transport:     transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		httpLong: &http.Client{
-			Timeout:   0, // no timeout; caller controls via context deadline
-			Transport: transport,
-			Jar:       jar,
+			Timeout:       0, // no timeout; caller controls via context deadline
+			Transport:     transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		accessToken:    accessToken,
 		onTokenRefresh: onRefresh,
@@ -323,14 +329,16 @@ func NewClientWithTransportAndPollInterval(cfg sapmcpconfig.SAPSystem, transport
 	return &httpClient{
 		cfg: cfg,
 		http: &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: transport,
-			Jar:       jar,
+			Timeout:       30 * time.Second,
+			Transport:     transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		httpLong: &http.Client{
-			Timeout:   0, // no timeout; caller controls via context deadline
-			Transport: transport,
-			Jar:       jar,
+			Timeout:       0, // no timeout; caller controls via context deadline
+			Transport:     transport,
+			Jar:           jar,
+			CheckRedirect: sameOriginRedirect,
 		},
 		pollInterval: pollInterval,
 	}
