@@ -122,3 +122,49 @@ func TestSameOriginRedirectIsFollowed(t *testing.T) {
 		})
 	}
 }
+
+// TestRedirectPolicyOnBothClients: http and httpLong both carry the policy;
+// a hostname-only change (same port) is refused; host case is ignored.
+func TestRedirectPolicyOnBothClients(t *testing.T) {
+	sap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cross":
+			http.Redirect(w, r, strings.Replace("http://"+r.Host, "localhost", "127.0.0.1", 1)+"/ok", http.StatusFound)
+		case "/case":
+			http.Redirect(w, r, "http://"+strings.ToUpper(r.Host)+"/ok", http.StatusFound)
+		default:
+			_, _ = w.Write([]byte("ok"))
+		}
+	}))
+	defer sap.Close()
+	host := strings.Replace(sap.URL, "127.0.0.1", "localhost", 1)
+	for name, c := range redirectClients(host) {
+		for hname, hc := range map[string]*http.Client{"http": c.http, "httpLong": c.httpLong} {
+			t.Run(name+"/"+hname, func(t *testing.T) {
+				resp, err := hc.Get(host + "/cross")
+				if err == nil {
+					_ = resp.Body.Close()
+				}
+				if !errors.Is(err, ErrCrossOriginRedirect) {
+					t.Fatalf("same port, other hostname: want ErrCrossOriginRedirect, got %v", err)
+				}
+				resp, err = hc.Get(host + "/case")
+				if err != nil {
+					t.Fatalf("upper-cased host: want followed, got %v", err)
+				}
+				_ = resp.Body.Close()
+			})
+		}
+	}
+}
+
+// TestCrossOriginRedirectHintsAtHTTPS: an http->https redirect on the same
+// host names the fix in the error.
+func TestCrossOriginRedirectHintsAtHTTPS(t *testing.T) {
+	origin, _ := http.NewRequest(http.MethodGet, "http://sap.example:8000/x", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://sap.example:8443/x", nil)
+	err := sameOriginRedirect(next, []*http.Request{origin})
+	if !errors.Is(err, ErrCrossOriginRedirect) || !strings.Contains(err.Error(), "configure the host as https://sap.example:8443") {
+		t.Fatalf("want the HTTPS hint, got %v", err)
+	}
+}

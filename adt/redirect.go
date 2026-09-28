@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ErrCrossOriginRedirect is returned when the SAP system answers with a
@@ -15,7 +16,8 @@ import (
 // would send them to a host nobody configured. net/http drops
 // Authorization and cookies on a cross-domain redirect, but not what a
 // RoundTripper adds. Redirects that stay on the same scheme and host are
-// still followed. Match it with errors.Is.
+// still followed. Match it with errors.Is; ClassifyError reports it as
+// ErrorUnknown, like any other transport-level error.
 var ErrCrossOriginRedirect = errors.New("adt: redirect to a different scheme or host")
 
 // maxRedirects matches net/http's default limit, which a custom
@@ -33,8 +35,23 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 	}
 	origin := via[0].URL
 	if req.URL.Scheme != origin.Scheme || !strings.EqualFold(req.URL.Host, origin.Host) {
-		return fmt.Errorf("%w: %s://%s redirected to %s://%s",
-			ErrCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
+		hint := ""
+		if origin.Scheme == "http" && req.URL.Scheme == "https" && strings.EqualFold(req.URL.Hostname(), origin.Hostname()) {
+			hint = " (the system enforces HTTPS; configure the host as https://" + req.URL.Host + ")"
+		}
+		return fmt.Errorf("%w: %s://%s redirected to %s://%s%s",
+			ErrCrossOriginRedirect, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host, hint)
 	}
 	return nil
+}
+
+// newShortClient and newLongClient build every http.Client this package
+// uses, so that each one carries sameOriginRedirect by construction.
+// The long client has no timeout; its callers bound it by context.
+func newShortClient(transport http.RoundTripper, jar http.CookieJar, timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: transport, Jar: jar, CheckRedirect: sameOriginRedirect}
+}
+
+func newLongClient(transport http.RoundTripper, jar http.CookieJar) *http.Client {
+	return &http.Client{Transport: transport, Jar: jar, CheckRedirect: sameOriginRedirect}
 }

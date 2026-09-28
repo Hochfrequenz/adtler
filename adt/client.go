@@ -218,19 +218,9 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 		},
 	}
 	return &httpClient{
-		cfg: cfg,
-		http: &http.Client{
-			Timeout:       30 * time.Second,
-			Transport:     transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
-		httpLong: &http.Client{
-			Timeout:       0, // no timeout; caller controls via context deadline
-			Transport:     transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
+		cfg:          cfg,
+		http:         newShortClient(transport, jar, 30*time.Second),
+		httpLong:     newLongClient(transport, jar),
 		pollInterval: pollInterval,
 	}
 }
@@ -257,19 +247,9 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 func (c *httpClient) freshSession() *httpClient {
 	jar, _ := cookiejar.New(nil)
 	return &httpClient{
-		cfg: c.cfg,
-		http: &http.Client{
-			Timeout:       c.http.Timeout,
-			Transport:     c.http.Transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
-		httpLong: &http.Client{
-			Timeout:       c.httpLong.Timeout,
-			Transport:     c.httpLong.Transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
+		cfg:            c.cfg,
+		http:           newShortClient(c.http.Transport, jar, c.http.Timeout),
+		httpLong:       newLongClient(c.httpLong.Transport, jar),
 		accessToken:    c.accessToken,
 		onTokenRefresh: c.onTokenRefresh,
 		pollInterval:   c.pollInterval,
@@ -286,19 +266,9 @@ func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefres
 		},
 	}
 	return &httpClient{
-		cfg: cfg,
-		http: &http.Client{
-			Timeout:       30 * time.Second,
-			Transport:     transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
-		httpLong: &http.Client{
-			Timeout:       0, // no timeout; caller controls via context deadline
-			Transport:     transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
+		cfg:            cfg,
+		http:           newShortClient(transport, jar, 30*time.Second),
+		httpLong:       newLongClient(transport, jar),
 		accessToken:    accessToken,
 		onTokenRefresh: onRefresh,
 	}
@@ -327,19 +297,9 @@ func NewClientWithTransport(cfg sapmcpconfig.SAPSystem, transport http.RoundTrip
 func NewClientWithTransportAndPollInterval(cfg sapmcpconfig.SAPSystem, transport http.RoundTripper, pollInterval time.Duration) Client {
 	jar, _ := cookiejar.New(nil)
 	return &httpClient{
-		cfg: cfg,
-		http: &http.Client{
-			Timeout:       30 * time.Second,
-			Transport:     transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
-		httpLong: &http.Client{
-			Timeout:       0, // no timeout; caller controls via context deadline
-			Transport:     transport,
-			Jar:           jar,
-			CheckRedirect: sameOriginRedirect,
-		},
+		cfg:          cfg,
+		http:         newShortClient(transport, jar, 30*time.Second),
+		httpLong:     newLongClient(transport, jar),
 		pollInterval: pollInterval,
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -211,5 +212,28 @@ func TestRefreshTokenServerError(t *testing.T) {
 	_, err := RefreshToken(srv.URL, "client", "bad-token", false)
 	if err == nil {
 		t.Fatal("expected error for 400 response, got nil")
+	}
+}
+
+// TestTokenRequestDoesNotFollowRedirect: a token endpoint answering 307
+// must not get its form (here a refresh_token) replayed to the target.
+func TestTokenRequestDoesNotFollowRedirect(t *testing.T) {
+	var targetHits int
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits++
+		_, _ = w.Write([]byte(`{"access_token":"stolen","expires_in":3600}`))
+	}))
+	defer target.Close()
+	sap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer sap.Close()
+
+	_, err := RefreshToken(sap.URL, "client", "secret-refresh-token", false)
+	if !errors.Is(err, errTokenRedirect) {
+		t.Fatalf("want errTokenRedirect, got %v", err)
+	}
+	if targetHits != 0 {
+		t.Fatalf("redirect target received %d token request(s)", targetHits)
 	}
 }
