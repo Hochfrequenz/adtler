@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
@@ -149,5 +150,65 @@ func TestRollbackTransport_SkipsNonRestorable(t *testing.T) {
 	}
 	if reasons["ZTABLE"] != "non-source object type" {
 		t.Errorf("TABL object reason = %q, want %q", reasons["ZTABLE"], "non-source object type")
+	}
+}
+
+func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T) {
+	const (
+		request           = "<request>"
+		task              = "<task>"
+		object            = "/sap/bc/adt/programs/programs/ZTEST"
+		rollbackCSRFRoute = "/sap/bc/adt/discovery"
+	)
+	var corrNr string
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == rollbackCSRFRoute:
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == object+"/source/main/versions":
+			_, _ = w.Write([]byte(`<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><content src="/pre-transport-version"/><link rel="http://www.sap.com/adt/relations/transport" name="&lt;task&gt;"/></entry>
+  <entry><content src="/older-version"/><link rel="http://www.sap.com/adt/relations/transport" name="OLD"/></entry>
+</feed>`))
+		case r.URL.Path == "/older-version":
+			_, _ = w.Write([]byte("REPORT ZTEST.\n"))
+		case r.URL.Path == object && r.URL.Query().Get("_action") == "LOCK":
+			calls = append(calls, "lock")
+			_, _ = w.Write([]byte("lock-handle"))
+		case r.URL.Path == object+"/source/main" && r.Method == http.MethodGet:
+			w.Header().Set("ETag", `"current"`)
+			_, _ = w.Write([]byte("REPORT ZTEST.\nCURRENT."))
+		case r.URL.Path == object+"/source/main" && r.Method == http.MethodPut:
+			calls = append(calls, "set-source")
+			corrNr = r.URL.Query().Get("corrNr")
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == object && r.URL.Query().Get("_action") == "UNLOCK":
+			calls = append(calls, "unlock")
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/sap/bc/adt/activation" && r.Method == http.MethodPost:
+			calls = append(calls, "activate")
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/sap/bc/adt/activation/inactiveobjects":
+			_, _ = w.Write([]byte(`<root/>`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}).(*httpClient)
+	if err := client.rollbackObject(context.Background(), object, []string{request, task}); err != nil {
+		t.Fatalf("rollbackObject: %v", err)
+	}
+	if corrNr != request {
+		t.Errorf("SetSource corrNr = %q, want request number %q", corrNr, request)
+	}
+	wantCalls := []string{"lock", "set-source", "unlock", "activate"}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Errorf("call order = %v, want %v", calls, wantCalls)
 	}
 }
