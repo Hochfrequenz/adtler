@@ -185,6 +185,12 @@ const (
 	// requires the structural CTS_WBO_API/020 T100KEY before treating it as a
 	// transport conflict. See aibap.mcp#378.
 	ExceptionTypeResourceSaveFailure = "ExceptionResourceSaveFailure"
+	// ExceptionTypeAdiFailed is the ADT debugger REST framework's generic
+	// wrapped-exception Type ("AdiFailed"), returned as a 500 for a variety
+	// of caught internal errors with no further detail in the body. Known to
+	// be intermittent for debug_attach and (rarer) debug_step; see
+	// aibap.mcp#513.
+	ExceptionTypeAdiFailed = "AdiFailed"
 )
 
 // T100 message-key identifiers adtler's predicates match against. A T100 key

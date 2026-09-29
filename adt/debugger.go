@@ -226,7 +226,18 @@ func (d *DebugSession) GetDebuggeeSessions(ctx context.Context) ([]byte, error) 
 
 // Attach attaches to an active debuggee session.
 // Uses X-sap-adt-sessiontype: stateful to keep the work process for subsequent calls.
+//
+// Retries on a fast-failing 500 AdiFailed response (see retryOnAdiFailed) —
+// a known-intermittent SAP kernel-side debugger fault documented on
+// aibap.mcp#513.
 func (d *DebugSession) Attach(ctx context.Context, debuggeeID string) error {
+	_, err := retryOnAdiFailed(ctx, func() (struct{}, error) {
+		return struct{}{}, d.attachOnce(ctx, debuggeeID)
+	})
+	return err
+}
+
+func (d *DebugSession) attachOnce(ctx context.Context, debuggeeID string) error {
 	path := fmt.Sprintf("/sap/bc/adt/debugger?method=attach&debuggeeId=%s", debuggeeID)
 	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
 		map[string]string{"Accept": "application/xml", "X-sap-adt-sessiontype": "stateful"})
@@ -268,6 +279,67 @@ func (e *DebuggeeEndedError) Error() string {
 }
 
 func (e *DebuggeeEndedError) Unwrap() error { return e.Underlying }
+
+// isAdiFailed reports whether err is a fast-failing 500 AdiFailed response —
+// the ADT debugger REST framework's generic wrapped-exception error, known
+// to be intermittent for Attach and (rarer) Step (aibap.mcp#513). Deliberately
+// distinct from a bare timeout (no HTTP response at all), which is handled
+// separately by DebuggeeEndedError.
+//
+// A *DebuggeeEndedError is never treated as AdiFailed here, even for a future
+// change that recognizes SAP's native fast-path debuggee-ended signal (an
+// AdiFailed response with the ADT framework's own "ended" subtype — see
+// adtler#159) inside stepOnce and returns *DebuggeeEndedError for it directly:
+// that is a successful, terminal outcome to report as-is, never something to
+// retry. The explicit type check below guards that case regardless of what
+// isAdiFailed's own Type-matching would otherwise say about its Underlying.
+func isAdiFailed(err error) bool {
+	var ended *DebuggeeEndedError
+	if errors.As(err, &ended) {
+		return false
+	}
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		return false
+	}
+	return adtErr.Type == ExceptionTypeAdiFailed
+}
+
+const (
+	adiFailedMaxRetries = 2
+	adiFailedRetryDelay = 500 * time.Millisecond
+)
+
+// retryOnAdiFailed calls fn up to 1+adiFailedMaxRetries times, retrying only
+// when fn's error is a fast-failing AdiFailed 500 (aibap.mcp#513: a known
+// intermittent SAP kernel-side debugger fault with no further diagnosable
+// detail — live investigation found retrying the same call sometimes
+// succeeds). Any other error — including a bare timeout, already handled
+// elsewhere via DebuggeeEndedError — returns immediately on the first
+// attempt, unretried. A context cancellation during the retry delay aborts
+// immediately with the last error seen.
+func retryOnAdiFailed[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	var zero T
+	var lastErr error
+	for attempt := 0; attempt <= adiFailedMaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(adiFailedRetryDelay):
+			case <-ctx.Done():
+				return zero, lastErr
+			}
+		}
+		v, err := fn()
+		if err == nil {
+			return v, nil
+		}
+		if !isAdiFailed(err) {
+			return zero, err
+		}
+		lastErr = err
+	}
+	return zero, fmt.Errorf("after %d retries on AdiFailed (aibap.mcp#513): %w", adiFailedMaxRetries, lastErr)
+}
 
 // isTimeoutErr reports whether err represents an HTTP client timeout —
 // either a context deadline or a *url.Error whose Timeout() is true (the
@@ -311,7 +383,17 @@ func (d *DebugSession) debuggeeSessionsEmpty(ctx context.Context) bool {
 // timeout — see its doc comment for why. Any other error (including a
 // timeout where a session is still alive, or where the follow-up check
 // itself fails) is returned unchanged.
+//
+// A fast-failing (non-timeout) 500 AdiFailed response is retried — see
+// retryOnAdiFailed — since it's a known-intermittent SAP kernel-side fault
+// (aibap.mcp#513), distinct from the debuggee-ended timeout case above.
 func (d *DebugSession) Step(ctx context.Context, action string) ([]byte, error) {
+	return retryOnAdiFailed(ctx, func() ([]byte, error) {
+		return d.stepOnce(ctx, action)
+	})
+}
+
+func (d *DebugSession) stepOnce(ctx context.Context, action string) ([]byte, error) {
 	path := fmt.Sprintf("/sap/bc/adt/debugger?method=%s", action)
 	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
 		map[string]string{"Accept": "application/xml", "X-sap-adt-sessiontype": "stateful"})

@@ -19,6 +19,10 @@ const stepEndpointPath = "/sap/bc/adt/debugger"
 // stepContinueMethod is the ADT debugger step action under test.
 const stepContinueMethod = "stepContinue"
 
+// getDebuggeeSessionsMethod is the ADT debugger dispatch method Step's
+// follow-up check calls to confirm whether a debuggee session remains.
+const getDebuggeeSessionsMethod = "getDebuggeeSessions"
+
 // TestStep_TimeoutWithNoRemainingSessions_ReturnsDebuggeeEndedError guards
 // the fix for aibap.mcp#513: SAP's ADT debugger kernel call never returns an
 // HTTP response when a step action (most commonly stepContinue) runs the
@@ -43,7 +47,7 @@ func TestStep_TimeoutWithNoRemainingSessions_ReturnsDebuggeeEndedError(t *testin
 			}
 			return
 		}
-		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == "getDebuggeeSessions" {
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == getDebuggeeSessionsMethod {
 			w.WriteHeader(http.StatusOK) // empty body — no sessions
 			return
 		}
@@ -92,7 +96,7 @@ func TestStep_TimeoutWithRemainingSessions_ReturnsPlainError(t *testing.T) {
 			}
 			return
 		}
-		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == "getDebuggeeSessions" {
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == getDebuggeeSessionsMethod {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<sessions><session id="still-alive"/></sessions>`))
 			return
@@ -123,6 +127,10 @@ func TestStep_TimeoutWithRemainingSessions_ReturnsPlainError(t *testing.T) {
 // TestStep_NonTimeoutError_ReturnsPlainError guards against over-eager
 // detection: a genuine non-timeout failure (e.g. a 500 from SAP) must not be
 // reinterpreted as a debuggee-ended condition just because it's an error.
+// The server always returns AdiFailed here, so this also exercises Step's
+// AdiFailed retry ceiling (adiFailedMaxRetries retries, ~1s of fixed delay)
+// before giving up — see debugger_adifailed_retry_internal_test.go for the
+// dedicated retry tests.
 func TestStep_NonTimeoutError_ReturnsPlainError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == discoveryPath {
