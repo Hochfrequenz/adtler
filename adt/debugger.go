@@ -298,6 +298,15 @@ func isAdiFailed(err error) bool {
 	if errors.As(err, &ended) {
 		return false
 	}
+	// A debuggee-ended AdiFailed can also reach here directly from Attach
+	// (attaching to a debuggee that already ran to completion) — attachOnce
+	// has no DebuggeeEndedError-shaped success to return, unlike stepOnce, so
+	// it never gets the chance to pre-classify and short-circuit. Exclude it
+	// here too: retrying a condition that can never succeed only wastes time
+	// (confirmed live: ~7-17s across 3 attempts — see isDebuggeeEndedAdiFailed).
+	if isDebuggeeEndedAdiFailed(err) {
+		return false
+	}
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
 		return false
@@ -384,9 +393,13 @@ func (d *DebugSession) debuggeeSessionsEmpty(ctx context.Context) bool {
 // timeout where a session is still alive, or where the follow-up check
 // itself fails) is returned unchanged.
 //
-// A fast-failing (non-timeout) 500 AdiFailed response is retried — see
-// retryOnAdiFailed — since it's a known-intermittent SAP kernel-side fault
-// (aibap.mcp#513), distinct from the debuggee-ended timeout case above.
+// SAP can also report the same debuggee-ended condition as a *fast* 500
+// AdiFailed instead of hanging — see isDebuggeeEndedAdiFailed — which Step
+// also recognizes and reports as *DebuggeeEndedError.
+//
+// Any other fast-failing (non-timeout) 500 AdiFailed response is retried —
+// see retryOnAdiFailed — since it's a known-intermittent SAP kernel-side
+// fault (aibap.mcp#513), distinct from both debuggee-ended shapes above.
 func (d *DebugSession) Step(ctx context.Context, action string) ([]byte, error) {
 	return retryOnAdiFailed(ctx, func() ([]byte, error) {
 		return d.stepOnce(ctx, action)
@@ -405,9 +418,47 @@ func (d *DebugSession) stepOnce(ctx context.Context, action string) ([]byte, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := checkResponse(resp); err != nil {
+		if isDebuggeeEndedAdiFailed(err) {
+			return nil, &DebuggeeEndedError{Action: action, Underlying: err}
+		}
 		return nil, err
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// cxTpdapiDebuggeeEnded is the ABAP exception class SAP's ADT debugger
+// framework wraps (as the "previous" exception) when a step action fails
+// because the debuggee already ran to completion — SAP's own fast-path
+// signal for the same condition #529/DebuggeeEndedError already recognizes
+// via the slower bare-timeout shape. Confirmed live on aibap.mcp#513/adtler#159
+// (2026-09-30, ECC): a stepContinue run off the program's last statement
+// returned a 500 AdiFailed carrying
+// Properties["previous1ExceptionClassName"] = "CX_TPDAPI_DEBUGGEE_ENDED" —
+// a stable, language-independent identifier, unlike the German
+// Properties["previous1Text"]/Message alongside it ("Debuggee-Session wurde
+// angehalten").
+const cxTpdapiDebuggeeEnded = "CX_TPDAPI_DEBUGGEE_ENDED"
+
+// isDebuggeeEndedAdiFailed reports whether err is a fast (non-timeout) 500
+// AdiFailed response whose wrapped "previous" exception is
+// CX_TPDAPI_DEBUGGEE_ENDED — SAP's own signal that the debuggee already ran
+// to completion, not a transient fault. stepOnce checks this before falling
+// through to a plain error, so callers get *DebuggeeEndedError (a success)
+// for this case exactly as they already do for the slower timeout shape.
+// Deliberately never retried: retryOnAdiFailed's isAdiFailed already excludes
+// any error that is/wraps *DebuggeeEndedError, so returning it here from
+// stepOnce (before retryOnAdiFailed ever sees the raw AdiFailed) skips the
+// pointless retry outright — confirmed live to otherwise cost ~7-17s across
+// 3 attempts for a condition that can never succeed on retry.
+func isDebuggeeEndedAdiFailed(err error) bool {
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		return false
+	}
+	if adtErr.Type != ExceptionTypeAdiFailed {
+		return false
+	}
+	return adtErr.Properties["previous1ExceptionClassName"] == cxTpdapiDebuggeeEnded
 }
 
 // GetVariable reads a variable value from the debug session.
