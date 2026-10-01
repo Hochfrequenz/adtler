@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,16 +53,28 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-// httpClient returns an *http.Client that optionally skips TLS certificate verification.
+// errTokenRedirect: the token endpoint never legitimately redirects, and
+// on a 307/308 net/http would replay the form — code_verifier or
+// refresh_token — to the redirect target, whatever its host.
+var errTokenRedirect = errors.New("auth: token endpoint answered with a redirect; not followed")
+
+// tokenTimeout bounds a token request; http.DefaultClient, used before,
+// has none.
+const tokenTimeout = 30 * time.Second
+
+// httpClient returns the *http.Client for token requests: no redirects
+// followed, a timeout, and optionally no TLS certificate verification.
 func httpClient(tlsSkipVerify bool) *http.Client {
-	if !tlsSkipVerify {
-		return http.DefaultClient
+	c := &http.Client{
+		Timeout:       tokenTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errTokenRedirect },
 	}
-	return &http.Client{
-		Transport: &http.Transport{
+	if tlsSkipVerify {
+		c.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		},
+		}
 	}
+	return c
 }
 
 // postToken posts form values to the SAP token endpoint and returns the parsed TokenData.
