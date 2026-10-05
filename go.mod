@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/Hochfrequenz/sap-mcp-config v1.1.0
-	modernc.org/sqlite v1.60.0
+	modernc.org/sqlite v1.60.1
 )
 
 require (
