@@ -18,17 +18,14 @@ import (
 // The run is held open the way aibap.mcp#558 will hold it: an external
 // breakpoint in the test method suspends the debuggee, the test keeps it
 // suspended for holdFor (> 30 s), then ends the debugger session. Before the fix
-// RunUnitTests failed with "Client.Timeout exceeded while awaiting headers"
-// after 30 s; after it, RunUnitTests returns the run result.
-//
-// The program is a throwaway $TMP report with a local test class, created and
-// deleted here, so the test does not depend on a fixture that differs between
-// systems.
+// RunUnitTests failed with "Client.Timeout exceeded while awaiting headers";
+// after it, RunUnitTests returns the run result.
 func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) {
 	const (
-		holdFor   = 35 * time.Second
-		bpLine    = 14 // lv_val = 'test'. inside test_hello
-		runBudget = 120
+		holdFor    = 35 * time.Second
+		listenSecs = 15 // the breakpoint is hit within seconds of the trigger
+		bpLine     = 14 // lv_val = 'test'. inside test_hello
+		runBudget  = 120
 	)
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
@@ -38,11 +35,22 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			createReportWithTestClass(t, sys.Client, name, uri)
 
 			dbg := adt.NewDebugSession(sys.Client, sys.Config.User)
-			t.Cleanup(func() { _ = dbg.StopListener(context.Background()) })
+			attached := false
+			// End the debug session before the report is deleted (cleanups run
+			// LIFO), so a failed run does not leave a suspended debuggee behind.
+			t.Cleanup(func() {
+				if attached {
+					_, _ = dbg.Step(context.Background(), "detachDebugger")
+				}
+				_ = dbg.StopListener(context.Background())
+			})
 
 			bp, err := dbg.SetBreakpoint(ctx, uri+"/source/main", bpLine, "PROG/P", name)
-			if err != nil || bp.ErrorMessage != "" {
-				t.Fatalf("[%s] SetBreakpoint: err=%v msg=%q", sys.Name, err, bp.ErrorMessage)
+			if err != nil {
+				t.Fatalf("[%s] SetBreakpoint: %v", sys.Name, err)
+			}
+			if bp.ErrorMessage != "" {
+				t.Fatalf("[%s] SetBreakpoint: %s", sys.Name, bp.ErrorMessage)
 			}
 
 			type listenerOut struct {
@@ -51,7 +59,7 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			}
 			listenerCh := make(chan listenerOut, 1)
 			go func() {
-				r, err := dbg.StartListener(ctx, 60)
+				r, err := dbg.StartListener(ctx, listenSecs)
 				listenerCh <- listenerOut{r, err}
 			}()
 			time.Sleep(4 * time.Second) // the listener long-poll gives no "registered" signal
@@ -74,6 +82,7 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			if err := dbg.Attach(ctx, lo.r.DebuggeeID); err != nil {
 				t.Fatalf("[%s] Attach: %v", sys.Name, err)
 			}
+			attached = true
 
 			t.Logf("[%s] holding the debuggee for %v", sys.Name, holdFor)
 			time.Sleep(holdFor)
@@ -108,14 +117,12 @@ func createReportWithTestClass(t *testing.T, client adt.Client, name, uri string
 	if err := client.CreateObject(ctx, "PROG", name, "$TMP", "adtler#186 long unit-test run", ""); err != nil {
 		t.Fatalf("CreateObject: %v", err)
 	}
+	// Delete WITHOUT locking first: DeleteObject ignores the lock handle and
+	// deletes statelessly, so on S/4HANA a preceding LockObject blocks the
+	// delete and leaves an orphaned TRDIR lock (issue #187).
 	t.Cleanup(func() {
-		lh, err := client.LockObject(context.Background(), uri)
-		if err != nil {
-			t.Logf("cleanup lock %s: %v", name, err)
-			return
-		}
-		if err := client.DeleteObject(context.Background(), uri, lh, ""); err != nil {
-			t.Logf("cleanup delete %s: %v", name, err)
+		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
+			t.Errorf("cleanup delete %s: %v — delete the $TMP report by hand", name, err)
 		}
 	})
 
