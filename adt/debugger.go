@@ -16,7 +16,8 @@ import (
 )
 
 // DebugSession manages a stateful ABAP debug session via ADT REST endpoints.
-// It shares the underlying HTTP client (cookies, CSRF) with the ADT Client.
+// It runs on its own isolated ADT session (see NewDebugSession); its short and
+// long HTTP clients share that session's cookie jar and CSRF token.
 type DebugSession struct {
 	client      *httpClient
 	user        string
