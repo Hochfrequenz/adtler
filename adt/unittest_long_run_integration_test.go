@@ -65,14 +65,15 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			time.Sleep(4 * time.Second) // the listener long-poll gives no "registered" signal
 
 			type runOut struct {
-				res *adt.TestResult
-				err error
+				res     *adt.TestResult
+				err     error
+				elapsed time.Duration // measured when RunUnitTests returned
 			}
 			runCh := make(chan runOut, 1)
 			start := time.Now()
 			go func() {
 				res, err := sys.Client.RunUnitTests(ctx, uri, runBudget)
-				runCh <- runOut{res, err}
+				runCh <- runOut{res, err, time.Since(start)}
 			}()
 
 			lo := <-listenerCh
@@ -91,7 +92,7 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			}
 
 			ro := <-runCh
-			elapsed := time.Since(start)
+			elapsed := ro.elapsed
 			if ro.err != nil {
 				t.Fatalf("[%s] RunUnitTests failed after %v: %v — issue #186 (short-client cap) not fixed",
 					sys.Name, elapsed, ro.err)
