@@ -68,3 +68,14 @@ func TestVariableDataRequestAndParse(t *testing.T) {
 		t.Errorf("empty data: %v %v", empty, err)
 	}
 }
+
+func TestChildVariablesRequest_EmptyMeansRoot(t *testing.T) {
+	b, err := adtxml.ChildVariablesRequest(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<asx:values><DATA><HIERARCHIES><STPDA_ADT_VARIABLE_HIERARCHY><PARENT_ID>@ROOT</PARENT_ID>`
+	if !strings.Contains(string(b), want) {
+		t.Errorf("missing %s in %s", want, b)
+	}
+}

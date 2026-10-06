@@ -20,8 +20,11 @@ type asxChildVarsReq struct {
 }
 
 // ChildVariablesRequest builds the getChildVariables body. An empty slice
-// sends no parent, which the server treats as @ROOT.
+// requests @ROOT.
 func ChildVariablesRequest(parentIDs []string) ([]byte, error) {
+	if len(parentIDs) == 0 {
+		parentIDs = []string{"@ROOT"}
+	}
 	req := asxChildVarsReq{NS: nsASX, Version: "1.0"}
 	for _, id := range parentIDs {
 		req.Hierarchies = append(req.Hierarchies, asxHierarchyReq{ParentID: id})
