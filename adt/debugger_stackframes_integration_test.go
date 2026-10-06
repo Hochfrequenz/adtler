@@ -34,14 +34,16 @@ func TestGetStackFrames_MultiSystem_Integration(t *testing.T) {
 		t.Run(sys.Name+"/class_method", func(t *testing.T) {
 			name := fmt.Sprintf("ZCL_ADT_203_%d", time.Now().Unix()%100000)
 			uri := "/sap/bc/adt/oo/classes/" + name
-			createClassWithTestClass(t, sys.Client, name, uri)
+			reportName := fmt.Sprintf("Z_ADT_203C_%d", time.Now().Unix()%100000)
+			reportURI := "/sap/bc/adt/programs/programs/" + reportName
+			createClassAndTriggerReport(t, sys.Client, name, uri, reportName, reportURI)
 			// Line 8 is "rv = 'adtler203'." inside GET_VAL of the global class.
-			f := suspendAndReadActiveFrame(t, sys, uri, uri+"/source/main", 8, "CLAS/OC", name)
+			f := suspendAndReadActiveFrame(t, sys, reportURI, uri+"/source/main", 8, "CLAS/OC", name)
 			if !strings.EqualFold(f.SourceURI, uri+"/source/main") || f.SourceLine != 8 {
 				t.Errorf("[%s] active frame: %+v, want source %s/source/main line 8", sys.Name, f, uri)
 			}
 			if !strings.EqualFold(f.EventName, "GET_VAL") {
-				t.Errorf("[%s] active frame: %+v, want event GET_VAL (the current frame, not the calling test method)", sys.Name, f)
+				t.Errorf("[%s] active frame: %+v, want event GET_VAL (the class method, not the calling test method)", sys.Name, f)
 			}
 			assertFrameSource(t, sys, f, "rv = 'adtler203'")
 		})
@@ -147,73 +149,77 @@ func assertFrameSource(t *testing.T, sys integrationSystem, f adt.StackFrame, wa
 	}
 }
 
-// createClassWithTestClass creates, fills and activates a $TMP global class
-// whose public method GET_VAL is called by a local test class, and registers
-// its deletion. Line 8 of the main source is the statement inside GET_VAL.
-func createClassWithTestClass(t *testing.T, client adt.Client, name, uri string) {
+// createClassAndTriggerReport creates a $TMP global class (no local tests, so
+// no class test include is needed, which is unreliable on ECC) whose public
+// method GET_VAL holds the breakpoint statement at line 8, plus a $TMP report
+// whose local test method calls it. Running the report's unit tests triggers
+// the class method. Both objects are deleted on cleanup, the report first.
+func createClassAndTriggerReport(t *testing.T, client adt.Client, className, classURI, reportName, reportURI string) {
 	t.Helper()
-	ctx := context.Background()
-	if err := client.CreateObject(ctx, "CLAS", name, "$TMP", "adtler#203 stack frames", ""); err != nil {
-		t.Fatalf("CreateObject: %v", err)
-	}
-	// Delete WITHOUT locking first, see createReportWithTestClass (issue #187).
-	t.Cleanup(func() {
-		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
-			t.Errorf("cleanup delete %s: %v — delete the $TMP class by hand", name, err)
-		}
-	})
-
-	source := "CLASS " + name + " DEFINITION PUBLIC FINAL CREATE PUBLIC.\n" +
+	classSource := "CLASS " + className + " DEFINITION PUBLIC FINAL CREATE PUBLIC.\n" +
 		"  PUBLIC SECTION.\n" +
 		"    METHODS get_val RETURNING VALUE(rv) TYPE string.\n" +
 		"ENDCLASS.\n" +
 		"\n" +
-		"CLASS " + name + " IMPLEMENTATION.\n" +
+		"CLASS " + className + " IMPLEMENTATION.\n" +
 		"  METHOD get_val.\n" +
 		"    rv = 'adtler203'.\n" +
 		"  ENDMETHOD.\n" +
 		"ENDCLASS.\n"
-	testSource := "CLASS lcl_test DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.\n" +
+	createSourceObject(t, client, "CLAS", className, classURI, classSource, "adtler#203 stack frames")
+
+	reportSource := "REPORT " + reportName + ".\n" +
+		"\n" +
+		"CLASS lcl_test DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.\n" +
 		"  PRIVATE SECTION.\n" +
 		"    METHODS test_get FOR TESTING.\n" +
 		"ENDCLASS.\n" +
 		"\n" +
 		"CLASS lcl_test IMPLEMENTATION.\n" +
 		"  METHOD test_get.\n" +
-		"    DATA(lo) = NEW " + name + "( ).\n" +
-		"    cl_abap_unit_assert=>assert_equals( act = lo->get_val( ) exp = 'adtler203' ).\n" +
+		"    DATA lv_val TYPE string.\n" +
+		"    DATA lo TYPE REF TO " + className + ".\n" +
+		"    CREATE OBJECT lo.\n" +
+		"    lv_val = lo->get_val( ).\n" +
+		"    cl_abap_unit_assert=>assert_equals( act = lv_val exp = 'adtler203' ).\n" +
 		"  ENDMETHOD.\n" +
 		"ENDCLASS.\n"
+	createSourceObject(t, client, "PROG", reportName, reportURI, reportSource, "adtler#203 class trigger")
+}
+
+// createSourceObject creates, fills and activates a $TMP object and registers
+// its deletion.
+func createSourceObject(t *testing.T, client adt.Client, objType, name, uri, source, description string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := client.CreateObject(ctx, objType, name, "$TMP", description, ""); err != nil {
+		t.Fatalf("CreateObject %s: %v", name, err)
+	}
+	// Delete WITHOUT locking first, see createReportWithTestClass (issue #187).
+	t.Cleanup(func() {
+		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
+			t.Errorf("cleanup delete %s: %v — delete the $TMP object by hand", name, err)
+		}
+	})
 
 	lh, err := client.LockObject(ctx, uri)
 	if err != nil {
-		t.Fatalf("LockObject: %v", err)
+		t.Fatalf("LockObject %s: %v", name, err)
 	}
-	unlocked := false
-	defer func() {
-		if !unlocked {
-			_ = client.UnlockObject(ctx, uri, lh)
-		}
-	}()
 	src, err := client.GetSource(ctx, uri)
 	if err != nil {
-		t.Fatalf("GetSource: %v", err)
+		_ = client.UnlockObject(ctx, uri, lh)
+		t.Fatalf("GetSource %s: %v", name, err)
 	}
 	if _, err := client.SetSource(ctx, uri, source, lh, "", src.ETag); err != nil {
-		t.Fatalf("SetSource: %v", err)
-	}
-	if err := client.CreateTestInclude(ctx, uri, lh, ""); err != nil {
-		t.Fatalf("CreateTestInclude: %v", err)
-	}
-	if _, err := client.SetIncludeSource(ctx, uri, "testclasses", testSource, lh, "", ""); err != nil {
-		t.Fatalf("SetIncludeSource(testclasses): %v", err)
+		_ = client.UnlockObject(ctx, uri, lh)
+		t.Fatalf("SetSource %s: %v", name, err)
 	}
 	if err := client.UnlockObject(ctx, uri, lh); err != nil {
-		t.Fatalf("UnlockObject: %v", err)
+		t.Fatalf("UnlockObject %s: %v", name, err)
 	}
-	unlocked = true
 	res, err := client.ActivateObjects(ctx, []string{uri})
 	if err != nil || !res.Success {
-		t.Fatalf("Activate: err=%v messages=%v", err, res)
+		t.Fatalf("Activate %s: err=%v messages=%v", name, err, res)
 	}
 }
