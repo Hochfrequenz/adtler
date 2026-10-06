@@ -77,3 +77,17 @@ func TestGetStackFrames_750_NoIsActive(t *testing.T) {
 		t.Error("ActiveFrame(nil) must report false")
 	}
 }
+
+// isActive wins over stackPosition: here the active frame sits BELOW the top
+// of the stack (e.g. a debug cursor moved down the stack).
+func TestActiveFrame_IsActiveBelowTop(t *testing.T) {
+	frames := []adt.StackFrame{
+		{Position: 1, Program: "LOW", Active: true},
+		{Position: 5, Program: "TOP"},
+		{Position: 3, Program: "MID"},
+	}
+	f, ok := adt.ActiveFrame(frames)
+	if !ok || f.Program != "LOW" {
+		t.Errorf("ActiveFrame must honour isActive over the highest position: %+v ok=%v", f, ok)
+	}
+}
