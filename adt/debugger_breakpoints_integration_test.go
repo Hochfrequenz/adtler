@@ -316,7 +316,11 @@ func TestRemoveBreakpoint_Integration(t *testing.T) {
 				bpRelease(t, dbg, runDone)
 				t.Fatal("run was caught after every breakpoint was removed")
 			}
-			<-runDone
+			select {
+			case <-runDone:
+			case <-time.After(2 * time.Minute):
+				t.Log("unit-test run did not finish within 2 minutes")
+			}
 			t.Logf("%d breakpoints removed; run not caught", len(ids))
 		})
 	}

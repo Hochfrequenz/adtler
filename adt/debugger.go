@@ -171,6 +171,14 @@ func (d *DebugSession) SetBreakpoints(ctx context.Context, scope BreakpointScope
 	if len(bps) > maxBreakpointsPerRequest {
 		return nil, fmt.Errorf("SetBreakpoints: %d breakpoints given, SAP accepts at most %d", len(bps), maxBreakpointsPerRequest)
 	}
+	if err := checkBreakpointScope(scope); err != nil {
+		return nil, fmt.Errorf("SetBreakpoints: %w", err)
+	}
+	for i, bp := range bps {
+		if bp.Line <= 0 {
+			return nil, fmt.Errorf("SetBreakpoints: breakpoint %d: line %d is not a source line", i, bp.Line)
+		}
+	}
 	// No sync mode is sent. The request transformation reads it only from a
 	// <syncScope mode="…"> element; the syncMode attribute adtler sent until
 	// adtler#200 was ignored on both SAP_BASIS 750 and 816, so leaving it out
@@ -228,7 +236,10 @@ func (d *DebugSession) SetBreakpoints(ctx context.Context, scope BreakpointScope
 // matchBreakpointResults maps response entries back to the n requested
 // breakpoints by clientId (the request index). Entries with an unknown or
 // duplicate clientId are ignored; a requested breakpoint without an entry is
-// reported as not set.
+// reported as not set. The match is strict on purpose: the response
+// transformation echoes clientId whenever the request carried one (verified
+// on SAP_BASIS 750 and 816), and guessing an entry's owner by position is
+// exactly what the resource's re-sorting makes wrong.
 func matchBreakpointResults(n int, entries []adtxml.BreakpointResponse) []BreakpointResult {
 	results := make([]BreakpointResult, n)
 	matched := make([]bool, n)
@@ -258,6 +269,9 @@ func (d *DebugSession) RemoveBreakpoint(ctx context.Context, scope BreakpointSco
 	if id == "" {
 		return errors.New("RemoveBreakpoint: empty breakpoint ID")
 	}
+	if err := checkBreakpointScope(scope); err != nil {
+		return fmt.Errorf("RemoveBreakpoint: %w", err)
+	}
 	q := url.Values{}
 	q.Set("debuggingMode", "user")
 	q.Set("requestUser", d.user)
@@ -265,7 +279,9 @@ func (d *DebugSession) RemoveBreakpoint(ctx context.Context, scope BreakpointSco
 	q.Set("ideId", d.ideID)
 	q.Set("scope", string(scope))
 	// The resource does not unescape the ID a second time, so it is escaped
-	// exactly once here.
+	// exactly once here. Verified live only for IDs without "/": IDs of
+	// programs in a registered namespace contain "/", sent as %2F, and that
+	// ICF passes %2F through unchanged is so far proven by unit tests only.
 	path := "/sap/bc/adt/debugger/breakpoints/" + url.PathEscape(id) + "?" + q.Encode()
 
 	resp, err := d.client.doMutate(ctx, http.MethodDelete, path, nil, breakpointHeaders(scope, nil))
@@ -282,6 +298,11 @@ func (d *DebugSession) RemoveBreakpoint(ctx context.Context, scope BreakpointSco
 // Calling it once per breakpoint keeps only the last breakpoint on
 // SAP_BASIS 816 and keeps all of them on SAP_BASIS 750 (adtler#200). To set
 // several breakpoints, pass the complete list to SetBreakpoints instead.
+//
+// Check the result with IsSet, not ID != "": since adtler#200 a result can
+// carry SAP's ID together with an error (e.g. ErrorKind "existing"), and a
+// response without an entry for the breakpoint comes back as a nil error
+// with ErrorMessage set instead of as an error.
 func (d *DebugSession) SetBreakpoint(ctx context.Context, objectURI string, line int, objectType, objectName string) (*BreakpointResult, error) {
 	results, err := d.SetBreakpoints(ctx, BreakpointScopeExternal, []LineBreakpoint{{
 		ObjectURI:  objectURI,
@@ -307,6 +328,17 @@ func breakpointHeaders(scope BreakpointScope, headers map[string]string) map[str
 		h[k] = v
 	}
 	return h
+}
+
+// checkBreakpointScope rejects a scope SAP would refuse anyway, before any
+// request is sent.
+func checkBreakpointScope(scope BreakpointScope) error {
+	switch scope {
+	case BreakpointScopeExternal, BreakpointScopeDebugger:
+		return nil
+	default:
+		return fmt.Errorf("unknown breakpoint scope %q", scope)
+	}
 }
 
 // wrapNoSessionAttached wraps err with ErrNoSessionAttached when it is SAP's

@@ -186,7 +186,7 @@ func TestSetBreakpoints_MatchesByClientID(t *testing.T) {
 	}
 }
 
-func TestSetBreakpoints_RejectsEmptyAndOversizedLists(t *testing.T) {
+func TestSetBreakpoints_RejectsInvalidInputLocally(t *testing.T) {
 	dbg, requests := newBreakpointMock(t, http.StatusOK, bpResponse())
 	ctx := context.Background()
 	if _, err := dbg.SetBreakpoints(ctx, adt.BreakpointScopeExternal, nil); err == nil {
@@ -194,6 +194,15 @@ func TestSetBreakpoints_RejectsEmptyAndOversizedLists(t *testing.T) {
 	}
 	if _, err := dbg.SetBreakpoints(ctx, adt.BreakpointScopeExternal, make([]adt.LineBreakpoint, 31)); err == nil {
 		t.Error("31 breakpoints: want error")
+	}
+	if _, err := dbg.SetBreakpoints(ctx, "", []adt.LineBreakpoint{{ObjectURI: testBreakpointsSrc, Line: 3}}); err == nil {
+		t.Error("empty scope: want error")
+	}
+	if _, err := dbg.SetBreakpoints(ctx, adt.BreakpointScopeExternal, []adt.LineBreakpoint{{ObjectURI: testBreakpointsSrc, Line: 0}}); err == nil {
+		t.Error("line 0: want error")
+	}
+	if err := dbg.RemoveBreakpoint(ctx, "global", "BP1"); err == nil {
+		t.Error("RemoveBreakpoint unknown scope: want error")
 	}
 	if n := len(requests()); n != 0 {
 		t.Errorf("requests sent: %d, want 0", n)
