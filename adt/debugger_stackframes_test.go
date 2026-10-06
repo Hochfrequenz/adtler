@@ -30,7 +30,7 @@ func stackServer(t *testing.T, body string) *adt.DebugSession {
 			return
 		}
 		if r.URL.Query().Get("method") == "getStack" {
-			if r.Header.Get("X-sap-adt-sessiontype") != "stateful" {
+			if r.Header.Get("X-sap-adt-sessiontype") != wantSessionTypeStateful {
 				t.Error("getStack must be stateful")
 			}
 			w.Header().Set("Content-Type", "application/xml")

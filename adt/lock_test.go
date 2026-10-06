@@ -23,7 +23,7 @@ func TestLockObject(t *testing.T) {
 		if accept := r.Header.Get("Accept"); accept != "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result" {
 			t.Errorf("Accept header: got %q, want %q", accept, "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result")
 		}
-		if st := r.Header.Get("X-sap-adt-sessiontype"); st != "stateful" {
+		if st := r.Header.Get("X-sap-adt-sessiontype"); st != wantSessionTypeStateful {
 			t.Errorf("sessiontype header: got %q, want stateful", st)
 		}
 		w.WriteHeader(http.StatusOK)

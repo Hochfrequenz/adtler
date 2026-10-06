@@ -111,7 +111,7 @@ func TestGetTableRows(t *testing.T) {
 		case "getVariableData":
 			dataCalls++
 			lastData = string(b)
-			if r.Header.Get("X-sap-adt-sessiontype") != "stateful" {
+			if r.Header.Get("X-sap-adt-sessiontype") != wantSessionTypeStateful {
 				t.Error("getVariableData must be stateful (a non-stateful request ends the debug context on SAP_BASIS 750)")
 			}
 			_, _ = w.Write([]byte(`<dbg:data xmlns:dbg="http://www.sap.com/adt/debugger"><table name="LT_ROWS">` +
