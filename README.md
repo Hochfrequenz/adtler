@@ -146,6 +146,20 @@ Both helpers `t.Skip` cleanly when no JSON config is reachable, so
 without SAP credentials configured — the integration tests just don't
 execute.
 
+#### abapGit sync integration tests
+
+`ListAbapGitRepos`, `PullAbapGitRepo` and `PushAbapGitRepo` talk to the
+abapGit sync companion installed on the SAP system. Their integration tests
+skip on systems without it. The pull test needs a repository identifier and
+skips when none is given:
+
+| Env var | Meaning |
+|---|---|
+| `ADTLER_ABAPGIT_PULL_TEST_REPO` | Repository to pull (required, otherwise the pull test skips) |
+| `ADTLER_ABAPGIT_PULL_TEST_TRANSPORT` | Transport request for the pull (optional) |
+
+Push has no automated integration test and is verified manually.
+
 #### What this client cannot currently undo, and what that costs a test
 
 Some behaviour has no repeatable automated test, because nothing here can undo

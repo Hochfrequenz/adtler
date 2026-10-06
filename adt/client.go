@@ -142,6 +142,13 @@ type ExportClient interface {
 	ExportPackage(ctx context.Context, packageName string) ([]byte, error)
 }
 
+// AbapGitSyncClient calls the abapGit sync companion endpoints.
+type AbapGitSyncClient interface {
+	ListAbapGitRepos(ctx context.Context) (*AbapGitRepoList, error)
+	PullAbapGitRepo(ctx context.Context, req AbapGitPullRequest) (*AbapGitPullResult, error)
+	PushAbapGitRepo(ctx context.Context, req AbapGitPushRequest) (*AbapGitPushResult, error)
+}
+
 // QueryClient runs data queries.
 type QueryClient interface {
 	RunQuery(ctx context.Context, sql string, maxRows int) (*QueryResult, error)
@@ -180,6 +187,7 @@ type Client interface {
 	VersionClient
 	TransportClient
 	ExportClient
+	AbapGitSyncClient
 	QueryClient
 	EnhancementClient
 	DumpClient

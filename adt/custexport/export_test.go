@@ -121,6 +121,15 @@ func (m *mockClient) GetCompletions(context.Context, string, string, int, int) (
 func (m *mockClient) ExportPackage(context.Context, string) ([]byte, error) {
 	panic("not implemented")
 }
+func (m *mockClient) ListAbapGitRepos(context.Context) (*adt.AbapGitRepoList, error) {
+	panic("not implemented")
+}
+func (m *mockClient) PullAbapGitRepo(context.Context, adt.AbapGitPullRequest) (*adt.AbapGitPullResult, error) {
+	panic("not implemented")
+}
+func (m *mockClient) PushAbapGitRepo(context.Context, adt.AbapGitPushRequest) (*adt.AbapGitPushResult, error) {
+	panic("not implemented")
+}
 func (m *mockClient) GetATCCustomizing(context.Context) (*adt.ATCCustomizingResult, error) {
 	panic("not implemented")
 }

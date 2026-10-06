@@ -221,6 +221,15 @@ func (r *ClientRegistry) GetCompletions(ctx context.Context, objectURI, source s
 func (r *ClientRegistry) ExportPackage(ctx context.Context, packageName string) ([]byte, error) {
 	return r.activeClient().ExportPackage(ctx, packageName)
 }
+func (r *ClientRegistry) ListAbapGitRepos(ctx context.Context) (*AbapGitRepoList, error) {
+	return r.activeClient().ListAbapGitRepos(ctx)
+}
+func (r *ClientRegistry) PullAbapGitRepo(ctx context.Context, req AbapGitPullRequest) (*AbapGitPullResult, error) {
+	return r.activeClient().PullAbapGitRepo(ctx, req)
+}
+func (r *ClientRegistry) PushAbapGitRepo(ctx context.Context, req AbapGitPushRequest) (*AbapGitPushResult, error) {
+	return r.activeClient().PushAbapGitRepo(ctx, req)
+}
 func (r *ClientRegistry) GetATCCustomizing(ctx context.Context) (*ATCCustomizingResult, error) {
 	return r.activeClient().GetATCCustomizing(ctx)
 }
