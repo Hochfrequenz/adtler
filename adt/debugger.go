@@ -423,6 +423,16 @@ func (d *DebugSession) StopListener(ctx context.Context) error {
 	return checkResponse(resp)
 }
 
+// RunUnitTests runs the ABAP Unit tests of objectURI as a breakpoint trigger for
+// this debug session. It uses a NEW isolated session (freshSession) of the same
+// system and credentials as d — never d's own stateful session, and never the
+// parent client, so it cannot wedge behind a stateful lock session and is not
+// redirected by a later ClientRegistry.Select. timeoutSeconds bounds the whole
+// run, including the time the debuggee is halted at a breakpoint.
+func (d *DebugSession) RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error) {
+	return d.client.freshSession().RunUnitTests(ctx, objectURI, timeoutSeconds)
+}
+
 // GetDebuggeeSessions returns active debuggee sessions.
 func (d *DebugSession) GetDebuggeeSessions(ctx context.Context) ([]byte, error) {
 	resp, err := d.client.doMutate(ctx, http.MethodPost,

@@ -109,6 +109,86 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 	}
 }
 
+// TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration verifies that
+// DebugSession.RunUnitTests, used as the trigger, hits an external breakpoint
+// set through the same debug session, and that the run result is returned once
+// the debuggee is detached.
+func TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration(t *testing.T) {
+	const (
+		listenSecs = 30
+		bpLine     = 14 // lv_val = 'test'. inside test_hello
+		runBudget  = 120
+	)
+	ctx := context.Background()
+	for _, sys := range eachSystem(t) {
+		t.Run(sys.Name, func(t *testing.T) {
+			name := fmt.Sprintf("Z_ADT_204_%d", time.Now().Unix()%100000)
+			uri := "/sap/bc/adt/programs/programs/" + name
+			createReportWithTestClass(t, sys.Client, name, uri)
+
+			dbg := adt.NewDebugSession(sys.Client, sys.Config.User)
+			attached := false
+			// RemoveBreakpoint does not exist yet; StopListener only.
+			t.Cleanup(func() {
+				if attached {
+					_, _ = dbg.Step(context.Background(), "detachDebugger")
+				}
+				_ = dbg.StopListener(context.Background())
+			})
+
+			bp, err := dbg.SetBreakpoint(ctx, uri+"/source/main", bpLine, "PROG/P", name)
+			if err != nil {
+				t.Fatalf("[%s] SetBreakpoint: %v", sys.Name, err)
+			}
+			if bp.ErrorMessage != "" {
+				t.Fatalf("[%s] SetBreakpoint: %s", sys.Name, bp.ErrorMessage)
+			}
+
+			type listenerOut struct {
+				r   *adt.ListenerResult
+				err error
+			}
+			listenerCh := make(chan listenerOut, 1)
+			go func() {
+				r, err := dbg.StartListener(ctx, listenSecs)
+				listenerCh <- listenerOut{r, err}
+			}()
+			time.Sleep(4 * time.Second) // the listener long-poll gives no "registered" signal
+
+			type runOut struct {
+				res *adt.TestResult
+				err error
+			}
+			runCh := make(chan runOut, 1)
+			go func() {
+				res, err := dbg.RunUnitTests(ctx, uri, runBudget)
+				runCh <- runOut{res, err}
+			}()
+
+			lo := <-listenerCh
+			if lo.err != nil || lo.r.Status != "attached" {
+				t.Fatalf("[%s] breakpoint not caught: status=%v err=%v", sys.Name, lo.r, lo.err)
+			}
+			if err := dbg.Attach(ctx, lo.r.DebuggeeID); err != nil {
+				t.Fatalf("[%s] Attach: %v", sys.Name, err)
+			}
+			attached = true
+			if _, err := dbg.Step(ctx, "detachDebugger"); err != nil {
+				t.Fatalf("[%s] detachDebugger: %v", sys.Name, err)
+			}
+			attached = false
+
+			ro := <-runCh
+			if ro.err != nil {
+				t.Fatalf("[%s] RunUnitTests: %v", sys.Name, ro.err)
+			}
+			if ro.res.Passed != 1 {
+				t.Errorf("[%s] Passed: got %d, want 1", sys.Name, ro.res.Passed)
+			}
+		})
+	}
+}
+
 // createReportWithTestClass creates, fills and activates a $TMP report whose
 // local test class has a single passing method, and registers its deletion.
 // Line 14 is the first executable statement of the test method.
