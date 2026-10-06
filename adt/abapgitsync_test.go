@@ -23,7 +23,7 @@ const (
 
 	abapGitReposBody = `{"repos":[` +
 		`{"key":"K1","name":"repo-one","url":"https://example.invalid/one.git","package":"ZPKG_ONE",` +
-		`"branch":"refs/heads/main","offline":true,"deserialized_at":"20260101120000","deserialized_by":"DEVUSER"},` +
+		`"branch":"refs/heads/main","offline":true,"deserialized_at":"2026-10-06T07:42:34Z","deserialized_by":"DEVUSER"},` +
 		`{"key":"K2","name":"repo-two","url":"https://example.invalid/two.git","package":"ZPKG_TWO",` +
 		`"branch":"refs/heads/dev","offline":false,"deserialized_at":"","deserialized_by":""}]}`
 
@@ -74,7 +74,7 @@ func TestListAbapGitRepos_RequestShape(t *testing.T) {
 	}
 	want := adt.AbapGitRepo{
 		Key: "K1", Name: "repo-one", URL: "https://example.invalid/one.git", Package: "ZPKG_ONE",
-		Branch: "refs/heads/main", Offline: true, DeserializedAt: "20260101120000", DeserializedBy: "DEVUSER",
+		Branch: "refs/heads/main", Offline: true, DeserializedAt: "2026-10-06T07:42:34Z", DeserializedBy: "DEVUSER",
 	}
 	if list.Repos[0] != want {
 		t.Errorf("first repo: got %+v, want %+v", list.Repos[0], want)
@@ -114,7 +114,7 @@ func abapGitOps() []abapGitOp {
 		}},
 		{"push", func(c adt.Client) error {
 			_, err := c.PushAbapGitRepo(ctx, adt.AbapGitPushRequest{
-				Repo: "r", Objects: []adt.AbapGitObjectRef{{ObjType: "PROG", ObjName: "ZEXAMPLE"}},
+				Repo: "r", Objects: []adt.AbapGitObjectRef{{ObjType: "PROG", ObjName: "ZEXAMPLE"}}, Message: "msg",
 			})
 			return err
 		}},
@@ -157,6 +157,7 @@ func TestAbapGitSyncError_Mapping(t *testing.T) {
 		{adt.AbapGitErrRemoteChanged, 409},
 		{adt.AbapGitErrGitError, 424},
 		{adt.AbapGitErrInternal, 500},
+		{adt.AbapGitErrBadRequest, 400},
 	}
 	for _, tc := range cases {
 		for _, op := range abapGitOps() {
@@ -286,7 +287,7 @@ func (rec *postRecorder) assertPost(t *testing.T, wantPath string) {
 }
 
 const pulledBody = `{"status":"pulled","repo":{"name":"n","url":"u","package":"P"},` +
-	`"log":[{"type":"S","text":"ok"},{"type":"W","text":"warn","obj_type":"CLAS","obj_name":"ZCL_EXAMPLE"}]}`
+	`"log":[{"type":"I","text":"ok"},{"type":"W","text":"warn","obj_type":"CLAS","obj_name":"ZCL_EXAMPLE"}]}`
 
 func jsonMap(t *testing.T, s string) map[string]any {
 	t.Helper()
@@ -339,7 +340,7 @@ func TestPullAbapGitRepo_StatusPulled(t *testing.T) {
 		t.Errorf("status/repo: got %q %+v", res.Status, res.Repo)
 	}
 	wantLog := []adt.AbapGitLogEntry{
-		{Type: "S", Text: "ok"},
+		{Type: "I", Text: "ok"},
 		{Type: "W", Text: "warn", ObjType: "CLAS", ObjName: "ZCL_EXAMPLE"},
 	}
 	if !reflect.DeepEqual(res.Log, wantLog) {
@@ -419,7 +420,9 @@ func TestPushAbapGitRepo_Statuses(t *testing.T) {
 			adt.AbapGitStatusDryRun, "", 1},
 		{"nothing_to_push", `{"status":"nothing_to_push","files":[]}`, adt.AbapGitStatusNothingToPush, "", 0},
 	}
-	req := adt.AbapGitPushRequest{Repo: "r", Objects: []adt.AbapGitObjectRef{{ObjType: "PROG", ObjName: "ZEXAMPLE"}}}
+	req := adt.AbapGitPushRequest{
+		Repo: "r", Objects: []adt.AbapGitObjectRef{{ObjType: "PROG", ObjName: "ZEXAMPLE"}}, Message: "msg",
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec postRecorder
@@ -450,11 +453,15 @@ func TestAbapGitSync_ClientSideValidation(t *testing.T) {
 			return err
 		}},
 		{"push without repo", func(c adt.Client) error {
-			_, err := c.PushAbapGitRepo(context.Background(), adt.AbapGitPushRequest{Objects: obj})
+			_, err := c.PushAbapGitRepo(context.Background(), adt.AbapGitPushRequest{Objects: obj, Message: "m"})
 			return err
 		}},
 		{"push without objects", func(c adt.Client) error {
-			_, err := c.PushAbapGitRepo(context.Background(), adt.AbapGitPushRequest{Repo: "r"})
+			_, err := c.PushAbapGitRepo(context.Background(), adt.AbapGitPushRequest{Repo: "r", Message: "m"})
+			return err
+		}},
+		{"push without message", func(c adt.Client) error {
+			_, err := c.PushAbapGitRepo(context.Background(), adt.AbapGitPushRequest{Repo: "r", Objects: obj})
 			return err
 		}},
 	}
@@ -469,5 +476,21 @@ func TestAbapGitSync_ClientSideValidation(t *testing.T) {
 				t.Errorf("server saw %d calls, want 0", rec.calls)
 			}
 		})
+	}
+}
+
+func TestAbapGitSyncError_DetailsTypeMismatchStillSyncError(t *testing.T) {
+	client := abapGitSyncServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(contentTypeHdr, jsonMIME)
+		w.WriteHeader(409)
+		_, _ = w.Write([]byte(`{"code":"REMOTE_CHANGED","message":"m","details":[{"x":1}]}`))
+	})
+	_, err := client.PullAbapGitRepo(context.Background(), adt.AbapGitPullRequest{Repo: "r"})
+	var syncErr *adt.AbapGitSyncError
+	if !errors.As(err, &syncErr) {
+		t.Fatalf("got %v (%T), want *AbapGitSyncError", err, err)
+	}
+	if syncErr.Code != adt.AbapGitErrRemoteChanged {
+		t.Errorf("Code: got %q, want %q", syncErr.Code, adt.AbapGitErrRemoteChanged)
 	}
 }

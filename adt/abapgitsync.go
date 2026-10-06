@@ -41,16 +41,18 @@ const (
 	AbapGitErrRemoteChanged       = "REMOTE_CHANGED"
 	AbapGitErrGitError            = "GIT_ERROR"
 	AbapGitErrInternal            = "INTERNAL"
+	AbapGitErrBadRequest          = "BAD_REQUEST"
 )
 
 // AbapGitRepo is one abapGit repository known to the companion.
 type AbapGitRepo struct {
-	Key            string `json:"key"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	Package        string `json:"package"`
-	Branch         string `json:"branch"`
-	Offline        bool   `json:"offline"`
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Package string `json:"package"`
+	Branch  string `json:"branch"`
+	Offline bool   `json:"offline"`
+	// DeserializedAt is an ISO 8601 UTC timestamp, empty if never deserialized.
 	DeserializedAt string `json:"deserialized_at"`
 	DeserializedBy string `json:"deserialized_by"`
 }
@@ -85,7 +87,8 @@ type AbapGitPullRequest struct {
 type AbapGitFileState struct {
 	Path     string `json:"path"`
 	Filename string `json:"filename"`
-	State    string `json:"state"`
+	// State is a two-character state, local then remote, '_' for unchanged (e.g. "M_", "_D").
+	State string `json:"state"`
 }
 
 // AbapGitConfirmationRequired describes an object the companion will only touch after confirmation.
@@ -205,6 +208,9 @@ func (c *httpClient) PushAbapGitRepo(ctx context.Context, req AbapGitPushRequest
 	if len(req.Objects) == 0 {
 		return nil, errors.New("PushAbapGitRepo: at least one object is required")
 	}
+	if req.Message == "" {
+		return nil, errors.New("PushAbapGitRepo: commit message is required")
+	}
 	var out AbapGitPushResult
 	if err := c.postAbapGitSync(ctx, "PushAbapGitRepo", "/push", req, &out); err != nil {
 		return nil, err
@@ -245,7 +251,9 @@ func decodeAbapGitSyncResponse(op string, resp *http.Response, out any) error {
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAbapGitSyncErrorBody))
 	var syncErr AbapGitSyncError
-	if json.Unmarshal(body, &syncErr) == nil && syncErr.Code != "" {
+	// A type mismatch in one member must not hide the code; invalid JSON leaves Code empty.
+	_ = json.Unmarshal(body, &syncErr)
+	if syncErr.Code != "" {
 		syncErr.HTTPStatus = resp.StatusCode
 		return fmt.Errorf("%s: %w", op, &syncErr)
 	}
