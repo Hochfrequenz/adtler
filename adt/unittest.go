@@ -12,6 +12,15 @@ import (
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
 )
 
+// RunUnitTests runs the ABAP Unit tests of objectURI and waits up to
+// timeoutSeconds (+5 s of slack) for the result.
+//
+// The POST goes through the LONG-TIMEOUT HTTP client (doMutateLong), so the
+// effective limit is the context deadline set here, not the short client's
+// 30-second cap (issue #186). A test run can legitimately outlast 30 s — a slow
+// test class, or a test method suspended at an external breakpoint while a
+// debugger is attached — and http.Client.Timeout would otherwise cut it off
+// regardless of timeoutSeconds.
 func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds+5)*time.Second)
 	defer cancel()
@@ -43,7 +52,7 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 		return nil, fmt.Errorf("marshal unit test request: %w", err)
 	}
 
-	resp, err := c.doMutate(reqCtx, http.MethodPost,
+	resp, err := c.doMutateLong(reqCtx, http.MethodPost,
 		"/sap/bc/adt/abapunit/testruns",
 		strings.NewReader(xml.Header+string(body)),
 		map[string]string{
