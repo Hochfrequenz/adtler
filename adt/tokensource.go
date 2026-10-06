@@ -1,6 +1,8 @@
 package adt
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -32,6 +34,10 @@ type refreshCall struct {
 	err  error
 }
 
+// errRefreshAborted is what the requests waiting on a refresh get when the
+// refresh callback panicked instead of returning.
+var errRefreshAborted = errors.New("token refresh aborted")
+
 func newTokenSource(token string, refresh func(string) (string, error)) *tokenSource {
 	s := &tokenSource{refresh: refresh}
 	s.token.Store(&token)
@@ -61,7 +67,8 @@ func (s *tokenSource) current() string {
 //
 //   - If the token has changed since the request sent it, another request
 //     already refreshed it, and retrying with the current token is enough.
-//   - If a refresh is running, the request waits for it and gets its outcome,
+//   - If a refresh is running, the request waits for it, or for ctx, and gets
+//     its outcome,
 //     including its error. A failed refresh is therefore not repeated by every
 //     request that queued behind it, which with an identity provider that
 //     rotates refresh tokens would only spend more attempts on a refresh token
@@ -75,7 +82,7 @@ func (s *tokenSource) current() string {
 //
 // Call it without holding c.mu. Requests on one session would otherwise reach
 // it one at a time, after the refresh they could have joined had finished.
-func (s *tokenSource) refreshAfter401(sent string) error {
+func (s *tokenSource) refreshAfter401(ctx context.Context, sent string) error {
 	if s == nil || s.refresh == nil {
 		return nil
 	}
@@ -88,23 +95,35 @@ func (s *tokenSource) refreshAfter401(sent string) error {
 	// was started for this same token.
 	if call := s.inflight; call != nil {
 		s.mu.Unlock()
-		<-call.done
-		return call.err
+		select {
+		case <-call.done:
+			return call.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	call := &refreshCall{done: make(chan struct{})}
+	call := &refreshCall{done: make(chan struct{}), err: errRefreshAborted}
 	s.inflight = call
 	s.mu.Unlock()
 
-	newToken, err := s.refresh(sent)
-
-	s.mu.Lock()
+	// Finish the call in a defer, so that a panicking callback still clears
+	// inflight and releases the waiters (with errRefreshAborted). Otherwise
+	// every later 401 with this token would wait forever.
+	var newToken string
+	defer func() {
+		s.mu.Lock()
+		if call.err == nil {
+			s.token.Store(&newToken)
+		}
+		s.inflight = nil
+		s.mu.Unlock()
+		close(call.done)
+	}()
+	t, err := s.refresh(sent)
 	if err != nil {
 		call.err = fmt.Errorf("token refresh failed: %w", err)
-	} else {
-		s.token.Store(&newToken)
+		return call.err
 	}
-	s.inflight = nil
-	s.mu.Unlock()
-	close(call.done)
-	return call.err
+	newToken, call.err = t, nil
+	return nil
 }

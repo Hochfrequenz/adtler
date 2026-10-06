@@ -485,7 +485,7 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 		_ = resp.Body.Close()
 		// Refresh outside c.mu: concurrent 401s on this session must reach
 		// refreshAfter401 together to share one refresh and its outcome.
-		if err := c.tokens.refreshAfter401(sent); err != nil {
+		if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
 			return nil, err
 		}
 		c.mu.Lock()
@@ -574,7 +574,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		_ = resp.Body.Close()
 		if resp.StatusCode == http.StatusUnauthorized {
 			// Outside c.mu, as in doReadWith.
-			if err := c.tokens.refreshAfter401(sent); err != nil {
+			if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
 				return nil, err
 			}
 		}

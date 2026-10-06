@@ -173,10 +173,67 @@ func TestTokenRefresh_FailedRefreshIsShared(t *testing.T) {
 	}
 
 	// A 401 after the failed call has finished tries again.
-	if err := parent.tokens.refreshAfter401("t0"); !errors.Is(err, errRefreshDenied) {
+	if err := parent.tokens.refreshAfter401(context.Background(), "t0"); !errors.Is(err, errRefreshDenied) {
 		t.Errorf("later refresh: %v, want it to wrap %v", err, errRefreshDenied)
 	}
 	if got := refreshes.Load(); got != 2 {
 		t.Errorf("refresh callback called %d times after a later 401, want 2", got)
+	}
+}
+
+// TestTokenRefresh_PanicReleasesSource: a refresh callback that panics, with
+// the panic recovered further up as net/http servers do, must not leave the
+// source marked as refreshing. Otherwise every later 401 with the same token
+// would wait for a refresh that never finishes.
+func TestTokenRefresh_PanicReleasesSource(t *testing.T) {
+	var calls atomic.Int64
+	s := newTokenSource("t0", func(string) (string, error) {
+		if calls.Add(1) == 1 {
+			panic("refresh callback bug")
+		}
+		return "t1", nil
+	})
+
+	func() {
+		defer func() { _ = recover() }()
+		_ = s.refreshAfter401(context.Background(), "t0")
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.refreshAfter401(ctx, "t0"); err != nil {
+		t.Fatalf("refresh after a panicked one: %v", err)
+	}
+	if got := s.current(); got != "t1" {
+		t.Errorf("token: got %q, want %q", got, "t1")
+	}
+}
+
+// TestTokenRefresh_WaiterHonoursContext: a request waiting for another
+// request's refresh must give up when its own context ends.
+func TestTokenRefresh_WaiterHonoursContext(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	s := newTokenSource("t0", func(string) (string, error) {
+		close(started)
+		<-release
+		return "t1", nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- s.refreshAfter401(context.Background(), "t0") }()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.refreshAfter401(ctx, "t0"); !errors.Is(err, context.Canceled) {
+		t.Errorf("waiter with a cancelled context: %v, want %v", err, context.Canceled)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Errorf("running refresh: %v", err)
+	}
+	if got := s.current(); got != "t1" {
+		t.Errorf("token: got %q, want %q", got, "t1")
 	}
 }
