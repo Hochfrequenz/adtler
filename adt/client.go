@@ -463,6 +463,8 @@ func (c *httpClient) setAuth(req *http.Request) string {
 // refreshed it while this one waited for c.mu, and retrying with the current
 // token is enough: N concurrent 401s cost one refresh, not N (issue #193). That
 // matters for identity providers that rotate the refresh token on every use.
+// The check compares tokens, so a refresh that returns the token it was given
+// does not count as done, and the next waiter refreshes again.
 // Caller must hold c.mu.
 func (c *httpClient) refreshTokenLocked(sent string) error {
 	if c.onTokenRefresh == nil || c.token() != sent {
