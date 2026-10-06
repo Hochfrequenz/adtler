@@ -18,7 +18,7 @@ func TestListAbapGitRepos_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
 		sys := sys
-		t.Run(sys.Name, func(t *testing.T) {
+		t.Run("system", func(t *testing.T) {
 			list, err := sys.Client.ListAbapGitRepos(ctx)
 			if errors.Is(err, adt.ErrAbapGitSyncNotInstalled) {
 				t.Skip("companion not installed")
@@ -29,7 +29,7 @@ func TestListAbapGitRepos_Integration(t *testing.T) {
 			if list.Count != len(list.Repos) {
 				t.Errorf("Count = %d, want len(Repos) = %d", list.Count, len(list.Repos))
 			}
-			t.Logf("[%s] repos: %d", sys.Name, list.Count)
+			t.Logf("repos: %d", list.Count)
 		})
 	}
 }
@@ -49,7 +49,7 @@ func TestPullAbapGitRepo_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
 		sys := sys
-		t.Run(sys.Name, func(t *testing.T) {
+		t.Run("system", func(t *testing.T) {
 			res, err := sys.Client.PullAbapGitRepo(ctx, adt.AbapGitPullRequest{
 				Repo:      repo,
 				Transport: transport,
@@ -63,11 +63,11 @@ func TestPullAbapGitRepo_Integration(t *testing.T) {
 			switch res.Status {
 			case adt.AbapGitStatusPulled:
 			case adt.AbapGitStatusNeedsConfirmation:
-				t.Logf("[%s] confirmations required: %d", sys.Name, len(res.ConfirmationsRequired))
+				t.Logf("confirmations required: %d", len(res.ConfirmationsRequired))
 			default:
 				t.Errorf("unexpected status %q", res.Status)
 			}
-			t.Logf("[%s] status=%s log entries=%d", sys.Name, res.Status, len(res.Log))
+			t.Logf("status=%s log entries=%d", res.Status, len(res.Log))
 		})
 	}
 }
