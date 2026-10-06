@@ -36,14 +36,6 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 
 			dbg := adt.NewDebugSession(sys.Client, sys.Config.User)
 			attached := false
-			// End the debug session before the report is deleted (cleanups run
-			// LIFO), so a failed run does not leave a suspended debuggee behind.
-			t.Cleanup(func() {
-				if attached {
-					_, _ = dbg.Step(context.Background(), "detachDebugger")
-				}
-				_ = dbg.StopListener(context.Background())
-			})
 
 			bp, err := dbg.SetBreakpoint(ctx, uri+"/source/main", bpLine, "PROG/P", name)
 			if err != nil {
@@ -52,6 +44,22 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			if bp.ErrorMessage != "" {
 				t.Fatalf("[%s] SetBreakpoint: %s", sys.Name, bp.ErrorMessage)
 			}
+
+			// Registered before the listener cleanup so it runs after it (LIFO).
+			t.Cleanup(func() {
+				if err := dbg.RemoveBreakpoint(context.Background(), adt.BreakpointScopeExternal, bp.ID); err != nil {
+					t.Errorf("[%s] cleanup RemoveBreakpoint %s: %v", sys.Name, bp.ID, err)
+				}
+			})
+
+			// End the debug session before the breakpoint and report are removed
+			// (cleanups run LIFO), so a failed run leaves no suspended debuggee.
+			t.Cleanup(func() {
+				if attached {
+					_, _ = dbg.Step(context.Background(), "detachDebugger")
+				}
+				_ = dbg.StopListener(context.Background())
+			})
 
 			type listenerOut struct {
 				r   *adt.ListenerResult
@@ -128,13 +136,6 @@ func TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration(t *testing.T) 
 
 			dbg := adt.NewDebugSession(sys.Client, sys.Config.User)
 			attached := false
-			// RemoveBreakpoint does not exist yet; StopListener only.
-			t.Cleanup(func() {
-				if attached {
-					_, _ = dbg.Step(context.Background(), "detachDebugger")
-				}
-				_ = dbg.StopListener(context.Background())
-			})
 
 			bp, err := dbg.SetBreakpoint(ctx, uri+"/source/main", bpLine, "PROG/P", name)
 			if err != nil {
@@ -143,6 +144,22 @@ func TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration(t *testing.T) 
 			if bp.ErrorMessage != "" {
 				t.Fatalf("[%s] SetBreakpoint: %s", sys.Name, bp.ErrorMessage)
 			}
+
+			// Registered before the listener cleanup so it runs after it (LIFO).
+			t.Cleanup(func() {
+				if err := dbg.RemoveBreakpoint(context.Background(), adt.BreakpointScopeExternal, bp.ID); err != nil {
+					t.Errorf("[%s] cleanup RemoveBreakpoint %s: %v", sys.Name, bp.ID, err)
+				}
+			})
+
+			// End the debug session before the breakpoint and report are removed
+			// (cleanups run LIFO), so a failed run leaves no suspended debuggee.
+			t.Cleanup(func() {
+				if attached {
+					_, _ = dbg.Step(context.Background(), "detachDebugger")
+				}
+				_ = dbg.StopListener(context.Background())
+			})
 
 			type listenerOut struct {
 				r   *adt.ListenerResult
