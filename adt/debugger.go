@@ -237,7 +237,7 @@ func (d *DebugSession) GetDebuggeeSessions(ctx context.Context) ([]byte, error) 
 // before it calls the kernel attach, so a failed attach consumes the debuggee:
 // any retry can only fail with subtype invalidDebuggee and would hide the
 // first response, the only one that says why the attach failed. Callers can
-// recover that response with errors.As(err, *ADTError) and read
+// recover that response with errors.As and a *ADTError target, and read
 // Properties["com.sap.adt.communicationFramework.subType"] (e.g.
 // invalidServer, invalidDebuggee). See adtler#195 and aibap.mcp#513.
 func (d *DebugSession) Attach(ctx context.Context, debuggeeID string) error {
@@ -312,9 +312,9 @@ const (
 )
 
 // retryOnAdiFailed calls fn up to 1+adiFailedMaxRetries times, retrying only
-// when fn's error is a fast-failing AdiFailed 500 (aibap.mcp#513: an
-// intermittent SAP-side debugger fault with no further diagnosable detail).
-// Used by Step only — Attach must never be retried (see Attach). Any other error — including a bare timeout, already handled
+// when fn's error is a fast-failing AdiFailed 500 (aibap.mcp#513: seen
+// intermittently on Step). Used by Step only — Attach must never be retried
+// (see Attach). Any other error — including a bare timeout, already handled
 // elsewhere via DebuggeeEndedError — returns immediately on the first
 // attempt, unretried. A context cancellation during the retry delay aborts
 // immediately with the last error seen.
@@ -389,8 +389,8 @@ func (d *DebugSession) debuggeeSessionsEmpty(ctx context.Context) bool {
 // also recognizes and reports as *DebuggeeEndedError.
 //
 // Any other fast-failing (non-timeout) 500 AdiFailed response is retried —
-// see retryOnAdiFailed — since it's a known-intermittent SAP kernel-side
-// fault (aibap.mcp#513), distinct from both debuggee-ended shapes above.
+// see retryOnAdiFailed — since it has been seen intermittently on Step
+// (aibap.mcp#513), distinct from both debuggee-ended shapes above.
 func (d *DebugSession) Step(ctx context.Context, action string) ([]byte, error) {
 	return retryOnAdiFailed(ctx, func() ([]byte, error) {
 		return d.stepOnce(ctx, action)
