@@ -737,3 +737,68 @@ func (d *DebugSession) SetWatchpoint(ctx context.Context, variableName, conditio
 	}
 	return io.ReadAll(resp.Body)
 }
+
+// StackFrame is one parsed debugger stack frame.
+type StackFrame struct {
+	Position      int
+	Program       string
+	Include       string
+	Line          int
+	EventType     string
+	EventName     string
+	SourceURI     string // adtcore:uri without the #start fragment; empty when SAP sends none
+	SourceLine    int    // line from the #start=<line>,<col> fragment; 0 when absent
+	SystemProgram bool
+	Active        bool
+}
+
+// GetStackFrames returns the parsed call stack (see GetStack for the raw XML).
+func (d *DebugSession) GetStackFrames(ctx context.Context) ([]StackFrame, error) {
+	data, err := d.GetStack(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var resp adtxml.StackResponse
+	if err := xml.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("GetStackFrames unmarshal: %w", err)
+	}
+	frames := make([]StackFrame, 0, len(resp.Entries))
+	for _, e := range resp.Entries {
+		uri, srcLine := e.URI, 0
+		if i := strings.IndexByte(uri, '#'); i >= 0 {
+			frag := uri[i+1:]
+			uri = uri[:i]
+			if rest, ok := strings.CutPrefix(frag, "start="); ok {
+				if j := strings.IndexAny(rest, ",;"); j >= 0 {
+					rest = rest[:j]
+				}
+				srcLine, _ = strconv.Atoi(rest)
+			}
+		}
+		frames = append(frames, StackFrame{
+			Position: e.Position, Program: e.Program, Include: e.Include, Line: e.Line,
+			EventType: e.EventType, EventName: e.EventName, SourceURI: uri, SourceLine: srcLine,
+			SystemProgram: e.SystemProgram, Active: e.IsActive,
+		})
+	}
+	return frames, nil
+}
+
+// ActiveFrame returns the frame the debuggee stands in: the one marked active,
+// or — when SAP marks none (SAP_BASIS 750) — the top of the stack, i.e. the
+// highest Position.
+func ActiveFrame(frames []StackFrame) (StackFrame, bool) {
+	if len(frames) == 0 {
+		return StackFrame{}, false
+	}
+	top := frames[0]
+	for _, f := range frames {
+		if f.Active {
+			return f, true
+		}
+		if f.Position > top.Position {
+			top = f
+		}
+	}
+	return top, true
+}

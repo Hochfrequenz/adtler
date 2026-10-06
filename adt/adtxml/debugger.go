@@ -77,3 +77,23 @@ type BreakpointResponse struct {
 	Name           string `xml:"name,attr"`
 	NonAbapFlavour string `xml:"nonAbapFlavour,attr"`
 }
+
+// StackResponse is the response of POST /sap/bc/adt/debugger?method=getStack.
+type StackResponse struct {
+	XMLName xml.Name     `xml:"stack"`
+	Entries []StackEntry `xml:"stackEntry"`
+}
+
+// StackEntry is one frame. Attribute order differs between releases; isActive
+// is absent on SAP_BASIS 750.
+type StackEntry struct {
+	Position      int    `xml:"stackPosition,attr"`
+	Program       string `xml:"programName,attr"`
+	Include       string `xml:"includeName,attr"`
+	Line          int    `xml:"line,attr"`
+	EventType     string `xml:"eventType,attr"`
+	EventName     string `xml:"eventName,attr"`
+	SystemProgram bool   `xml:"systemProgram,attr"`
+	IsActive      bool   `xml:"isActive,attr"`
+	URI           string `xml:"uri,attr"` // adtcore:uri
+}
