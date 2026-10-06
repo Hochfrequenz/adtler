@@ -41,7 +41,7 @@ func sharedStateServer(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 		case r.URL.Path == raceBreakpointsPath && r.Method == http.MethodPost:
 			w.Header().Set("Content-Type", "application/xml")
-			_, _ = fmt.Fprintf(w, `<?xml version="1.0"?><dbg:breakpoints xmlns:dbg="http://www.sap.com/adt/debugger"><breakpoint kind="line" id="BP%d"/></dbg:breakpoints>`, breakpoints.Add(1))
+			_, _ = fmt.Fprintf(w, `<?xml version="1.0"?><dbg:breakpoints xmlns:dbg="http://www.sap.com/adt/debugger"><breakpoint kind="line" clientId="0" id="BP%d"/></dbg:breakpoints>`, breakpoints.Add(1))
 		case r.URL.Path == raceExpiredPath:
 			w.WriteHeader(http.StatusUnauthorized)
 		default:

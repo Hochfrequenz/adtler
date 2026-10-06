@@ -30,7 +30,7 @@ func TestDebugSetBreakpoint_Integration(t *testing.T) {
 }
 
 // TestDebugFullFlow_Integration tests the complete debug flow:
-// 1. Set breakpoint (syncMode=full)
+// 1. Set breakpoint (one external line breakpoint)
 // 2. Start listener (long poll)
 // 3. Trigger code execution via unit test runner
 // 4. Listener wakes up with debuggee session

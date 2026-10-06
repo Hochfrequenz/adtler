@@ -31,7 +31,7 @@ func TestDebugSessionSetBreakpoint(t *testing.T) {
 			gotBody = string(body)
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><dbg:breakpoints xmlns:dbg="http://www.sap.com/adt/debugger"><breakpoint kind="line" id="BP1" adtcore:uri="/sap/bc/adt/programs/programs/ztest/source/main#start=2" adtcore:type="PROG/P" adtcore:name="ZTEST" xmlns:adtcore="http://www.sap.com/adt/core"/></dbg:breakpoints>`))
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><dbg:breakpoints xmlns:dbg="http://www.sap.com/adt/debugger"><breakpoint kind="line" clientId="0" id="BP1" adtcore:uri="/sap/bc/adt/programs/programs/ztest/source/main#start=2" adtcore:type="PROG/P" adtcore:name="ZTEST" xmlns:adtcore="http://www.sap.com/adt/core"/></dbg:breakpoints>`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
