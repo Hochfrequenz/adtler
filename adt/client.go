@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
@@ -192,13 +192,14 @@ type Client interface {
 type httpClient struct {
 	cfg                 sapmcpconfig.SAPSystem
 	http                *http.Client
-	httpLong            *http.Client // long-timeout client for large queries; shares transport + cookie jar
+	httpLong            *http.Client   // long-timeout client for large queries; shares transport + cookie jar
+	jar                 *resettableJar // the cookie jar of http and httpLong; emptied by Logout, never replaced
 	mu                  sync.Mutex
 	csrfToken           string
 	hasSecureCookies    bool                         // true if SAP sets Secure cookies on an HTTP connection
 	discovery           map[string][]string          // endpoint → accepted content types from discovery
 	removeObjectSupport RemoveObjectSupport          // cached tri-state; see cacheRemoveObjectSupport
-	accessToken         string                       // OAuth2 access token (empty = Basic Auth)
+	accessToken         atomic.Pointer[string]       // OAuth2 access token (nil or empty = Basic Auth); read via token()
 	onTokenRefresh      func(string) (string, error) // callback to refresh token, returns new access token
 	pollInterval        time.Duration                // polling interval for background runs (default: 10s)
 }
@@ -211,7 +212,7 @@ func NewClient(cfg sapmcpconfig.SAPSystem) Client {
 // NewClientWithPollInterval creates a new ADT HTTP client with a custom polling interval
 // for background release jobs. Use NewClient for the default 10-second interval.
 func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Duration) Client {
-	jar, _ := cookiejar.New(nil)
+	jar := newResettableJar()
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: cfg.TLSSkipVerify, //nolint:gosec
@@ -221,6 +222,7 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 		cfg:          cfg,
 		http:         newShortClient(transport, jar, 30*time.Second),
 		httpLong:     newLongClient(transport, jar),
+		jar:          jar,
 		pollInterval: pollInterval,
 	}
 }
@@ -245,33 +247,37 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // and only swaps in a fresh cookie jar: the empty jar is what makes SAP start a
 // clean session, independent of the TCP connection reuse.
 func (c *httpClient) freshSession() *httpClient {
-	jar, _ := cookiejar.New(nil)
-	return &httpClient{
+	jar := newResettableJar()
+	fresh := &httpClient{
 		cfg:            c.cfg,
 		http:           newShortClient(c.http.Transport, jar, c.http.Timeout),
 		httpLong:       newLongClient(c.httpLong.Transport, jar),
-		accessToken:    c.accessToken,
+		jar:            jar,
 		onTokenRefresh: c.onTokenRefresh,
 		pollInterval:   c.pollInterval,
 	}
+	fresh.setToken(c.token())
+	return fresh
 }
 
 // NewClientWithToken creates a Client using Bearer token auth.
 // onRefresh is called with the current access token when a 401 occurs; it should return a new access token.
 func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefresh func(string) (string, error)) Client {
-	jar, _ := cookiejar.New(nil)
+	jar := newResettableJar()
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: cfg.TLSSkipVerify, //nolint:gosec
 		},
 	}
-	return &httpClient{
+	c := &httpClient{
 		cfg:            cfg,
 		http:           newShortClient(transport, jar, 30*time.Second),
 		httpLong:       newLongClient(transport, jar),
-		accessToken:    accessToken,
+		jar:            jar,
 		onTokenRefresh: onRefresh,
 	}
+	c.setToken(accessToken)
+	return c
 }
 
 // NewClientWithTransport creates a Client using a caller-supplied http.RoundTripper.
@@ -295,11 +301,12 @@ func NewClientWithTransport(cfg sapmcpconfig.SAPSystem, transport http.RoundTrip
 // Like NewClientWithTransport, TLSSkipVerify from cfg is NOT applied — the caller's
 // RoundTripper owns its own TLS configuration.
 func NewClientWithTransportAndPollInterval(cfg sapmcpconfig.SAPSystem, transport http.RoundTripper, pollInterval time.Duration) Client {
-	jar, _ := cookiejar.New(nil)
+	jar := newResettableJar()
 	return &httpClient{
 		cfg:          cfg,
 		http:         newShortClient(transport, jar, 30*time.Second),
 		httpLong:     newLongClient(transport, jar),
+		jar:          jar,
 		pollInterval: pollInterval,
 	}
 }
@@ -326,14 +333,14 @@ func (c *httpClient) Logout(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.csrfToken = ""
-	// Replace the cookie jar with a fresh one so no stale session cookies
-	// leak into the next request. The old jar may still hold SAP_SESSIONID_*
-	// and sap-usercontext cookies that reference the now-terminated server
-	// session — sending them alongside new cookies on some SAP versions
-	// confuses the session manager.
-	jar, _ := cookiejar.New(nil)
-	c.http.Jar = jar
-	c.httpLong.Jar = jar
+	// Empty the cookie jar so no stale session cookies leak into the next
+	// request. The jar may still hold SAP_SESSIONID_* and sap-usercontext
+	// cookies that reference the now-terminated server session — sending
+	// them alongside new cookies on some SAP versions confuses the session
+	// manager. Reset the jar rather than assigning a new one to
+	// c.http.Jar: net/http reads that field unlocked on every request, so
+	// reassigning it races with any request in flight (issue #191).
+	c.jar.Reset()
 	c.mu.Unlock()
 	return nil
 }
@@ -419,9 +426,26 @@ func hasSecureCookieOnHTTP(host string, header http.Header) bool {
 	return false
 }
 
+// token returns the current OAuth2 access token, or "" for Basic Auth.
+//
+// The token is atomic rather than guarded by c.mu because setAuth reads it for
+// every request, including fetchCSRFToken's, which already runs under c.mu.
+// The refresh paths still call onTokenRefresh under c.mu, one at a time
+// (issue #191).
+func (c *httpClient) token() string {
+	if t := c.accessToken.Load(); t != nil {
+		return *t
+	}
+	return ""
+}
+
+func (c *httpClient) setToken(token string) {
+	c.accessToken.Store(&token)
+}
+
 func (c *httpClient) setAuth(req *http.Request) {
-	if c.accessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	if token := c.token(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
 		req.SetBasicAuth(c.cfg.User, c.cfg.Password)
 	}
@@ -473,12 +497,12 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 		_ = resp.Body.Close()
 		c.mu.Lock()
 		if c.onTokenRefresh != nil {
-			newToken, err := c.onTokenRefresh(c.accessToken)
+			newToken, err := c.onTokenRefresh(c.token())
 			if err != nil {
 				c.mu.Unlock()
 				return nil, fmt.Errorf("token refresh failed: %w", err)
 			}
-			c.accessToken = newToken
+			c.setToken(newToken)
 		}
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
@@ -565,12 +589,12 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		_ = resp.Body.Close()
 		c.mu.Lock()
 		if resp.StatusCode == http.StatusUnauthorized && c.onTokenRefresh != nil {
-			newToken, err := c.onTokenRefresh(c.accessToken)
+			newToken, err := c.onTokenRefresh(c.token())
 			if err != nil {
 				c.mu.Unlock()
 				return nil, fmt.Errorf("token refresh failed: %w", err)
 			}
-			c.accessToken = newToken
+			c.setToken(newToken)
 		}
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()

@@ -18,13 +18,15 @@ import (
 // DebugSession manages a stateful ABAP debug session via ADT REST endpoints.
 // It runs on its own isolated ADT session (see NewDebugSession); its short and
 // long HTTP clients share that session's cookie jar and CSRF token.
+//
+// Every field is set once by NewDebugSession and never written again, so its
+// methods may run concurrently (issue #191) — keep it that way. State that
+// changes per call, such as the IDs of set breakpoints, belongs to the caller.
 type DebugSession struct {
-	client      *httpClient
-	user        string
-	terminalID  string
-	ideID       string
-	debuggeeID  string
-	breakpoints map[string]string // serverID → serverID
+	client     *httpClient
+	user       string
+	terminalID string
+	ideID      string
 }
 
 // resolveHTTPClient extracts the concrete *httpClient from a Client.
@@ -66,11 +68,10 @@ func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
 		id = ideID[0]
 	}
 	return &DebugSession{
-		client:      hc,
-		user:        strings.ToUpper(user),
-		terminalID:  "MCP01",
-		ideID:       id,
-		breakpoints: make(map[string]string),
+		client:     hc,
+		user:       strings.ToUpper(user),
+		terminalID: "MCP01",
+		ideID:      id,
 	}
 }
 
@@ -135,7 +136,6 @@ func (d *DebugSession) SetBreakpoint(ctx context.Context, objectURI string, line
 	if bp.ErrorMessage != "" {
 		return &BreakpointResult{ErrorMessage: bp.ErrorMessage}, nil
 	}
-	d.breakpoints[bp.ID] = bp.ID
 	return &BreakpointResult{ID: bp.ID}, nil
 }
 
@@ -198,7 +198,7 @@ func extractXMLTag(s, tag string) string {
 	return s[i+len(open) : i+j]
 }
 
-// StopListener stops the debug listener and cleans up breakpoints.
+// StopListener stops the debug listener.
 func (d *DebugSession) StopListener(ctx context.Context) error {
 	path := fmt.Sprintf("/sap/bc/adt/debugger/listeners?debuggingMode=user&requestUser=%s&terminalId=%s&ideId=%s",
 		d.user, d.terminalID, d.ideID)
@@ -208,7 +208,6 @@ func (d *DebugSession) StopListener(ctx context.Context) error {
 		return fmt.Errorf("StopListener: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	d.breakpoints = make(map[string]string)
 	return checkResponse(resp)
 }
 
@@ -250,11 +249,7 @@ func (d *DebugSession) attachOnce(ctx context.Context, debuggeeID string) error 
 		return fmt.Errorf("Attach: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if err := checkResponse(resp); err != nil {
-		return err
-	}
-	d.debuggeeID = debuggeeID
-	return nil
+	return checkResponse(resp)
 }
 
 // DebuggeeEndedError is returned by Step when a step action's HTTP request
