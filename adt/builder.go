@@ -30,6 +30,10 @@ func NewClientsFromConfig(cfg *sapmcpconfig.Config, defaultOAuth2ClientID string
 		if clientID == "" {
 			return nil, fmt.Errorf("system %q: OAuth2 requires oauth2_client_id in config or a default client ID", name)
 		}
+		// td is written without a lock. That is safe only because this callback
+		// belongs to exactly one client: its tokenSource, shared with every
+		// freshSession clone, serializes the calls (issue #197). Do not hand
+		// onRefresh to a second client.
 		td := tokenData // closure-mutable copy of the latest known token
 		onRefresh := func(_ string) (string, error) {
 			newToken, err := auth.RefreshToken(

@@ -51,6 +51,10 @@ func (s *tokenSource) current() string {
 // cost one refresh, not N (issue #193). The check compares tokens, so a refresh
 // that returns the token it was given does not count as done, and the next
 // waiter refreshes again.
+//
+// The callers hold their session's c.mu, so while a refresh is in flight every
+// session of the client that got a 401 waits for it, up to the refresh
+// request's own timeout. Sessions that got no 401 are not blocked.
 func (s *tokenSource) refreshAfter401(sent string) error {
 	if s == nil || s.refresh == nil {
 		return nil
