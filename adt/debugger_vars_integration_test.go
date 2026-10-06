@@ -59,10 +59,11 @@ func varsTestSource(name string) (string, int) {
 	return strings.Join(lines, "\n") + "\n", bpLine
 }
 
-// findVar returns the variable with the given name, or nil.
-func findVar(vars []adt.DebugVariable, name string) *adt.DebugVariable {
+// findVar returns the variable whose ID or Name equals key, or nil. The server
+// identifies children by ID (e.g. LS_ROW-TEXT); Name is the short display name.
+func findVar(vars []adt.DebugVariable, key string) *adt.DebugVariable {
 	for i := range vars {
-		if vars[i].Name == name {
+		if vars[i].ID == key || vars[i].Name == key {
 			return &vars[i]
 		}
 	}
@@ -164,7 +165,7 @@ func TestDebugVariables_MultiSystem_Integration(t *testing.T) {
 			}
 			foundName := false
 			for _, v := range item.Variables {
-				if strings.HasSuffix(v.Name, "-MV_NAME") {
+				if strings.HasSuffix(v.ID, "-MV_NAME") || v.Name == "MV_NAME" {
 					foundName = true
 					if trimPad(v.Value) != "item" {
 						t.Errorf("[%s] %s value: got %q, want %q", sys.Name, v.Name, v.Value, "item")
@@ -172,7 +173,7 @@ func TestDebugVariables_MultiSystem_Integration(t *testing.T) {
 				}
 			}
 			if !foundName {
-				t.Errorf("[%s] LO_ITEM children lack an attribute ending in -MV_NAME: %+v", sys.Name, item.Variables)
+				t.Errorf("[%s] LO_ITEM children lack an attribute with ID ending in -MV_NAME or Name MV_NAME: %+v", sys.Name, item.Variables)
 			}
 
 			ref, err := dbg.GetChildVariables(ctx, "LR_DATA")
