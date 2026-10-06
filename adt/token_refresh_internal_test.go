@@ -2,6 +2,7 @@ package adt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,5 +126,57 @@ func TestTokenRefresh_ParentAndFreshSessionRefreshOnce(t *testing.T) {
 	})
 	if clone.token() != parent.token() {
 		t.Errorf("clone token %q differs from the parent's %q", clone.token(), parent.token())
+	}
+}
+
+// errRefreshDenied is what the failing refresh callback returns.
+var errRefreshDenied = errors.New("refresh denied")
+
+// TestTokenRefresh_FailedRefreshIsShared: when the refresh fails, the requests
+// that got a 401 alongside the one running it must take its error rather than
+// each calling the callback again with the refresh token that just failed. A
+// later 401 must still start a fresh attempt, so a transient failure does not
+// stick. The requests are split between a parent and a freshSession clone.
+func TestTokenRefresh_FailedRefreshIsShared(t *testing.T) {
+	var refreshes atomic.Int64
+	parent := NewClientWithToken(raceTestConfig(expiredTokenServer(t).URL), "t0", func(string) (string, error) {
+		refreshes.Add(1)
+		// Long enough for the other rejected requests to join this call.
+		time.Sleep(300 * time.Millisecond)
+		return "", errRefreshDenied
+	}).(*httpClient)
+	if err := parent.ensureCSRF(context.Background()); err != nil {
+		t.Fatalf("CSRF preflight: %v", err)
+	}
+	sessions := []*httpClient{parent, parent.freshSession()}
+
+	var next atomic.Int64
+	fns := make([]func(), concurrent401s)
+	for i := range fns {
+		fns[i] = func() {
+			c := sessions[next.Add(1)%2]
+			resp, err := c.doRead(context.Background(), raceOKPath, nil)
+			if err == nil {
+				_ = resp.Body.Close()
+				t.Errorf("request succeeded with status %d, want the refresh error", resp.StatusCode)
+				return
+			}
+			if !errors.Is(err, errRefreshDenied) {
+				t.Errorf("request error: %v, want it to wrap %v", err, errRefreshDenied)
+			}
+		}
+	}
+	runConcurrently(fns...)
+
+	if got := refreshes.Load(); got != 1 {
+		t.Errorf("refresh callback called %d times for %d concurrent 401s, want 1", got, concurrent401s)
+	}
+
+	// A 401 after the failed call has finished tries again.
+	if err := parent.tokens.refreshAfter401("t0"); !errors.Is(err, errRefreshDenied) {
+		t.Errorf("later refresh: %v, want it to wrap %v", err, errRefreshDenied)
+	}
+	if got := refreshes.Load(); got != 2 {
+		t.Errorf("refresh callback called %d times after a later 401, want 2", got)
 	}
 }

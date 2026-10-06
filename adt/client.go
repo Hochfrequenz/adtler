@@ -483,11 +483,12 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		c.mu.Lock()
+		// Refresh outside c.mu: concurrent 401s on this session must reach
+		// refreshAfter401 together to share one refresh and its outcome.
 		if err := c.tokens.refreshAfter401(sent); err != nil {
-			c.mu.Unlock()
 			return nil, err
 		}
+		c.mu.Lock()
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err
@@ -571,13 +572,13 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		c.mu.Lock()
 		if resp.StatusCode == http.StatusUnauthorized {
+			// Outside c.mu, as in doReadWith.
 			if err := c.tokens.refreshAfter401(sent); err != nil {
-				c.mu.Unlock()
 				return nil, err
 			}
 		}
+		c.mu.Lock()
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err

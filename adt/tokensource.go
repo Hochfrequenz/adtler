@@ -19,8 +19,17 @@ import (
 // A nil *tokenSource stands for Basic Auth: no token, nothing to refresh.
 type tokenSource struct {
 	token   atomic.Pointer[string]
-	mu      sync.Mutex // serializes refresh; never held while taking an httpClient's c.mu
 	refresh func(string) (string, error)
+
+	mu       sync.Mutex   // guards inflight; never held across the refresh call or while taking a c.mu
+	inflight *refreshCall // the refresh currently running, nil when none is
+}
+
+// refreshCall is one run of the refresh callback. Requests that get a 401
+// while it runs wait for it and share its outcome.
+type refreshCall struct {
+	done chan struct{} // closed when the call has finished and err is set
+	err  error
 }
 
 func newTokenSource(token string, refresh func(string) (string, error)) *tokenSource {
@@ -33,7 +42,7 @@ func newTokenSource(token string, refresh func(string) (string, error)) *tokenSo
 //
 // The token is atomic rather than guarded by a mutex because setAuth reads it
 // for every request, including fetchCSRFToken's, which already runs under
-// c.mu, and because a refresh holding s.mu must not block unrelated requests.
+// c.mu, and because a running refresh must not block unrelated requests.
 func (s *tokenSource) current() string {
 	if s == nil {
 		return ""
@@ -44,30 +53,58 @@ func (s *tokenSource) current() string {
 	return ""
 }
 
-// refreshAfter401 calls the refresh callback after a request that sent token
-// sent came back 401. When the token has changed since, another request, on
-// this session or any other sharing the source, already refreshed it while this
-// one waited, and retrying with the current token is enough: N concurrent 401s
-// cost one refresh, not N (issue #193). The check compares tokens, so a refresh
-// that returns the token it was given does not count as done, and the next
-// waiter refreshes again.
+// refreshAfter401 refreshes the token after a request that sent token sent came
+// back 401, so the caller can retry with the token current() then returns.
 //
-// The callers hold their session's c.mu, so while a refresh is in flight every
-// session of the client that got a 401 waits for it, up to the refresh
-// request's own timeout. Sessions that got no 401 are not blocked.
+// One refresh serves every request rejected with the same token, on this
+// session or any other sharing the source (issues #193, #197):
+//
+//   - If the token has changed since the request sent it, another request
+//     already refreshed it, and retrying with the current token is enough.
+//   - If a refresh is running, the request waits for it and gets its outcome,
+//     including its error. A failed refresh is therefore not repeated by every
+//     request that queued behind it, which with an identity provider that
+//     rotates refresh tokens would only spend more attempts on a refresh token
+//     that has just failed.
+//   - Otherwise the request runs the refresh itself.
+//
+// A failure is not remembered: the next 401 after the failed call has finished
+// starts a fresh attempt, so a transient error does not stick. The check
+// compares tokens, so a refresh that returns the token it was given does not
+// count as done either.
+//
+// Call it without holding c.mu. Requests on one session would otherwise reach
+// it one at a time, after the refresh they could have joined had finished.
 func (s *tokenSource) refreshAfter401(sent string) error {
 	if s == nil || s.refresh == nil {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.current() != sent {
+		s.mu.Unlock()
 		return nil
 	}
-	newToken, err := s.refresh(sent)
-	if err != nil {
-		return fmt.Errorf("token refresh failed: %w", err)
+	// The token only changes when a refresh finishes, so a running refresh
+	// was started for this same token.
+	if call := s.inflight; call != nil {
+		s.mu.Unlock()
+		<-call.done
+		return call.err
 	}
-	s.token.Store(&newToken)
-	return nil
+	call := &refreshCall{done: make(chan struct{})}
+	s.inflight = call
+	s.mu.Unlock()
+
+	newToken, err := s.refresh(sent)
+
+	s.mu.Lock()
+	if err != nil {
+		call.err = fmt.Errorf("token refresh failed: %w", err)
+	} else {
+		s.token.Store(&newToken)
+	}
+	s.inflight = nil
+	s.mu.Unlock()
+	close(call.done)
+	return call.err
 }
