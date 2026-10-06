@@ -106,3 +106,24 @@ func TestTokenRefresh_ConcurrentMutatesRefreshOnce(t *testing.T) {
 		return c.doMutate(context.Background(), http.MethodPost, raceOKPath, nil, nil)
 	})
 }
+
+// TestTokenRefresh_ParentAndFreshSessionRefreshOnce: a client and a
+// freshSession clone (as used by NewDebugSession and RunClass) that get a 401
+// at the same time must refresh once between them, and both must send the new
+// token afterwards. Before issue #197 each refreshed under its own c.mu, so the
+// refresh callback ran concurrently with the same refresh token, and a token
+// refreshed in the clone never reached the parent.
+func TestTokenRefresh_ParentAndFreshSessionRefreshOnce(t *testing.T) {
+	parent, refreshes := countingRefreshClient(t, expiredTokenServer(t).URL)
+	clone := parent.freshSession()
+	// Half the requests go through each session.
+	sessions := []*httpClient{parent, clone}
+	var next atomic.Int64
+	assertSingleRefresh(t, parent, refreshes, func() (*http.Response, error) {
+		c := sessions[next.Add(1)%2]
+		return c.doRead(context.Background(), raceOKPath, nil)
+	})
+	if clone.token() != parent.token() {
+		t.Errorf("clone token %q differs from the parent's %q", clone.token(), parent.token())
+	}
+}

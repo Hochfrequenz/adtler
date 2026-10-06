@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
@@ -196,12 +195,11 @@ type httpClient struct {
 	jar                 *resettableJar // the cookie jar of http and httpLong; emptied by Logout, never replaced
 	mu                  sync.Mutex
 	csrfToken           string
-	hasSecureCookies    bool                         // true if SAP sets Secure cookies on an HTTP connection
-	discovery           map[string][]string          // endpoint → accepted content types from discovery
-	removeObjectSupport RemoveObjectSupport          // cached tri-state; see cacheRemoveObjectSupport
-	accessToken         atomic.Pointer[string]       // OAuth2 access token (nil or empty = Basic Auth); read via token()
-	onTokenRefresh      func(string) (string, error) // callback to refresh token, returns new access token
-	pollInterval        time.Duration                // polling interval for background runs (default: 10s)
+	hasSecureCookies    bool                // true if SAP sets Secure cookies on an HTTP connection
+	discovery           map[string][]string // endpoint → accepted content types from discovery
+	removeObjectSupport RemoveObjectSupport // cached tri-state; see cacheRemoveObjectSupport
+	tokens              *tokenSource        // OAuth2 token, shared with freshSession clones; nil = Basic Auth
+	pollInterval        time.Duration       // polling interval for background runs (default: 10s)
 }
 
 // NewClient creates a new ADT HTTP client configured from cfg.
@@ -239,8 +237,9 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // contract and leaves the caller's session and any locks untouched.
 //
 // The returned client is not registered anywhere and holds no locks; discard it
-// after use. An OAuth token refreshed inside this single-use session is not
-// propagated back to the parent client — acceptable for a one-shot run.
+// after use. It shares the parent's OAuth token source, so a token refreshed in
+// either one is the token both send next, and the two never refresh at the same
+// time (issue #197).
 //
 // It reuses the parent's *http.Transport (preserving any caller-supplied
 // RoundTripper from NewClientWithTransport and the existing connection pool)
@@ -248,16 +247,14 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // clean session, independent of the TCP connection reuse.
 func (c *httpClient) freshSession() *httpClient {
 	jar := newResettableJar()
-	fresh := &httpClient{
-		cfg:            c.cfg,
-		http:           newShortClient(c.http.Transport, jar, c.http.Timeout),
-		httpLong:       newLongClient(c.httpLong.Transport, jar),
-		jar:            jar,
-		onTokenRefresh: c.onTokenRefresh,
-		pollInterval:   c.pollInterval,
+	return &httpClient{
+		cfg:          c.cfg,
+		http:         newShortClient(c.http.Transport, jar, c.http.Timeout),
+		httpLong:     newLongClient(c.httpLong.Transport, jar),
+		jar:          jar,
+		tokens:       c.tokens,
+		pollInterval: c.pollInterval,
 	}
-	fresh.setToken(c.token())
-	return fresh
 }
 
 // NewClientWithToken creates a Client using Bearer token auth.
@@ -269,15 +266,13 @@ func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefres
 			InsecureSkipVerify: cfg.TLSSkipVerify, //nolint:gosec
 		},
 	}
-	c := &httpClient{
-		cfg:            cfg,
-		http:           newShortClient(transport, jar, 30*time.Second),
-		httpLong:       newLongClient(transport, jar),
-		jar:            jar,
-		onTokenRefresh: onRefresh,
+	return &httpClient{
+		cfg:      cfg,
+		http:     newShortClient(transport, jar, 30*time.Second),
+		httpLong: newLongClient(transport, jar),
+		jar:      jar,
+		tokens:   newTokenSource(accessToken, onRefresh),
 	}
-	c.setToken(accessToken)
-	return c
 }
 
 // NewClientWithTransport creates a Client using a caller-supplied http.RoundTripper.
@@ -427,20 +422,8 @@ func hasSecureCookieOnHTTP(host string, header http.Header) bool {
 }
 
 // token returns the current OAuth2 access token, or "" for Basic Auth.
-//
-// The token is atomic rather than guarded by c.mu because setAuth reads it for
-// every request, including fetchCSRFToken's, which already runs under c.mu.
-// The refresh paths still call onTokenRefresh under c.mu, one at a time
-// (issue #191).
 func (c *httpClient) token() string {
-	if t := c.accessToken.Load(); t != nil {
-		return *t
-	}
-	return ""
-}
-
-func (c *httpClient) setToken(token string) {
-	c.accessToken.Store(&token)
+	return c.tokens.current()
 }
 
 // setAuth adds the credentials to req and returns the OAuth token it sent, or
@@ -456,26 +439,6 @@ func (c *httpClient) setAuth(req *http.Request) string {
 		req.Header.Set("sap-client", c.cfg.Client)
 	}
 	return token
-}
-
-// refreshTokenLocked calls onTokenRefresh after a request that sent token sent
-// came back 401. When the token has changed since, a concurrent request already
-// refreshed it while this one waited for c.mu, and retrying with the current
-// token is enough: N concurrent 401s cost one refresh, not N (issue #193). That
-// matters for identity providers that rotate the refresh token on every use.
-// The check compares tokens, so a refresh that returns the token it was given
-// does not count as done, and the next waiter refreshes again.
-// Caller must hold c.mu.
-func (c *httpClient) refreshTokenLocked(sent string) error {
-	if c.onTokenRefresh == nil || c.token() != sent {
-		return nil
-	}
-	newToken, err := c.onTokenRefresh(sent)
-	if err != nil {
-		return fmt.Errorf("token refresh failed: %w", err)
-	}
-	c.setToken(newToken)
-	return nil
 }
 
 // doRead performs a GET request with the default HTTP client (30-second timeout).
@@ -521,7 +484,7 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 	if resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
 		c.mu.Lock()
-		if err := c.refreshTokenLocked(sent); err != nil {
+		if err := c.tokens.refreshAfter401(sent); err != nil {
 			c.mu.Unlock()
 			return nil, err
 		}
@@ -610,7 +573,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		_ = resp.Body.Close()
 		c.mu.Lock()
 		if resp.StatusCode == http.StatusUnauthorized {
-			if err := c.refreshTokenLocked(sent); err != nil {
+			if err := c.tokens.refreshAfter401(sent); err != nil {
 				c.mu.Unlock()
 				return nil, err
 			}
