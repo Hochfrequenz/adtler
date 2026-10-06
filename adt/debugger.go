@@ -231,17 +231,16 @@ func (d *DebugSession) GetDebuggeeSessions(ctx context.Context) ([]byte, error) 
 // Attach attaches to an active debuggee session.
 // Uses X-sap-adt-sessiontype: stateful to keep the work process for subsequent calls.
 //
-// Retries on a fast-failing 500 AdiFailed response (see retryOnAdiFailed) —
-// a known-intermittent SAP kernel-side debugger fault documented on
-// aibap.mcp#513.
+// Attach sends exactly one request and returns its error unchanged — never
+// retried, not even on a 500 AdiFailed. According to the ABAP source of the
+// attach handler, the server deletes the debuggee's activation row and commits
+// before it calls the kernel attach, so a failed attach consumes the debuggee:
+// any retry can only fail with subtype invalidDebuggee and would hide the
+// first response, the only one that says why the attach failed. Callers can
+// recover that response with errors.As(err, *ADTError) and read
+// Properties["com.sap.adt.communicationFramework.subType"] (e.g.
+// invalidServer, invalidDebuggee). See adtler#195 and aibap.mcp#513.
 func (d *DebugSession) Attach(ctx context.Context, debuggeeID string) error {
-	_, err := retryOnAdiFailed(ctx, func() (struct{}, error) {
-		return struct{}{}, d.attachOnce(ctx, debuggeeID)
-	})
-	return err
-}
-
-func (d *DebugSession) attachOnce(ctx context.Context, debuggeeID string) error {
 	path := fmt.Sprintf("/sap/bc/adt/debugger?method=attach&debuggeeId=%s", debuggeeID)
 	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
 		map[string]string{"Accept": "application/xml", "X-sap-adt-sessiontype": "stateful"})
@@ -281,29 +280,22 @@ func (e *DebuggeeEndedError) Error() string {
 func (e *DebuggeeEndedError) Unwrap() error { return e.Underlying }
 
 // isAdiFailed reports whether err is a fast-failing 500 AdiFailed response —
-// the ADT debugger REST framework's generic wrapped-exception error, known
-// to be intermittent for Attach and (rarer) Step (aibap.mcp#513). Deliberately
-// distinct from a bare timeout (no HTTP response at all), which is handled
-// separately by DebuggeeEndedError.
+// the ADT debugger REST framework's generic wrapped-exception error, seen
+// intermittently on Step (aibap.mcp#513). Deliberately distinct from a bare
+// timeout (no HTTP response at all), which is handled separately by
+// DebuggeeEndedError. Only Step retries on it; Attach never does (see Attach).
 //
-// A *DebuggeeEndedError is never treated as AdiFailed here, even for a future
-// change that recognizes SAP's native fast-path debuggee-ended signal (an
-// AdiFailed response with the ADT framework's own "ended" subtype — see
-// adtler#159) inside stepOnce and returns *DebuggeeEndedError for it directly:
-// that is a successful, terminal outcome to report as-is, never something to
-// retry. The explicit type check below guards that case regardless of what
-// isAdiFailed's own Type-matching would otherwise say about its Underlying.
+// A *DebuggeeEndedError is never treated as AdiFailed here: it is a
+// successful, terminal outcome to report as-is, never something to retry.
+// The same goes for a raw AdiFailed whose wrapped exception is
+// CX_TPDAPI_DEBUGGEE_ENDED (see isDebuggeeEndedAdiFailed): retrying a
+// condition that can never succeed only wastes time (confirmed live:
+// ~7-17s across 3 attempts).
 func isAdiFailed(err error) bool {
 	var ended *DebuggeeEndedError
 	if errors.As(err, &ended) {
 		return false
 	}
-	// A debuggee-ended AdiFailed can also reach here directly from Attach
-	// (attaching to a debuggee that already ran to completion) — attachOnce
-	// has no DebuggeeEndedError-shaped success to return, unlike stepOnce, so
-	// it never gets the chance to pre-classify and short-circuit. Exclude it
-	// here too: retrying a condition that can never succeed only wastes time
-	// (confirmed live: ~7-17s across 3 attempts — see isDebuggeeEndedAdiFailed).
 	if isDebuggeeEndedAdiFailed(err) {
 		return false
 	}
@@ -320,10 +312,9 @@ const (
 )
 
 // retryOnAdiFailed calls fn up to 1+adiFailedMaxRetries times, retrying only
-// when fn's error is a fast-failing AdiFailed 500 (aibap.mcp#513: a known
-// intermittent SAP kernel-side debugger fault with no further diagnosable
-// detail — live investigation found retrying the same call sometimes
-// succeeds). Any other error — including a bare timeout, already handled
+// when fn's error is a fast-failing AdiFailed 500 (aibap.mcp#513: an
+// intermittent SAP-side debugger fault with no further diagnosable detail).
+// Used by Step only — Attach must never be retried (see Attach). Any other error — including a bare timeout, already handled
 // elsewhere via DebuggeeEndedError — returns immediately on the first
 // attempt, unretried. A context cancellation during the retry delay aborts
 // immediately with the last error seen.

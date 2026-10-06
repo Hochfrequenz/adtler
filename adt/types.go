@@ -187,8 +187,9 @@ const (
 	ExceptionTypeResourceSaveFailure = "ExceptionResourceSaveFailure"
 	// ExceptionTypeAdiFailed is the ADT debugger REST framework's generic
 	// wrapped-exception Type ("AdiFailed"), returned as a 500 for a variety
-	// of caught internal errors with no further detail in the body. Known to
-	// be intermittent for debug_attach and (rarer) debug_step; see
+	// of caught internal errors. The cause is usually in
+	// Properties["com.sap.adt.communicationFramework.subType"] and the
+	// previous1* properties. Seen intermittently on attach and step; see
 	// aibap.mcp#513.
 	ExceptionTypeAdiFailed = "AdiFailed"
 )
