@@ -4,8 +4,13 @@ package adt_test
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 // TestLogout_ConcurrentReads_Integration runs Logout while other reads are in
@@ -17,8 +22,12 @@ import (
 //	SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" \
 //	  go test -race -tags=integration -v -run TestLogout_ConcurrentReads_Integration ./adt/...
 //
-// Without -race it still checks that reads overlapping a Logout succeed and
-// that the client opens a working session again afterwards.
+// A read that SAP is still processing when the logoff ends its session comes
+// back as a plain 500 Internal Server Error. Measured on both systems, with
+// and without this fix, depending only on timing. That is SAP's answer, not a
+// client fault, so an overlapping read may fail with a 500 and nothing else.
+// What the client must guarantee is that the next read after each round, on
+// the same client, succeeds again.
 func TestLogout_ConcurrentReads_Integration(t *testing.T) {
 	const (
 		rounds   = 3
@@ -31,6 +40,7 @@ func TestLogout_ConcurrentReads_Integration(t *testing.T) {
 			if _, err := sys.Client.GetObjectInfo(ctx, reportID); err != nil {
 				t.Fatalf("warm-up read: %v", err)
 			}
+			var cutOff atomic.Int64
 			for i := 0; i < rounds; i++ {
 				var wg sync.WaitGroup
 				begin := make(chan struct{})
@@ -46,17 +56,24 @@ func TestLogout_ConcurrentReads_Integration(t *testing.T) {
 					go func() {
 						defer wg.Done()
 						<-begin
-						if _, err := sys.Client.GetObjectInfo(ctx, reportID); err != nil {
+						_, err := sys.Client.GetObjectInfo(ctx, reportID)
+						var adtErr *adt.ADTError
+						switch {
+						case err == nil:
+						case errors.As(err, &adtErr) && adtErr.StatusCode == http.StatusInternalServerError:
+							cutOff.Add(1)
+						default:
 							t.Errorf("round %d: read overlapping Logout: %v", i, err)
 						}
 					}()
 				}
 				close(begin)
 				wg.Wait()
+				if _, err := sys.Client.GetObjectInfo(ctx, reportID); err != nil {
+					t.Errorf("round %d: read after Logout: %v", i, err)
+				}
 			}
-			if _, err := sys.Client.GetObjectInfo(ctx, reportID); err != nil {
-				t.Errorf("read after the last Logout: %v", err)
-			}
+			t.Logf("%d of %d overlapping reads were cut off by the logoff (500)", cutOff.Load(), rounds*readers)
 		})
 	}
 }
