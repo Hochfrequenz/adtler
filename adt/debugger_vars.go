@@ -3,6 +3,7 @@ package adt
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,25 @@ type DebugChildVariables struct {
 	Variables []DebugVariable
 	Links     []DebugVariableLink
 }
+
+// DebugTableField is one field value of a table row.
+type DebugTableField struct{ Path, Value string }
+
+// DebugTableRow is one internal table row.
+type DebugTableRow struct {
+	Index  int
+	Fields []DebugTableField
+}
+
+// DebugTablePage is one page of an internal table.
+type DebugTablePage struct {
+	Name               string
+	TotalLines, Offset int
+	Rows               []DebugTableRow
+}
+
+// ErrNotATable is returned by GetTableRows for a variable that is not an internal table.
+var ErrNotATable = errors.New("variable is not an internal table")
 
 // postASX POSTs an asXML body to /sap/bc/adt/debugger?method=<method> on the
 // stateful debug session and returns the response body.
@@ -119,4 +139,76 @@ func (d *DebugSession) GetVariables(ctx context.Context, ids ...string) ([]Debug
 		out = append(out, toDebugVariable(v))
 	}
 	return out, nil
+}
+
+// GetTableRows reads one page of internal table name. offset is 1-based; limit
+// is clamped to the row count (SAP_BASIS 750 fails when a page runs past the
+// end). An offset beyond the last row returns an empty page without calling
+// SAP. One table per request (the server keeps its field buffer between tables).
+func (d *DebugSession) GetTableRows(ctx context.Context, name string, offset, limit int, fields ...string) (*DebugTablePage, error) {
+	if offset < 1 {
+		return nil, fmt.Errorf("GetTableRows: offset must be >= 1 (1-based), got %d", offset)
+	}
+	if limit < 1 {
+		return nil, fmt.Errorf("GetTableRows: limit must be >= 1, got %d", limit)
+	}
+	vars, err := d.GetVariables(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	var meta *DebugVariable
+	for i := range vars {
+		if vars[i].ID == name {
+			meta = &vars[i]
+		}
+	}
+	if meta == nil {
+		return nil, fmt.Errorf("GetTableRows: unknown variable %q", name)
+	}
+	if meta.MetaType != "table" {
+		return nil, fmt.Errorf("GetTableRows %q (%s): %w", name, meta.MetaType, ErrNotATable)
+	}
+	page := &DebugTablePage{Name: name, TotalLines: meta.TableLines, Offset: offset}
+	if offset > meta.TableLines {
+		return page, nil
+	}
+	if remaining := meta.TableLines - offset + 1; limit > remaining {
+		limit = remaining
+	}
+	body, err := adtxml.VariableDataRequest(name, offset, limit, fields)
+	if err != nil {
+		return nil, fmt.Errorf("GetTableRows marshal: %w", err)
+	}
+	resp, err := d.client.doMutate(ctx, http.MethodPost, "/sap/bc/adt/debugger?method=getVariableData",
+		bytes.NewReader(body), map[string]string{
+			"Content-Type":          contentTypeXML,
+			"Accept":                "application/xml",
+			"X-sap-adt-sessiontype": "stateful",
+		})
+	if err != nil {
+		return nil, fmt.Errorf("GetTableRows: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("GetTableRows read: %w", err)
+	}
+	tbl, err := adtxml.ParseVariableData(data)
+	if err != nil {
+		return nil, fmt.Errorf("GetTableRows unmarshal: %w", err)
+	}
+	if tbl == nil {
+		return page, nil
+	}
+	for _, l := range tbl.Lines {
+		row := DebugTableRow{Index: l.Index}
+		for _, f := range l.Fields {
+			row.Fields = append(row.Fields, DebugTableField{Path: f.Path, Value: f.Value})
+		}
+		page.Rows = append(page.Rows, row)
+	}
+	return page, nil
 }
