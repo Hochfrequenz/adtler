@@ -71,3 +71,17 @@ func TestListAbapGitRepos_CallerDeadlineWins(t *testing.T) {
 		t.Fatalf("caller deadline must override the default, got %v", err)
 	}
 }
+
+func TestPullAbapGitRepo_DefaultDeadline(t *testing.T) {
+	c := abapGitSlowServer(t, 500*time.Millisecond)
+	restore := defaultLongRunTimeout
+	defaultLongRunTimeout = 50 * time.Millisecond
+	defer func() { defaultLongRunTimeout = restore }()
+
+	_, err := c.PullAbapGitRepo(context.Background(), AbapGitPullRequest{Repo: "r"})
+	var netErr net.Error
+	timedOut := errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+	if err == nil || !timedOut {
+		t.Fatalf("got %v, want a deadline/timeout error from the default deadline", err)
+	}
+}

@@ -183,14 +183,50 @@ func (c *httpClient) ListAbapGitRepos(ctx context.Context) (*AbapGitRepoList, er
 	return &out, nil
 }
 
-// PullAbapGitRepo is implemented in a later change.
-func (c *httpClient) PullAbapGitRepo(context.Context, AbapGitPullRequest) (*AbapGitPullResult, error) {
-	return nil, errors.New("not implemented")
+// PullAbapGitRepo pulls a repository into the system. A needs_confirmation
+// result is a regular answer, not an error: confirm and call again.
+func (c *httpClient) PullAbapGitRepo(ctx context.Context, req AbapGitPullRequest) (*AbapGitPullResult, error) {
+	if req.Repo == "" {
+		return nil, errors.New("PullAbapGitRepo: repo is required")
+	}
+	var out AbapGitPullResult
+	if err := c.postAbapGitSync(ctx, "PullAbapGitRepo", "/pull", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PushAbapGitRepo is implemented in a later change.
-func (c *httpClient) PushAbapGitRepo(context.Context, AbapGitPushRequest) (*AbapGitPushResult, error) {
-	return nil, errors.New("not implemented")
+// PushAbapGitRepo commits the given objects to the repository (or only
+// previews the commit when DryRun is set).
+func (c *httpClient) PushAbapGitRepo(ctx context.Context, req AbapGitPushRequest) (*AbapGitPushResult, error) {
+	if req.Repo == "" {
+		return nil, errors.New("PushAbapGitRepo: repo is required")
+	}
+	if len(req.Objects) == 0 {
+		return nil, errors.New("PushAbapGitRepo: at least one object is required")
+	}
+	var out AbapGitPushResult
+	if err := c.postAbapGitSync(ctx, "PushAbapGitRepo", "/push", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// postAbapGitSync POSTs in as JSON to the companion sub-path and decodes the answer into out.
+func (c *httpClient) postAbapGitSync(ctx context.Context, op, sub string, in, out any) error {
+	ctx, cancel := withDefaultDeadline(ctx)
+	defer cancel()
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("%s: encoding request: %w", op, err)
+	}
+	resp, err := c.doMutateLong(ctx, http.MethodPost, abapGitSyncBasePath+sub, bytes.NewReader(body),
+		map[string]string{"Content-Type": contentTypeJSON, "Accept": contentTypeJSON})
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return decodeAbapGitSyncResponse(op, resp, out)
 }
 
 // decodeAbapGitSyncResponse decodes a companion response into out, or returns
