@@ -92,8 +92,8 @@ func toDebugVariable(v adtxml.ASXVariable) DebugVariable {
 // GetChildVariables expands "@ROOT", "@LOCALS", "@PARAMETERS", "@GLOBALS",
 // "@SYSTEM" or any variable ID (structure → components, object reference →
 // attributes, "REF->*" → dereferenced value, "ITAB[n]" → row). Internal tables
-// have no children here; use GetTableRows. With no parentIDs the server
-// treats the request as "@ROOT". VALUE keeps ABAP padding.
+// have no children here; use GetTableRows. With no parentIDs it requests
+// "@ROOT" explicitly. VALUE keeps ABAP padding.
 func (d *DebugSession) GetChildVariables(ctx context.Context, parentIDs ...string) (*DebugChildVariables, error) {
 	body, err := adtxml.ChildVariablesRequest(parentIDs)
 	if err != nil {
