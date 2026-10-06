@@ -684,11 +684,11 @@ func isDebuggeeEndedAdiFailed(err error) bool {
 }
 
 // GetVariable reads a variable value from the debug session.
-// Uses the debugger main endpoint (POST /debugger?method=getVariables) to stay
+// Uses the debugger main endpoint (POST /debugger?method=getVariableValue) to stay
 // in the stateful HTTP session. The separate GET /debugger/variables/ endpoint
 // uses a different ICF handler that doesn't share the stateful work process.
 func (d *DebugSession) GetVariable(ctx context.Context, name string) ([]byte, error) {
-	path := fmt.Sprintf("/sap/bc/adt/debugger?method=getVariableValue&variableName=%s", name)
+	path := "/sap/bc/adt/debugger?method=getVariableValue&variableName=" + url.QueryEscape(name)
 	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
 		map[string]string{
 			"Accept":                "text/plain",

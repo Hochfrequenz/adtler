@@ -211,19 +211,6 @@ func TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration(t *testing.T) 
 // Line 14 is the first executable statement of the test method.
 func createReportWithTestClass(t *testing.T, client adt.Client, name, uri string) {
 	t.Helper()
-	ctx := context.Background()
-	if err := client.CreateObject(ctx, "PROG", name, "$TMP", "adtler#186 long unit-test run", ""); err != nil {
-		t.Fatalf("CreateObject: %v", err)
-	}
-	// Delete WITHOUT locking first: DeleteObject ignores the lock handle and
-	// deletes statelessly, so on S/4HANA a preceding LockObject blocks the
-	// delete and leaves an orphaned TRDIR lock (issue #187).
-	t.Cleanup(func() {
-		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
-			t.Errorf("cleanup delete %s: %v — delete the $TMP report by hand", name, err)
-		}
-	})
-
 	source := "REPORT " + name + ".\n" +
 		"DATA: lv_test TYPE string.\n" +
 		"lv_test = 'Hello debugger'.\n" +
@@ -241,6 +228,25 @@ func createReportWithTestClass(t *testing.T, client adt.Client, name, uri string
 		"    cl_abap_unit_assert=>assert_equals( act = lv_val exp = 'test' ).\n" +
 		"  ENDMETHOD.\n" +
 		"ENDCLASS.\n"
+	createReportWithSource(t, client, name, uri, source)
+}
+
+// createReportWithSource creates, fills and activates a $TMP report with the
+// given source and registers its deletion.
+func createReportWithSource(t *testing.T, client adt.Client, name, uri, source string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := client.CreateObject(ctx, "PROG", name, "$TMP", "adtler throwaway debugger test report", ""); err != nil {
+		t.Fatalf("CreateObject: %v", err)
+	}
+	// Delete WITHOUT locking first: DeleteObject ignores the lock handle and
+	// deletes statelessly, so on S/4HANA a preceding LockObject blocks the
+	// delete and leaves an orphaned TRDIR lock (issue #187).
+	t.Cleanup(func() {
+		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
+			t.Errorf("cleanup delete %s: %v — delete the $TMP report by hand", name, err)
+		}
+	})
 
 	lh, err := client.LockObject(ctx, uri)
 	if err != nil {
