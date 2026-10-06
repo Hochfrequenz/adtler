@@ -443,8 +443,11 @@ func (c *httpClient) setToken(token string) {
 	c.accessToken.Store(&token)
 }
 
-func (c *httpClient) setAuth(req *http.Request) {
-	if token := c.token(); token != "" {
+// setAuth adds the credentials to req and returns the OAuth token it sent, or
+// "" for Basic Auth, so a 401 can be matched to the token it rejected.
+func (c *httpClient) setAuth(req *http.Request) string {
+	token := c.token()
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
 		req.SetBasicAuth(c.cfg.User, c.cfg.Password)
@@ -452,6 +455,25 @@ func (c *httpClient) setAuth(req *http.Request) {
 	if c.cfg.Client != "" {
 		req.Header.Set("sap-client", c.cfg.Client)
 	}
+	return token
+}
+
+// refreshTokenLocked calls onTokenRefresh after a request that sent token sent
+// came back 401. When the token has changed since, a concurrent request already
+// refreshed it while this one waited for c.mu, and retrying with the current
+// token is enough: N concurrent 401s cost one refresh, not N (issue #193). That
+// matters for identity providers that rotate the refresh token on every use.
+// Caller must hold c.mu.
+func (c *httpClient) refreshTokenLocked(sent string) error {
+	if c.onTokenRefresh == nil || c.token() != sent {
+		return nil
+	}
+	newToken, err := c.onTokenRefresh(sent)
+	if err != nil {
+		return fmt.Errorf("token refresh failed: %w", err)
+	}
+	c.setToken(newToken)
+	return nil
 }
 
 // doRead performs a GET request with the default HTTP client (30-second timeout).
@@ -472,12 +494,13 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 		return nil, err
 	}
 
+	var sent string
 	makeReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+path, nil)
 		if err != nil {
 			return nil, err
 		}
-		c.setAuth(req)
+		sent = c.setAuth(req)
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
@@ -496,13 +519,9 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 	if resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
 		c.mu.Lock()
-		if c.onTokenRefresh != nil {
-			newToken, err := c.onTokenRefresh(c.token())
-			if err != nil {
-				c.mu.Unlock()
-				return nil, fmt.Errorf("token refresh failed: %w", err)
-			}
-			c.setToken(newToken)
+		if err := c.refreshTokenLocked(sent); err != nil {
+			c.mu.Unlock()
+			return nil, err
 		}
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
@@ -580,7 +599,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 	token := c.csrfToken
 	c.mu.Unlock()
 
-	resp, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
+	resp, sent, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
 	if err != nil {
 		return nil, err
 	}
@@ -588,13 +607,11 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
 		c.mu.Lock()
-		if resp.StatusCode == http.StatusUnauthorized && c.onTokenRefresh != nil {
-			newToken, err := c.onTokenRefresh(c.token())
-			if err != nil {
+		if resp.StatusCode == http.StatusUnauthorized {
+			if err := c.refreshTokenLocked(sent); err != nil {
 				c.mu.Unlock()
-				return nil, fmt.Errorf("token refresh failed: %w", err)
+				return nil, err
 			}
-			c.setToken(newToken)
 		}
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
@@ -604,7 +621,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		secureCookies := c.hasSecureCookies
 		c.mu.Unlock()
 
-		retryResp, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
+		retryResp, _, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
 		if err != nil {
 			return nil, err
 		}
@@ -622,17 +639,19 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 
 // execMutateWith builds and executes a mutating request using the given *http.Client.
 // This allows callers to choose between the default (30s timeout) and long-timeout client.
-func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader, headers map[string]string, csrfToken string) (*http.Response, error) {
+// It also returns the OAuth token the request carried (see setAuth).
+func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader, headers map[string]string, csrfToken string) (resp *http.Response, sentToken string, err error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.Host+path, body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	c.setAuth(req)
+	sentToken = c.setAuth(req)
 	req.Header.Set("X-CSRF-Token", csrfToken)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	return hc.Do(req)
+	resp, err = hc.Do(req)
+	return resp, sentToken, err
 }
 
 // htmlErrorTextHeaderRe matches the SAP "Application Server Error" page's
