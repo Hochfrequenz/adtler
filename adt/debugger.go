@@ -16,7 +16,8 @@ import (
 )
 
 // DebugSession manages a stateful ABAP debug session via ADT REST endpoints.
-// It shares the underlying HTTP client (cookies, CSRF) with the ADT Client.
+// It runs on its own isolated ADT session (see NewDebugSession); its short and
+// long HTTP clients share that session's cookie jar and CSRF token.
 type DebugSession struct {
 	client      *httpClient
 	user        string
@@ -152,13 +153,17 @@ func (d *DebugSession) StartListener(ctx context.Context, timeoutSeconds int) (*
 	path := fmt.Sprintf("/sap/bc/adt/debugger/listeners?debuggingMode=user&requestUser=%s&terminalId=%s&ideId=%s&timeout=%d",
 		d.user, d.terminalID, d.ideID, timeoutSeconds)
 
-	// The listener long-polls for up to timeoutSeconds. Temporarily increase
-	// the HTTP client timeout so it doesn't cancel the request prematurely.
-	origTimeout := d.client.http.Timeout
-	d.client.http.Timeout = time.Duration(timeoutSeconds+10) * time.Second
-	defer func() { d.client.http.Timeout = origTimeout }()
+	// The listener long-polls for up to timeoutSeconds, longer than the short
+	// client's timeout allows. Send it through the long client (no timeout of
+	// its own) and bound it with a context deadline of timeoutSeconds+10 s; an
+	// earlier caller deadline still wins. The long client shares this session's
+	// cookie jar and CSRF token, so the poll runs in the same ADT session as
+	// Attach/Step. Never mutate the shared short client's Timeout here: other
+	// requests on this DebugSession may be in flight concurrently (issue #188).
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds+10)*time.Second)
+	defer cancel()
 
-	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
+	resp, err := d.client.doMutateLong(ctx, http.MethodPost, path, nil,
 		map[string]string{"Accept": "application/vnd.sap.as+xml"})
 	if err != nil {
 		return nil, fmt.Errorf("StartListener: %w", err)
