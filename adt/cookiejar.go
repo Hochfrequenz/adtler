@@ -25,8 +25,9 @@ func newResettableJar() *resettableJar {
 	return &resettableJar{inner: inner}
 }
 
-// jar returns the current inner jar. A request that started before a Reset
-// may store its response cookies in the old jar; they are discarded with it.
+// jar returns the current inner jar. Each call looks it up afresh, so a
+// request that was already in flight during a Reset stores its response
+// cookies in the new jar, as it did when Logout replaced the jar outright.
 func (j *resettableJar) jar() *cookiejar.Jar {
 	j.mu.Lock()
 	defer j.mu.Unlock()

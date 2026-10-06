@@ -19,9 +19,7 @@ import (
 // -race, which the unit-test workflow enables.
 
 const (
-	raceLogoffPath      = "/sap/public/bc/icf/logoff"
 	raceBreakpointsPath = "/sap/bc/adt/debugger/breakpoints"
-	raceDebuggerPath    = "/sap/bc/adt/debugger"
 	raceOKPath          = "/sap/bc/adt/ok"
 	raceExpiredPath     = "/sap/bc/adt/expired"
 	raceSessionCookie   = "SAP_SESSIONID_TST_100"
