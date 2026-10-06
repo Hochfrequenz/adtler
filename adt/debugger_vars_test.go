@@ -111,6 +111,9 @@ func TestGetTableRows(t *testing.T) {
 		case "getVariableData":
 			dataCalls++
 			lastData = string(b)
+			if r.Header.Get("X-sap-adt-sessiontype") != "stateful" {
+				t.Error("getVariableData must be stateful (a non-stateful request ends the debug context on SAP_BASIS 750)")
+			}
 			_, _ = w.Write([]byte(`<dbg:data xmlns:dbg="http://www.sap.com/adt/debugger"><table name="LT_ROWS">` +
 				`<tableLine index="4"><field path="TEXT"><value>r4</value></field></tableLine>` +
 				`<tableLine index="5"><field path="TEXT"><value>r5</value></field></tableLine></table></dbg:data>`))
@@ -142,5 +145,48 @@ func TestGetTableRows(t *testing.T) {
 	}
 	if _, err := dbg.GetTableRows(ctx, "NOPE", 1, 3); err == nil || !strings.Contains(err.Error(), "unknown variable") {
 		t.Errorf("unknown: %v", err)
+	}
+}
+
+// tableIDServer answers getVariables with a table whose echoed ID is echoID
+// (extra adds further variables) and getVariableData with one row.
+func tableIDServer(t *testing.T, echoID string, extra string) *adt.DebugSession {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			return
+		}
+		switch r.URL.Query().Get("method") {
+		case "getVariables":
+			_, _ = w.Write([]byte(`<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values><DATA>` +
+				`<STPDA_ADT_VARIABLE><ID>` + echoID + `</ID><META_TYPE>table</META_TYPE><TABLE_LINES>2</TABLE_LINES></STPDA_ADT_VARIABLE>` +
+				extra + `</DATA></asx:values></asx:abap>`))
+		case "getVariableData":
+			_, _ = w.Write([]byte(`<dbg:data xmlns:dbg="http://www.sap.com/adt/debugger"><table name="T">` +
+				`<tableLine index="1"><field path="TEXT"><value>a</value></field></tableLine></table></dbg:data>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return adt.NewDebugSession(adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}), "U")
+}
+
+// SAP may echo an object attribute in instance form; a single answer is taken as the table.
+func TestGetTableRows_SingleEntryDifferentID(t *testing.T) {
+	dbg := tableIDServer(t, `{O:12*\PROGRAM=ZP\CLASS=LCL_ITEM}-MT_TAGS`, "")
+	page, err := dbg.GetTableRows(context.Background(), "LO_ITEM->MT_TAGS", 1, 1)
+	if err != nil || page.TotalLines != 2 || len(page.Rows) != 1 {
+		t.Errorf("single entry: page=%+v err=%v", page, err)
+	}
+}
+
+func TestGetTableRows_CaseInsensitiveID(t *testing.T) {
+	other := `<STPDA_ADT_VARIABLE><ID>LV_OTHER</ID><META_TYPE>simple</META_TYPE></STPDA_ADT_VARIABLE>`
+	dbg := tableIDServer(t, "LT_ROWS", other)
+	page, err := dbg.GetTableRows(context.Background(), "lt_rows", 1, 1)
+	if err != nil || page.TotalLines != 2 || len(page.Rows) != 1 {
+		t.Errorf("case-insensitive: page=%+v err=%v", page, err)
 	}
 }

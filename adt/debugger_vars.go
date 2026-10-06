@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
 )
@@ -156,12 +157,7 @@ func (d *DebugSession) GetTableRows(ctx context.Context, name string, offset, li
 	if err != nil {
 		return nil, err
 	}
-	var meta *DebugVariable
-	for i := range vars {
-		if vars[i].ID == name {
-			meta = &vars[i]
-		}
-	}
+	meta := findTableMeta(vars, name)
 	if meta == nil {
 		return nil, fmt.Errorf("GetTableRows: unknown variable %q", name)
 	}
@@ -211,4 +207,24 @@ func (d *DebugSession) GetTableRows(ctx context.Context, name string, offset, li
 		page.Rows = append(page.Rows, row)
 	}
 	return page, nil
+}
+
+// findTableMeta picks the variable answering a single-ID getVariables request.
+// SAP may echo another ID form (instance form for object attributes, other
+// case), so: exact ID, else the only entry returned, else a case-insensitive ID.
+func findTableMeta(vars []DebugVariable, name string) *DebugVariable {
+	for i := range vars {
+		if vars[i].ID == name {
+			return &vars[i]
+		}
+	}
+	if len(vars) == 1 {
+		return &vars[0]
+	}
+	for i := range vars {
+		if strings.EqualFold(vars[i].ID, name) {
+			return &vars[i]
+		}
+	}
+	return nil
 }

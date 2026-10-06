@@ -200,15 +200,24 @@ func TestDebugVariables_MultiSystem_Integration(t *testing.T) {
 				t.Fatalf("[%s] GetTableRows rows: got %+v, want indexes 2 and 3", sys.Name, page.Rows)
 			}
 			for i, want := range []string{"row 2", "row 3"} {
-				got := ""
-				for _, f := range page.Rows[i].Fields {
-					if strings.HasSuffix(f.Path, "TEXT") {
-						got = trimPad(f.Value)
-					}
+				row := page.Rows[i]
+				// Field selection: only TEXT may come back.
+				if len(row.Fields) != 1 || !strings.HasSuffix(row.Fields[0].Path, "TEXT") {
+					t.Errorf("[%s] row %d fields: got %+v, want exactly one TEXT field", sys.Name, row.Index, row.Fields)
+					continue
 				}
-				if got != want {
-					t.Errorf("[%s] row %d TEXT: got %q, want %q", sys.Name, page.Rows[i].Index, got, want)
+				if got := trimPad(row.Fields[0].Value); got != want {
+					t.Errorf("[%s] row %d TEXT: got %q, want %q", sys.Name, row.Index, got, want)
 				}
+			}
+
+			// Paging on an object attribute (SAP may echo it in instance-ID form).
+			tagPage, err := dbg.GetTableRows(ctx, "LO_ITEM->MT_TAGS", 1, 10)
+			if err != nil {
+				t.Fatalf("[%s] GetTableRows(LO_ITEM->MT_TAGS): %v", sys.Name, err)
+			}
+			if len(tagPage.Rows) != 2 {
+				t.Errorf("[%s] GetTableRows(LO_ITEM->MT_TAGS): got %d rows, want 2: %+v", sys.Name, len(tagPage.Rows), tagPage.Rows)
 			}
 
 			tags, err := dbg.GetVariables(ctx, "LO_ITEM->MT_TAGS[2]")
