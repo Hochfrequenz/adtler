@@ -33,10 +33,11 @@ func isClassURI(objectURI string) bool {
 // /source/main/versions. For all other object types, it uses
 // /source/main/versions.
 func (c *httpClient) GetVersionHistory(ctx context.Context, objectURI string) ([]VersionInfo, error) {
+	objectURI = bareObjectURI(objectURI)
 	if isClassURI(objectURI) {
 		return c.getClassVersionHistory(ctx, objectURI)
 	}
-	return c.getVersionFeed(ctx, objectURI+"/source/main/versions", "")
+	return c.getVersionFeed(ctx, objectURI+sourceMainSuffix+"/versions", "")
 }
 
 func (c *httpClient) getClassVersionHistory(ctx context.Context, objectURI string) ([]VersionInfo, error) {
@@ -156,6 +157,7 @@ type DiffResult struct {
 // DiffActiveInactive compares the active (last activated) and inactive (saved
 // but not activated) source of an object.
 func (c *httpClient) DiffActiveInactive(ctx context.Context, objectURI string) (*DiffResult, error) {
+	objectURI = bareObjectURI(objectURI)
 	activeSrc, err := c.getSourceWithVersion(ctx, objectURI, "active")
 	if err != nil {
 		return nil, fmt.Errorf("DiffActiveInactive active: %w", err)
@@ -173,7 +175,7 @@ func (c *httpClient) DiffActiveInactive(ctx context.Context, objectURI string) (
 }
 
 func (c *httpClient) getSourceWithVersion(ctx context.Context, objectURI, version string) (string, error) {
-	path := objectURI + "/source/main?version=" + version
+	path := objectURI + sourceMainSuffix + "?version=" + version
 	resp, err := c.doRead(ctx, path, map[string]string{"Accept": "text/plain"})
 	if err != nil {
 		return "", err

@@ -43,7 +43,7 @@ func main() {
     }
     client := adt.NewClient(sys)
 
-    src, err := client.GetSource(context.Background(), "/sap/bc/adt/programs/programs/ZHELLO/source/main")
+    src, err := client.GetSource(context.Background(), "/sap/bc/adt/programs/programs/ZHELLO")
     if err != nil {
         panic(err)
     }
