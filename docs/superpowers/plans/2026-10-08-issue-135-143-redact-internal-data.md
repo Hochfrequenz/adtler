@@ -485,3 +485,51 @@ push and pull request, and CLAUDE.md documents it under "Before pushing".
 - The PR body states: history is not rewritten, and why; what `datacheck` cannot detect; the live results of Tasks 3 and 4 per system type; any export finding from Task 3 Step 3.
 - Label `needs:integration-test`.
 - Copilot review, then a separate integration-test run with a result comment.
+
+---
+
+### Task 6: Export pagination loses rows after key reduction (found by Task 3)
+
+Revision 3. Task 3's row-count check found that the customizing export silently drops rows: on the S/4 system a table with 13 non-client key fields and 33 171 rows arrived in SQLite with 6 000. Cause: when the keyset-pagination SQL exceeds `maxSQLLength` (250), `fetchTableData` (`adt/custexport/export.go:200-218`) drops trailing pagination keys and continues with a key *prefix*; every row that shares the last row's prefix and sorts after it is skipped at each page boundary. The limit predates #183: it was measured as the data preview truncating a *line* after 255 characters (`export.go:63-66`), which `RunQuery` now handles by re-wrapping long lines (`adt/query.go:43`, `adt/query_wrap.go`). The reduction is therefore unnecessary as long as the data preview accepts the full-key SQL as a whole.
+
+This task also carries the open findings of Task 3's review, since they touch the same test.
+
+**Files:**
+- Modify: `adt/custexport/export.go` (`fetchTableData`, constants)
+- Test: `adt/custexport/export_test.go` (unit), `adt/custexport/export_integration_test.go` (long-key test)
+
+- [ ] **Step 1: Measure before changing anything**
+
+On the S/4 system, build the full-key pagination SQL for the long-key table the test discovers (all non-client keys, values from a real row, via `adt.BuildExportSQL`) and run it through `RunQuery` with a throwaway program outside the repository. Record: total SQL length, whether SAP accepts it, and whether it returns the expected next page (compare with an ordered `SELECT` of the same keys). If SAP rejects it for its total length, STOP and report NEEDS_CONTEXT with the measured limit — the fix then needs a different design.
+
+- [ ] **Step 2: Failing unit test**
+
+In `adt/custexport/export_test.go`, with the existing mock-client pattern, export a table whose keys make the pagination SQL longer than 250 characters over at least three pages, where page boundaries fall inside groups of rows sharing the first key. Assert that every row arrives (count and content). Run it and watch it fail on the current code for the stated reason (rows missing).
+
+- [ ] **Step 3: Fix**
+
+Remove the key reduction: paginate on all non-client keys always. Remove `maxSQLLength` and the two log lines that print the table name (`export.go:212`, `:216`) together with the reduction loop; a SQL that SAP rejects surfaces as the `RunQuery` error it already is. Update the comment at `export.go:63-66` to state why no length limit applies any more (#183).
+
+- [ ] **Step 4: Long-key integration test, plus the Task 3 review findings**
+
+- Selection criterion: keep only candidates whose full-key pagination SQL exceeds 255 characters (a line `RunQuery` must wrap), so the test still exercises long pagination SQL; state in a comment that 255 is the data preview's line limit from #183. This replaces the duplicated `exportSQLLimit = 250`.
+- Bound discovery: wrap the candidate search in `context.WithTimeout` (3 minutes) and skip with a count-only message on expiry; fetch each candidate's key fields once.
+- `paginationSQLTooLong` (or its replacement): a `RunQuery` error is a `t.Fatalf`, only an empty table counts as "not long".
+- `sourceRowCount` / `tableKeyFields`: fixed `t.Fatalf` messages without the SAP error text, which may name the table.
+
+- [ ] **Step 5: Run live on both systems and see it fail without the fix**
+
+Both custexport integration tests on both systems: PASS (the long-key test now on S/4 too, all rows). Then re-insert the key reduction temporarily and confirm the long-key test fails on S/4 again; restore. Also confirm the unit test from Step 2 fails with the reduction restored.
+
+- [ ] **Step 6: Full checks and commit**
+
+```
+fix(custexport): paginate on all key fields instead of a key prefix
+
+When the keyset-pagination SQL grew past 250 characters, the export
+dropped trailing pagination keys and paged on a key prefix, skipping
+every row that shared the prefix of a page's last row. On a table with
+13 key fields this lost most of the table. The limit was the data
+preview's per-line truncation, which RunQuery handles since #183, so
+the reduction is removed and pagination always uses the full key.
+```
