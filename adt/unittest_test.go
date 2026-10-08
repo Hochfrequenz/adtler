@@ -176,3 +176,84 @@ func TestRunUnitTests_OutsideMethodAlerts(t *testing.T) {
 		t.Errorf("Alerts = %+v, want %+v", result.Alerts, want)
 	}
 }
+
+// TestRunUnitTests_ZeroTests_ReportsInactiveParts is the regression guard for
+// case 2 of #212: when no test method ran, the inactive parts related to the
+// requested object are listed, so an inactive test-classes include no longer
+// looks like an object without tests. A sibling class whose name merely
+// extends the requested one, and an unrelated class, must not be listed.
+func TestRunUnitTests_ZeroTests_ReportsInactiveParts(t *testing.T) {
+	const base = "/sap/bc/adt/oo/classes/zcl_test"
+	want := []string{
+		base,
+		base + "/includes/testclasses",
+		base + "/source/main#type=CLAS%2FOM;name=GET",
+	}
+	var entries strings.Builder
+	for _, uri := range append(slices.Clone(want), "/sap/bc/adt/oo/classes/zcl_test2", "/sap/bc/adt/oo/classes/zcl_other") {
+		entries.WriteString(`<entry><object><ref uri="` + uri + `" type="CLAS/OC" name="X" packageName="$TMP"/></object></entry>`)
+	}
+	var reads atomic.Int32
+	srv := unitTestServer(t, emptyRunResult816,
+		`<?xml version="1.0" encoding="utf-8"?><ioc:inactiveObjects xmlns:ioc="http://www.sap.com/adt/core">`+entries.String()+`</ioc:inactiveObjects>`,
+		0, &reads)
+	defer srv.Close()
+
+	// Upper-case on purpose: callers pass upper-case names, SAP lists lower case.
+	result, err := runUnitTestsAgainst(t, srv, "/sap/bc/adt/oo/classes/ZCL_TEST")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !slices.Equal(result.InactiveURIs, want) {
+		t.Errorf("InactiveURIs = %q, want %q", result.InactiveURIs, want)
+	}
+}
+
+// TestRunUnitTests_TestsExecuted_SkipsInactiveCheck pins that the extra read
+// happens only for a run that executed nothing.
+func TestRunUnitTests_TestsExecuted_SkipsInactiveCheck(t *testing.T) {
+	var reads atomic.Int32
+	srv := unitTestServer(t, `<?xml version="1.0" encoding="utf-8"?>
+<aunit:runResult xmlns:aunit="http://www.sap.com/adt/aunit" xmlns:adtcore="http://www.sap.com/adt/core">
+  <program adtcore:uri="/sap/bc/adt/oo/classes/zcl_test" adtcore:name="ZCL_TEST">
+    <testClasses><testClass adtcore:name="LTC_TEST">
+      <testMethods><testMethod adtcore:name="RUNS" executionTime="0"/></testMethods>
+    </testClass></testClasses>
+  </program>
+</aunit:runResult>`, "", 0, &reads)
+	defer srv.Close()
+
+	result, err := runUnitTestsAgainst(t, srv, "/sap/bc/adt/oo/classes/zcl_test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Passed != 1 {
+		t.Errorf("Passed = %d, want 1", result.Passed)
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("inactive-objects reads = %d, want 0", n)
+	}
+	if result.InactiveURIs != nil {
+		t.Errorf("InactiveURIs = %q, want nil", result.InactiveURIs)
+	}
+}
+
+// TestRunUnitTests_ZeroTests_InactiveReadFails pins that a failing
+// inactive-objects read only leaves InactiveURIs empty; the run result itself
+// is still returned without an error.
+func TestRunUnitTests_ZeroTests_InactiveReadFails(t *testing.T) {
+	var reads atomic.Int32
+	srv := unitTestServer(t, emptyRunResult816, "", http.StatusInternalServerError, &reads)
+	defer srv.Close()
+
+	result, err := runUnitTestsAgainst(t, srv, "/sap/bc/adt/oo/classes/zcl_test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := reads.Load(); n != 1 {
+		t.Errorf("inactive-objects reads = %d, want 1", n)
+	}
+	if result.InactiveURIs != nil {
+		t.Errorf("InactiveURIs = %q, want nil", result.InactiveURIs)
+	}
+}

@@ -79,6 +79,18 @@ type TestResult struct {
 	// 750 a run that executed no test method usually carries one of kind
 	// "noTestClasses"; SAP_BASIS 816 sends none in the same situations.
 	Alerts []TestAlert
+	// InactiveURIs is filled only when the run executed no test method. It
+	// lists, as SAP spells them, the GetInactiveObjects entries related to the
+	// requested object URI: the object itself, a part nested under it, or an
+	// object it is nested under — for example an inactive test-classes
+	// include, whose tests a run cannot execute because ABAP Unit runs the
+	// active version. The relation is by URI nesting, which holds for a
+	// class and its includes (measured); a program's test classes live in a
+	// separate include object and a package contains its objects without
+	// nesting their URIs, so neither is covered. Nil means no related entry
+	// was found or the inactive-objects read failed; it does not prove that
+	// the object has no tests.
+	InactiveURIs []string
 }
 
 // TransportRequest describes a CTS transport request.
