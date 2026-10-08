@@ -121,7 +121,10 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 		}
 	}
 	if len(result.TestCases) == 0 {
-		result.InactiveURIs = c.relatedInactiveURIs(ctx, objectURI)
+		// reqCtx, not ctx: the lookup stays within the documented
+		// timeoutSeconds + 5 s budget. If that budget is spent, the lookup
+		// fails and InactiveURIs stays empty; the run result is kept.
+		result.InactiveURIs = c.relatedInactiveURIs(reqCtx, objectURI)
 	}
 	return result, nil
 }
