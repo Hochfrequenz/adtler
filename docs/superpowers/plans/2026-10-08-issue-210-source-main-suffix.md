@@ -60,7 +60,7 @@ Callers reached through these and therefore covered without their own change: `L
 1. **Upper-case suffix** (`…/SOURCE/MAIN`): agents pass upper-case names; the strip must be case-insensitive. Pinned by the `bareObjectURI` table and the `…/SOURCE/MAIN` input form in Task 1.
 2. **Fragment-carrying source URI** (`…/source/main#start=42,5`), the exact shape syntax-check messages produce: must collapse to the bare URI; `SetSource` must keep its `?corrNr=`; `GetCompletions` must emit exactly one `#start=L,C` with the caller's line/column. Pinned by the input-form table in Task 1 (`SetSource` / `SetIncludeSource` / `CreateTestInclude` pass transport `T1` so the dropped query is visible).
 3. **A name that merely ends in `source`** (`…/programs/programs/zsource`, `…/source/mainx`): must not be shortened. Pinned by negative rows of the `bareObjectURI` table.
-4. **Function group include / function module source URIs** (`…/includes/<inc>/source/main`, `…/fmodules/<fm>/source/main`): must reduce to the include / function-module object URI, not further. Pinned by the `bareObjectURI` table (unit) and the `PROG/I` / `FUGR/FF` fixtures (live, Task 2).
+4. **Function group include / function module source URIs** (`…/includes/<inc>/source/main`, `…/fmodules/<fm>/source/main`): must reduce to the include / function-module object URI, not further. Pinned by the `bareObjectURI` table (unit) and the `FUGR/I` / `FUGR/FF` fixtures (live, Task 2).
 5. **Query on the input** (`…/source/main?version=inactive`): dropped, see "Query strings". Pinned by a `bareObjectURI` table row so a later change to that decision is a visible test edit.
 
 ---
@@ -509,7 +509,7 @@ func TestSourceURISuffix_Integration(t *testing.T) {
 		"CLAS/OC", // class
 		"INTF/OI", // interface
 		"FUGR/FF", // function module
-		"PROG/I",  // include, e.g. a function group include
+		"FUGR/I",  // function group include
 	}
 	for _, sys := range eachSystem(t) {
 		t.Run(sys.Name, func(t *testing.T) {
@@ -595,6 +595,8 @@ func findReadableSource(t *testing.T, ctx context.Context, sys integrationSystem
 	return adt.ObjectInfo{}, nil
 }
 ```
+
+Implementation note: the plan originally listed `PROG/I`. The search for `PROG/I` returned only workbench link entries on the S/4 system, which are not readable through their bare URI, and no hits on the ECC system, so the implementation uses `FUGR/I` (function group includes), the include case named in the issue.
 
 Before writing it, read `redact` in `adt/rap_source_integration_test.go:24` to confirm its parameter order `(text, host, name)`; adjust the calls if it differs.
 
