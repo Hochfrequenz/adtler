@@ -103,7 +103,7 @@ func TestADTError_LockingTransport(t *testing.T) {
 		// Ordering hazard: the object name precedes the request in the message.
 		// If the name itself matches the <SID>K<6digit> shape, the FIRST match
 		// would be the name — the request ID is always LAST, so last-match wins.
-		{"object_name_matches_pattern", "Object R3TR PROG ABCK123456 is already locked in request CCCK901974 of user X", trFixture, true},
+		{"object_name_matches_pattern", "Object R3TR PROG BBBK123456 is already locked in request CCCK901974 of user X", trFixture, true},
 		// Task + request both present (both share the <SID>K###### format); the
 		// request is named last.
 		{"task_and_request", "locked in task CCCK901975 request CCCK901974 of user X", trFixture, true},
