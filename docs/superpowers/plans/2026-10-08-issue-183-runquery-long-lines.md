@@ -776,7 +776,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Short lines (255 characters or less) that start with `*` or contain `"` keep their ABAP comment meaning, exactly as before.
 - SQL with a string literal spanning several physical lines is invalid in ABAP. The lexer works per line and does not try to repair it.
 - A user-authored line whose first non-blank character is `*` (for example `SELECT
-  * FROM …`) is already a comment on the S/4 system before this fix. The wrapper keeps the indent of such a line but cannot change how S/4 reads it.
+  * FROM …`) is already a comment on the S/4 system before this fix. The wrapper keeps the indent of such a line but cannot change how S/4 reads it. If such a line is also longer than 255 characters, only its first wrapped output line stays a comment on S/4 and its continuation lines become live SQL. Such a statement already fails on S/4 before the fix (measured: 500), so this changes nothing in practice.
 - String templates with embedded expressions that themselves contain `|` (`|a{ `x|y` }b|`) are not lexed. That nesting is not expected in data preview SQL.
 
 ## Documentation
