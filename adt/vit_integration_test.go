@@ -25,11 +25,22 @@ const uriMappingErrorType = "uriMappingError"
 //
 // The test does not name any object: for each TADIR type it asks the system
 // for one existing object through the data preview and skips the sub-test when
-// there is none. VIT objects only exist on S/4, so ECC systems usually skip.
-// Only a 404 on the discovered object is a skip; every other error, notably
-// the 406 this test guards against, fails the sub-test. A missing handler
-// (exception ID uriMappingError) counts as absent, like a 404.
+// there is none. VIT objects only exist on S/4, so ECC systems skip, for one
+// of two reasons: the system has no object of the type, or it has no handler
+// for the VIT URI (exception ID uriMappingError).
+// Only a 404 on the discovered object or a uriMappingError is a skip; every
+// other error, notably the 406 this test guards against, fails the sub-test.
+//
+// The 406 guard for adtler#72 fires only when both layers break together: the
+// VIT Accept mapping (adt/repository.go, vitObjectPropertiesContentType) and
+// readWithAcceptFallback's */* retry each mask a failure of the other.
 func TestGetObjectInfo_VIT_Integration(t *testing.T) {
+	// Known gap: on the S/4 system the test was last measured against, UIAD and
+	// WDCC objects exist but ADT has no handler for the segments below
+	// (uriMappingError), so both sub-tests skip as "unmapped", not as "no
+	// object". UIAC, ADVC and LRCC pass there. On ECC every type skips (no
+	// object, or unmapped). The segments for UIAD and WDCC may be wrong; to be
+	// tracked in a follow-up issue.
 	tests := []struct {
 		tadir   string // TADIR object type
 		segment string // VIT URI object_type segment
@@ -66,7 +77,10 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 						var adtErr *adt.ADTError
 						if errors.As(err, &adtErr) && (adtErr.StatusCode == http.StatusNotFound ||
 							adtErr.Type == uriMappingErrorType) {
-							t.Skipf("%s is not served as a VIT object on this system (HTTP %d)", tt.tadir, adtErr.StatusCode)
+							if adtErr.Type == uriMappingErrorType {
+								t.Skipf("%s: ADT has no handler for this VIT segment (%s)", tt.tadir, uriMappingErrorType)
+							}
+							t.Skipf("%s object not found as VIT object (HTTP %d)", tt.tadir, adtErr.StatusCode)
 						}
 						// The error text echoes the URI, and with it the object name.
 						if adtErr != nil {
