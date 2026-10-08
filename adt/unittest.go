@@ -22,16 +22,21 @@ import (
 // debugger is attached — and http.Client.Timeout would otherwise cut it off
 // regardless of timeoutSeconds.
 //
-// SAP answers a run that executes no test method with HTTP 200 and no test
-// method on both SAP_BASIS 750 and 816, whatever the reason: the object has
-// no test classes, its test-classes include is still inactive (the run uses
-// the active version), or the URI names no existing object at all. For such a
-// run TestResult.Alerts carries any alert SAP sent (SAP_BASIS 750 sends one
-// of kind "noTestClasses"; 816 sends none), and TestResult.InactiveURIs lists
+// SAP answers a run that executes no test method with HTTP 200 on both
+// SAP_BASIS 750 and 816, and the reason is only partly visible in the
+// response. A test class skipped for its risk level carries a test-class
+// alert of kind "warning" on both releases, and on 750 a test class aborted
+// by a runtime error carries one of kind "runtimeAbortion"; both reach
+// TestResult.Alerts. An object without active test classes gets a run-level
+// alert of kind "noTestClasses" on 750 and no alert on 816, and "without
+// active test classes" includes an object whose test-classes include is
+// still inactive, because the run uses the active version. For any run
+// without an executed test method, TestResult.InactiveURIs therefore lists
 // the inactive entries related to objectURI by URI nesting, which tells the
 // inactive-include case apart for classes; see InactiveURIs for its limits.
-// A non-existent object is not detected. A response body that is not an ABAP
-// Unit run result is returned as an error.
+// A URI naming no existing object yields neither an alert nor an error and
+// is not detected. A response body that is not an ABAP Unit run result,
+// including an empty one, is returned as an error.
 func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds+5)*time.Second)
 	defer cancel()
@@ -83,6 +88,9 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 	if err != nil {
 		return nil, fmt.Errorf("RunUnitTests reading body: %w", err)
 	}
+	if strings.TrimSpace(string(data)) == "" {
+		return nil, fmt.Errorf("RunUnitTests: empty response body")
+	}
 	var runResult adtxml.RunResult
 	if err := xml.Unmarshal(data, &runResult); err != nil {
 		return nil, fmt.Errorf("RunUnitTests parsing: %w", err)
@@ -113,7 +121,7 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 		}
 	}
 	if len(result.TestCases) == 0 {
-		result.InactiveURIs = c.inactiveURIsUnder(ctx, objectURI)
+		result.InactiveURIs = c.relatedInactiveURIs(ctx, objectURI)
 	}
 	return result, nil
 }
@@ -127,11 +135,15 @@ func toTestAlerts(alerts []adtxml.Alert) []TestAlert {
 	return out
 }
 
-// inactiveURIsUnder returns the GetInactiveObjects entries that objectURI
+// relatedInactiveURIs returns the GetInactiveObjects entries that objectURI
 // relates to per objectURIMatches: the object itself, a part nested under it,
 // or an object it is nested under. A failed read returns nil, because the
 // check only annotates a test result and must not turn it into an error.
-func (c *httpClient) inactiveURIsUnder(ctx context.Context, objectURI string) []string {
+func (c *httpClient) relatedInactiveURIs(ctx context.Context, objectURI string) []string {
+	// An empty URI would match every inactive object (objectURIMatches treats "" as a prefix of everything).
+	if normalizeObjectURI(objectURI) == "" {
+		return nil
+	}
 	inactive, err := c.GetInactiveObjects(ctx)
 	if err != nil {
 		return nil

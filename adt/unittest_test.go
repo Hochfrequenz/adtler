@@ -122,6 +122,9 @@ func TestRunUnitTests_UnparsableBody(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected a parse error, got result %+v", result)
 	}
+	if !strings.Contains(err.Error(), "parsing") {
+		t.Errorf("err = %v, want a parsing error", err)
+	}
 }
 
 // TestRunUnitTests_EmptyRunResult pins that S/4's answer for a run without
@@ -146,16 +149,16 @@ func TestRunUnitTests_EmptyRunResult(t *testing.T) {
 // TestRunUnitTests_OutsideMethodAlerts pins that alerts SAP attaches to the
 // run, to a program or to a test class, outside any test method, reach
 // TestResult.Alerts with their kind, in document order. The run-level alert
-// is the SAP_BASIS 750 capture for a class without active test classes, with
-// the class name replaced by a placeholder; the program- and class-level
-// alerts are synthetic.
+// and the test-class alert are SAP_BASIS 750 captures with names replaced by
+// placeholders; only the program-level alert is synthetic (no capture carried
+// one).
 func TestRunUnitTests_OutsideMethodAlerts(t *testing.T) {
 	var reads atomic.Int32
 	srv := unitTestServer(t, `<?xml version="1.0" encoding="utf-8"?><aunit:runResult xmlns:aunit="http://www.sap.com/adt/aunit"><alerts><alert kind="noTestClasses" severity="tolerable"><title>Program 'ZCL_TEST======================CP' Does not Contain any Test Classes.</title><details><detail text="You can find further informations in document &lt;CHAP&gt; &lt;SAUNIT_NO_TEST_CLASS&gt;"><link rel=""/></detail></details><stack/></alert></alerts>
   <program adtcore:uri="/sap/bc/adt/oo/classes/zcl_test" adtcore:name="ZCL_TEST" xmlns:adtcore="http://www.sap.com/adt/core">
     <alerts><alert kind="warning" severity="tolerable"><title>Program-level alert</title></alert></alerts>
     <testClasses><testClass adtcore:name="LTC_TEST">
-      <alerts><alert kind="exception" severity="critical"><title>Class-level alert</title></alert></alerts>
+      <alerts><alert kind="warning" severity="tolerable"><title>No execution, risk level of test class exceeds upper limit</title><details><detail text="You can find further informations in document &lt;CHAP&gt; &lt;SAUNIT_TEST_PROPS&gt;"><link rel=""/></detail></details><stack/></alert></alerts><testMethods/>
     </testClass></testClasses>
   </program>
 </aunit:runResult>`,
@@ -170,7 +173,7 @@ func TestRunUnitTests_OutsideMethodAlerts(t *testing.T) {
 	want := []adt.TestAlert{
 		{Kind: "noTestClasses", Severity: "tolerable", Title: "Program 'ZCL_TEST======================CP' Does not Contain any Test Classes."},
 		{Kind: "warning", Severity: "tolerable", Title: "Program-level alert"},
-		{Kind: "exception", Severity: "critical", Title: "Class-level alert"},
+		{Kind: "warning", Severity: "tolerable", Title: "No execution, risk level of test class exceeds upper limit"},
 	}
 	if !slices.Equal(result.Alerts, want) {
 		t.Errorf("Alerts = %+v, want %+v", result.Alerts, want)
@@ -252,6 +255,63 @@ func TestRunUnitTests_ZeroTests_InactiveReadFails(t *testing.T) {
 	}
 	if n := reads.Load(); n != 1 {
 		t.Errorf("inactive-objects reads = %d, want 1", n)
+	}
+	if result.InactiveURIs != nil {
+		t.Errorf("InactiveURIs = %q, want nil", result.InactiveURIs)
+	}
+}
+
+// TestRunUnitTests_RuntimeAbortionClassAlert pins the SAP_BASIS 750 answer for
+// a test method that ends in an uncatchable runtime error: the test class
+// comes back with no test method and a test-class alert of kind
+// "runtimeAbortion". Before #212 this read as a clean 0/0/0 run. Captured
+// verbatim, with names replaced by placeholders.
+func TestRunUnitTests_RuntimeAbortionClassAlert(t *testing.T) {
+	var reads atomic.Int32
+	srv := unitTestServer(t, `<?xml version="1.0" encoding="utf-8"?><aunit:runResult xmlns:aunit="http://www.sap.com/adt/aunit"><alerts/><program adtcore:uri="/sap/bc/adt/oo/classes/zcl_test" adtcore:type="CLAS/OC" adtcore:name="ZCL_TEST" adtcore:packageName="$TMP" xmlns:adtcore="http://www.sap.com/adt/core"><alerts/><testClasses><testClass adtcore:uri="/sap/bc/adt/oo/classes/zcl_test/includes/testclasses#start=6,6" adtcore:type="CLAS/OCN/testclasses" adtcore:name="LTC" adtcore:packageName="$TMP"><alerts><alert kind="runtimeAbortion" severity="fatal"><title>Runtime Error &lt;GETWA_NOT_ASSIGNED&gt;</title><details><detail text="[Field symbol has not been assigned yet.]"><link rel=""/></detail><detail text="Test Class 'LTC' in Main Program 'ZCL_TEST======================CP'."><link rel=""/></detail></details><stack><stackEntry adtcore:uri="/sap/bc/adt/oo/classes/zcl_test/includes/testclasses#start=10,0" adtcore:type="CLAS/OCN/testclasses" adtcore:name="ZCL_TEST" adtcore:packageName="$TMP" adtcore:description="Include: &lt;ZCL_TEST======================CCAU&gt; Line: &lt;10&gt;"/></stack></alert></alerts><testMethods/></testClass></testClasses></program></aunit:runResult>`,
+		`<?xml version="1.0" encoding="utf-8"?><ioc:inactiveObjects xmlns:ioc="http://www.sap.com/adt/core"/>`,
+		0, &reads)
+	defer srv.Close()
+
+	result, err := runUnitTestsAgainst(t, srv, "/sap/bc/adt/oo/classes/zcl_test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.TestCases) != 0 {
+		t.Errorf("TestCases = %+v, want none", result.TestCases)
+	}
+	want := []adt.TestAlert{{Kind: "runtimeAbortion", Severity: "fatal", Title: "Runtime Error <GETWA_NOT_ASSIGNED>"}}
+	if !slices.Equal(result.Alerts, want) {
+		t.Errorf("Alerts = %+v, want %+v", result.Alerts, want)
+	}
+}
+
+// TestRunUnitTests_EmptyBody pins that an empty 200 body is reported as such
+// rather than as an opaque parse error or an empty result.
+func TestRunUnitTests_EmptyBody(t *testing.T) {
+	var reads atomic.Int32
+	srv := unitTestServer(t, "", "", 0, &reads)
+	defer srv.Close()
+
+	_, err := runUnitTestsAgainst(t, srv, "/sap/bc/adt/oo/classes/zcl_test")
+	if err == nil || !strings.Contains(err.Error(), "empty response body") {
+		t.Fatalf("err = %v, want an empty-response-body error", err)
+	}
+}
+
+// TestRunUnitTests_ZeroTests_EmptyURIListsNothing pins that an empty object
+// URI does not list every inactive object: objectURIMatches would treat it as
+// a prefix of all of them.
+func TestRunUnitTests_ZeroTests_EmptyURIListsNothing(t *testing.T) {
+	var reads atomic.Int32
+	srv := unitTestServer(t, emptyRunResult816,
+		`<?xml version="1.0" encoding="utf-8"?><ioc:inactiveObjects xmlns:ioc="http://www.sap.com/adt/core"><entry><object><ref uri="/sap/bc/adt/oo/classes/zcl_other" type="CLAS/OC" name="X" packageName="$TMP"/></object></entry></ioc:inactiveObjects>`,
+		0, &reads)
+	defer srv.Close()
+
+	result, err := runUnitTestsAgainst(t, srv, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.InactiveURIs != nil {
 		t.Errorf("InactiveURIs = %q, want nil", result.InactiveURIs)

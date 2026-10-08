@@ -75,9 +75,14 @@ type TestResult struct {
 	Errors    int
 	TestCases []TestCase
 	// Alerts holds the alerts SAP attached outside a test method, in document
-	// order: run level, then per program, then per test class. On SAP_BASIS
-	// 750 a run that executed no test method usually carries one of kind
-	// "noTestClasses"; SAP_BASIS 816 sends none in the same situations.
+	// order: run level, then per program, then per test class. For a run that
+	// executed no test method they are often the only explanation. Measured on
+	// SAP_BASIS 750 and 816: a test class skipped because its risk level is
+	// not permitted carries a test-class alert of kind "warning" on both; an
+	// uncatchable runtime error carries a test-class alert of kind
+	// "runtimeAbortion" on 750, while 816 reports it on the test method and
+	// adds test-class alerts of kind "abortion"; an object without active test
+	// classes carries a run-level alert of kind "noTestClasses" on 750 only.
 	Alerts []TestAlert
 	// InactiveURIs is filled only when the run executed no test method. It
 	// lists, as SAP spells them, the GetInactiveObjects entries related to the
