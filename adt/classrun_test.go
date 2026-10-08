@@ -192,17 +192,17 @@ func TestRunClass_Namespaced(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	result, err := client.RunClass(context.Background(), "/NA2/CL_FOO")
+	result, err := client.RunClass(context.Background(), "/XYZ/CL_FOO")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := classrunBase + "%2fna2%2fcl_foo"
+	want := classrunBase + "%2fxyz%2fcl_foo"
 	if gotEscapedPath != want {
 		t.Errorf("escaped path: got %q, want %q", gotEscapedPath, want)
 	}
 	// ClassName echoes the caller's input verbatim (not lower-cased).
-	if result.ClassName != "/NA2/CL_FOO" {
-		t.Errorf("ClassName: got %q, want /NA2/CL_FOO", result.ClassName)
+	if result.ClassName != "/XYZ/CL_FOO" {
+		t.Errorf("ClassName: got %q, want /XYZ/CL_FOO", result.ClassName)
 	}
 }
 

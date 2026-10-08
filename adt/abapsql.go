@@ -7,7 +7,7 @@ import (
 )
 
 // identifierRe matches valid ABAP table/column names.
-// Allows alphanumerics, forward slash (namespaces like /HFQ/TABLE),
+// Allows alphanumerics, forward slash (namespaces like /ABC/TABLE),
 // underscore, and hash (e.g. #MIN).
 var identifierRe = regexp.MustCompile(`^[A-Za-z0-9/_#]+$`)
 

@@ -7,18 +7,18 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-// The two messages below are captured verbatim from live S/4 (HF S/4 Mandant
-// 100) on mcp-server-abap#442 — a CTS "object is registered in another open
+// The two messages below are captured verbatim from a live S/4 system
+// on mcp-server-abap#442 — a CTS "object is registered in another open
 // request" conflict (LIMU/CINC sub-include and R3TR/DDLS), distinct from the
 // runtime ENQUEUE. Both arrive as HTTP 409 / ExceptionResourceLockConflict and
 // name the blocking request; retargeting the write at that request succeeds.
 const (
-	lockedInTransportDDLS = "Object R3TR DDLS /HFQ/DD_ADRESSE is already locked in request CCCK901974 of user USERA"
-	lockedInTransportCINC = "Object LIMU CINC /HFQ/BP_DD_ADRESSE============CCIMP is already locked in request CCCK901974 of user USERA"
+	lockedInTransportDDLS = "Object R3TR DDLS /ABC/DD_ADRESSE is already locked in request CCCK901974 of user USERA"
+	lockedInTransportCINC = "Object LIMU CINC /ABC/BP_DD_ADRESSE============CCIMP is already locked in request CCCK901974 of user USERA"
 	// A German-locale rendering of the same message. The extractor keys on the
 	// request-ID format, not the surrounding words, so localisation must not
 	// break it.
-	lockedInTransportDE = "Objekt R3TR DDLS /HFQ/DD_ADRESSE ist bereits in Auftrag CCCK901974 von Benutzer USERA gesperrt"
+	lockedInTransportDE = "Objekt R3TR DDLS /ABC/DD_ADRESSE ist bereits in Auftrag CCCK901974 von Benutzer USERA gesperrt"
 	// trFixture is the request ID named in each captured message above.
 	trFixture = "CCCK901974"
 )
@@ -98,7 +98,7 @@ func TestADTError_LockingTransport(t *testing.T) {
 		{"cinc_english", lockedInTransportCINC, trFixture, true},
 		{"german", lockedInTransportDE, trFixture, true},
 		{"no_request_id", "Object is already locked by another user", "", false},
-		{"object_name_not_matched", "Object R3TR DDLS /HFQ/DD_ADRESSE locked", "", false},
+		{"object_name_not_matched", "Object R3TR DDLS /ABC/DD_ADRESSE locked", "", false},
 		{"empty", "", "", false},
 		// Ordering hazard: the object name precedes the request in the message.
 		// If the name itself matches the <SID>K<6digit> shape, the FIRST match

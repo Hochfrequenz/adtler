@@ -7,7 +7,7 @@ import (
 func TestValidateIdentifier(t *testing.T) {
 	valid := []string{
 		"T001",
-		"/HFQ/TABLE",
+		"/ABC/TABLE",
 		"DD03L",
 		"Z_MY_TABLE",
 		"FIELD#01",
@@ -181,9 +181,9 @@ func TestBuildExportSQL(t *testing.T) {
 		},
 		{
 			name:     "namespaced table",
-			table:    "/HFQ/ZTABLE",
+			table:    "/ABC/ZTABLE",
 			allKeys:  []string{"MANDT", "KEYFIELD"},
-			expected: "SELECT * FROM /HFQ/ZTABLE ORDER BY MANDT, KEYFIELD",
+			expected: "SELECT * FROM /ABC/ZTABLE ORDER BY MANDT, KEYFIELD",
 		},
 		{
 			name:    "invalid table name",

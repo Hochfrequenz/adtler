@@ -214,7 +214,7 @@ func TestWriteTable_NamespaceTable(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	result := &TableExportResult{
-		TableName: "/HFQ/TABLE",
+		TableName: "/ABC/TABLE",
 		Columns: []adt.QueryColumn{
 			{Name: "MANDT", Type: "C", Description: "Client", IsKey: true},
 			{Name: "VALUE", Type: "C", Description: "Value", IsKey: false},
@@ -229,14 +229,14 @@ func TestWriteTable_NamespaceTable(t *testing.T) {
 	}
 
 	// Verify JSON filename uses # instead of /.
-	jsonPath := filepath.Join(dir, "json", "#HFQ#TABLE.json")
+	jsonPath := filepath.Join(dir, "json", "#ABC#TABLE.json")
 	if _, err := os.Stat(jsonPath); os.IsNotExist(err) {
 		t.Error("namespace JSON file not found at expected path with # replacements")
 	}
 
 	// Verify SQLite table with namespace name.
 	var count int
-	if err := w.sqlite.db.QueryRow(`SELECT COUNT(*) FROM "/HFQ/TABLE"`).Scan(&count); err != nil {
+	if err := w.sqlite.db.QueryRow(`SELECT COUNT(*) FROM "/ABC/TABLE"`).Scan(&count); err != nil {
 		t.Fatalf("query namespace table: %v", err)
 	}
 	if count != 1 {

@@ -50,7 +50,7 @@ type ClassRunClient interface {
 //
 // Namespace slashes in className are percent-encoded automatically by
 // doMutateLong → encodeNamespacePath (triggered by the "//" that results from
-// appending "/na2/foo" to the base).
+// appending "/xyz/foo" to the base).
 func (c *httpClient) RunClass(ctx context.Context, className string) (*ClassRunResult, error) {
 	ctx, cancel := withDefaultDeadline(ctx)
 	defer cancel()
