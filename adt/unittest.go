@@ -68,13 +68,20 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 		return nil, err
 	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("RunUnitTests reading body: %w", err)
+	}
 	var runResult adtxml.RunResult
-	xml.Unmarshal(data, &runResult) //nolint:errcheck
+	if err := xml.Unmarshal(data, &runResult); err != nil {
+		return nil, fmt.Errorf("RunUnitTests parsing: %w", err)
+	}
 
-	result := &TestResult{}
+	result := &TestResult{Alerts: toTestAlerts(runResult.Alerts)}
 	for _, prog := range runResult.Programs {
+		result.Alerts = append(result.Alerts, toTestAlerts(prog.Alerts)...)
 		for _, class := range prog.Classes {
+			result.Alerts = append(result.Alerts, toTestAlerts(class.Alerts)...)
 			for _, method := range class.Methods {
 				tc := TestCase{
 					Name:          method.Name,
@@ -95,4 +102,13 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 		}
 	}
 	return result, nil
+}
+
+// toTestAlerts converts parsed ABAP Unit alerts, returning nil for none.
+func toTestAlerts(alerts []adtxml.Alert) []TestAlert {
+	var out []TestAlert
+	for _, a := range alerts {
+		out = append(out, TestAlert{Kind: a.Kind, Severity: a.Severity, Title: a.Title})
+	}
+	return out
 }

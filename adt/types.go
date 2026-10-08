@@ -57,12 +57,28 @@ type TestCase struct {
 	Messages      []string
 }
 
+// TestAlert is an ABAP Unit alert that SAP attached outside a test method:
+// to the run itself, to a tested program, or to a test class.
+type TestAlert struct {
+	// Kind is SAP's language-independent alert kind, e.g. "noTestClasses".
+	Kind string
+	// Severity is SAP's severity, e.g. "tolerable" or "critical".
+	Severity string
+	// Title is the alert text in the logon language.
+	Title string
+}
+
 // TestResult is returned by RunUnitTests.
 type TestResult struct {
 	Passed    int
 	Failed    int
 	Errors    int
 	TestCases []TestCase
+	// Alerts holds the alerts SAP attached outside a test method, in document
+	// order: run level, then per program, then per test class. On SAP_BASIS
+	// 750 a run that executed no test method usually carries one of kind
+	// "noTestClasses"; SAP_BASIS 816 sends none in the same situations.
+	Alerts []TestAlert
 }
 
 // TransportRequest describes a CTS transport request.
