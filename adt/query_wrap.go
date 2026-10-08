@@ -71,7 +71,8 @@ func wrapSQLLine(line string) ([]string, error) {
 	}
 
 	var words []string
-	for _, w := range sqlWords(line) {
+	rawWords, unterminated := sqlWords(line)
+	for _, w := range rawWords {
 		if strings.HasPrefix(w, "*") && len(words) > 0 {
 			words[len(words)-1] += " " + w
 			continue
@@ -106,12 +107,30 @@ func wrapSQLLine(line string) ([]string, error) {
 	}
 
 	for _, l := range out {
-		if n := utf8.RuneCountInString(l); n > dataPreviewMaxLine {
-			return nil, fmt.Errorf("a token too long to split leaves a line of %d characters; "+
-				"the ADT data preview truncates SQL lines after %d characters", n, dataPreviewMaxLine)
+		if utf8.RuneCountInString(l) <= dataPreviewMaxLine {
+			continue
 		}
+		// Only a single word can overflow a line, so the line minus its indent
+		// is the token.
+		token := strings.TrimLeft(l, " ")
+		if unterminated {
+			return nil, fmt.Errorf("the line ends inside an unterminated string literal starting with %q",
+				tokenPreview(rawWords[len(rawWords)-1]))
+		}
+		return nil, fmt.Errorf("a token of %d characters cannot be split (%q); "+
+			"the ADT data preview truncates SQL lines after %d characters",
+			utf8.RuneCountInString(token), tokenPreview(token), dataPreviewMaxLine)
 	}
 	return out, nil
+}
+
+// tokenPreview shortens s to its first 30 characters for an error message.
+func tokenPreview(s string) string {
+	const maxRunes = 30
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes]) + "…"
 }
 
 // sqlWords splits one SQL line into whitespace-separated words. A string
@@ -121,8 +140,10 @@ func wrapSQLLine(line string) ([]string, error) {
 //
 // A doubled delimiter needs no special case: closing a literal and immediately
 // reopening it keeps both halves in the same word.
-func sqlWords(line string) []string {
-	var words []string
+//
+// unterminated reports that the line ended inside a literal or template, whose
+// word then holds the rest of the line.
+func sqlWords(line string) (words []string, unterminated bool) {
 	var cur strings.Builder
 	flush := func() {
 		if cur.Len() > 0 {
@@ -150,7 +171,7 @@ func sqlWords(line string) []string {
 			cur.WriteRune(r)
 		case r == '"':
 			flush()
-			return words
+			return words, false
 		case r == ' ' || r == '\t':
 			flush()
 		default:
@@ -158,5 +179,5 @@ func sqlWords(line string) []string {
 		}
 	}
 	flush()
-	return words
+	return words, quote != 0
 }

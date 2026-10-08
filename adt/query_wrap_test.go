@@ -114,8 +114,9 @@ func TestWrapLongSQLLines_KeepsLiteralsIntact(t *testing.T) {
 	quoted := "'it''s  a long literal'"
 	backtick := "`x``y  z`"
 	quoteInLiteral := `'say "hi" there'`
-	// String template with a double space, a '"' and an escaped '|'.
-	template := `|a  "b\| c|`
+	// String template with double spaces, a '"' and an escaped '|'. The double
+	// space after the escaped '|' lies outside the template if the escape is lost.
+	template := `|a  "b\|  c|`
 	sql := wrapTestPrefix + wrapTestFiller(19) + "C = " + quoted + " AND D = " + backtick +
 		" AND E = " + quoteInLiteral + " AND F = @( " + template + " ) AND " + wrapTestFiller(10) + wrapTestEnd
 	got, err := wrapLongSQLLines(sql)
@@ -238,6 +239,28 @@ func TestWrapLongSQLLines_TokenLimit(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "line 1: ") || !strings.Contains(err.Error(), "255") {
 			t.Errorf("error does not name the line and the limit: %v", err)
+		}
+		// The message reports the token's own length, not the indented line's.
+		if !strings.Contains(err.Error(), "255 characters") || strings.Contains(err.Error(), "256") {
+			t.Errorf("error does not report the token's own length: %v", err)
+		}
+		if !strings.Contains(err.Error(), "'xxx") {
+			t.Errorf("error does not quote the start of the token: %v", err)
+		}
+	})
+	t.Run("unterminated literal is reported as such", func(t *testing.T) {
+		sql := wrapTestPrefix + "B = 'abc " + strings.Repeat("x", 300)
+		_, err := wrapLongSQLLines(sql)
+		if err == nil {
+			t.Fatal("expected an error for an unterminated literal")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "line 1: ") || !strings.Contains(msg, "unterminated string literal") ||
+			!strings.Contains(msg, `"'abc`) {
+			t.Errorf("error does not describe the unterminated literal: %v", err)
+		}
+		if strings.Contains(msg, "token") {
+			t.Errorf("unterminated literal reported as a token length problem: %v", err)
 		}
 	})
 }
