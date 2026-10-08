@@ -30,11 +30,18 @@ func validateSelectOnly(sql string) error {
 
 // RunQuery executes a read-only SQL query via the ADT data preview endpoint.
 // Only single SELECT statements are allowed; anything else is rejected.
+// The data preview truncates SQL lines longer than 255 characters, so longer
+// lines are re-wrapped at whitespace outside string literals before sending,
+// and a line that cannot be wrapped is rejected (issue #183).
 // The request goes through the long-timeout HTTP client; if the caller's context
 // has no deadline, defaultLongRunTimeout is applied.
 func (c *httpClient) RunQuery(ctx context.Context, sql string, maxRows int) (*QueryResult, error) {
 	trimmed := strings.TrimSpace(sql)
 	if err := validateSelectOnly(trimmed); err != nil {
+		return nil, fmt.Errorf("RunQuery: %w", err)
+	}
+	wrapped, err := wrapLongSQLLines(trimmed)
+	if err != nil {
 		return nil, fmt.Errorf("RunQuery: %w", err)
 	}
 
@@ -52,7 +59,7 @@ func (c *httpClient) RunQuery(ctx context.Context, sql string, maxRows int) (*Qu
 		"Accept":       "application/vnd.sap.adt.datapreview.table.v1+xml",
 	}
 
-	resp, err := c.doMutateLong(ctx, "POST", path, strings.NewReader(trimmed), headers)
+	resp, err := c.doMutateLong(ctx, "POST", path, strings.NewReader(wrapped), headers)
 	if err != nil {
 		return nil, fmt.Errorf("RunQuery: %w", err)
 	}
