@@ -300,17 +300,28 @@ func TestExportCustomizing_Pagination(t *testing.T) {
 	t.Logf("T006: %d rows across %d pages (page_size=%d)", jt.TotalRows, jt.Pages, pageSize)
 }
 
-// exportSQLLimit mirrors maxSQLLength in export.go: the length above which the
-// export shortens its pagination keys.
-const exportSQLLimit = 250
+// previewLineLimit is the data preview's per-line limit (#183): a SQL line
+// longer than this has to be re-wrapped by RunQuery.
+const previewLineLimit = 255
+
+// failOrSkip ends the test for a failed query. When the search context has
+// expired it skips with a count-free message, otherwise it fails. The message
+// never carries the SAP error text, which may name a table.
+func failOrSkip(t *testing.T, ctx context.Context, what string) {
+	t.Helper()
+	if ctx.Err() != nil {
+		t.Skip("candidate search exceeded its time budget")
+	}
+	t.Fatalf("%s failed", what)
+}
 
 // discoverTables runs a discovery query and returns the first column of up to
 // max rows. It fails the test on a query error.
-func discoverTables(t *testing.T, client adt.Client, sql string, max int) []string {
+func discoverTables(t *testing.T, ctx context.Context, client adt.Client, sql string, max int) []string {
 	t.Helper()
-	result, err := client.RunQuery(context.Background(), sql, max)
+	result, err := client.RunQuery(ctx, sql, max)
 	if err != nil {
-		t.Fatalf("discovery query failed: %v", err)
+		failOrSkip(t, ctx, "discovery query")
 	}
 	var tables []string
 	for _, row := range result.Rows {
@@ -322,18 +333,18 @@ func discoverTables(t *testing.T, client adt.Client, sql string, max int) []stri
 }
 
 // sourceRowCount returns SELECT COUNT(*) for a table.
-func sourceRowCount(t *testing.T, client adt.Client, table string) int {
+func sourceRowCount(t *testing.T, ctx context.Context, client adt.Client, table string) int {
 	t.Helper()
-	result, err := client.RunQuery(context.Background(), "SELECT COUNT(*) FROM "+table, 1)
+	result, err := client.RunQuery(ctx, "SELECT COUNT(*) FROM "+table, 1)
 	if err != nil {
-		t.Fatalf("counting source rows failed: %v", err)
+		failOrSkip(t, ctx, "counting source rows")
 	}
 	if len(result.Rows) != 1 || len(result.Rows[0]) != 1 {
 		t.Fatalf("unexpected COUNT(*) result shape: %d rows", len(result.Rows))
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(result.Rows[0][0]))
 	if err != nil {
-		t.Fatalf("parsing COUNT(*) result: %v", err)
+		t.Fatalf("parsing COUNT(*) result failed")
 	}
 	return n
 }
@@ -354,12 +365,12 @@ func TestExportCustomizing_IncludeTables(t *testing.T) {
 	// Tables with a key-level .INCLUDE pseudo-field in DD03L previously caused
 	// "invalid key column" errors in the export. Discover two that hold data.
 	const maxCandidates = 300
-	candidates := discoverTables(t, client, customizingTablesSQL(
+	candidates := discoverTables(t, ctx, client, customizingTablesSQL(
 		"DISTINCT a~TABNAME", "b~FIELDNAME = '.INCLUDE'", "ORDER BY a~TABNAME"), maxCandidates)
 
 	var tables []string
 	for _, c := range candidates {
-		if n := sourceRowCount(t, client, c); n >= 1 && n < 50000 {
+		if n := sourceRowCount(t, ctx, client, c); n >= 1 && n < 50000 {
 			tables = append(tables, c)
 		}
 		if len(tables) == 2 {
@@ -415,12 +426,12 @@ func TestExportCustomizing_IncludeTables(t *testing.T) {
 
 // tableKeyFields returns the key fields of a table in key order, without
 // DDIC pseudo-fields such as .INCLUDE.
-func tableKeyFields(t *testing.T, client adt.Client, table string) []string {
+func tableKeyFields(t *testing.T, ctx context.Context, client adt.Client, table string) []string {
 	t.Helper()
 	sql := fmt.Sprintf("SELECT FIELDNAME FROM DD03L WHERE TABNAME = '%s' AND KEYFLAG = 'X' AND AS4LOCAL = 'A' ORDER BY POSITION",
 		adt.EscapeValue(table))
 	var keys []string
-	for _, k := range discoverTables(t, client, sql, 1000) {
+	for _, k := range discoverTables(t, ctx, client, sql, 1000) {
 		if !strings.HasPrefix(k, ".") {
 			keys = append(keys, k)
 		}
@@ -428,15 +439,18 @@ func tableKeyFields(t *testing.T, client adt.Client, table string) []string {
 	return keys
 }
 
-// paginationSQLTooLong reports whether the export's first pagination query
-// for the table, built from a real row, exceeds the export's length limit.
-func paginationSQLTooLong(t *testing.T, client adt.Client, table string) bool {
+// paginationSQLTooLong reports whether the export's pagination query for the
+// table, built from a real row and all non-client keys, has a line the data
+// preview would cut. An empty table counts as not long; a failing query ends
+// the test.
+func paginationSQLTooLong(t *testing.T, ctx context.Context, client adt.Client, table string, keys []string) bool {
 	t.Helper()
-	keys := tableKeyFields(t, client, table)
 	nonMandt := adt.FilterNonMandtKeys(keys)
-	result, err := client.RunQuery(context.Background(),
-		"SELECT "+strings.Join(keys, ", ")+" FROM "+table, 1)
-	if err != nil || len(result.Rows) != 1 {
+	result, err := client.RunQuery(ctx, "SELECT "+strings.Join(keys, ", ")+" FROM "+table, 1)
+	if err != nil {
+		failOrSkip(t, ctx, "reading a sample row")
+	}
+	if len(result.Rows) == 0 {
 		return false
 	}
 	values := make(map[string]string, len(keys))
@@ -450,7 +464,10 @@ func paginationSQLTooLong(t *testing.T, client adt.Client, table string) bool {
 		last = append(last, values[k])
 	}
 	sqlStr, err := adt.BuildExportSQL(table, keys, nonMandt, last)
-	return err == nil && len(sqlStr) > exportSQLLimit
+	if err != nil {
+		t.Fatalf("building the pagination SQL failed")
+	}
+	return len(sqlStr) > previewLineLimit
 }
 
 func TestExportCustomizing_LongKeyPagination(t *testing.T) {
@@ -459,27 +476,32 @@ func TestExportCustomizing_LongKeyPagination(t *testing.T) {
 	outputDir := t.TempDir()
 
 	// A table with at least four non-client key fields and more rows than one
-	// page whose pagination SQL exceeds the export's length limit, so that the
-	// export has to shorten its pagination keys. Aggregating DD03L is too slow
-	// on older releases, so candidates are checked one by one.
+	// page whose full-key pagination SQL has a line longer than the data
+	// preview's 255-character limit (#183), so that RunQuery has to re-wrap it.
+	// The export must still deliver every row. Aggregating DD03L is too slow on
+	// older releases, so candidates are checked one by one within a time budget.
 	const (
 		maxCandidates     = 2000
 		pageSize          = 1000
 		minKeys           = 4
 		maxByKeyCount     = 400
 		aggregationBudget = 20 * time.Second
+		searchBudget      = 3 * time.Minute
 	)
-	candidates := discoverTables(t, client,
+	searchCtx, cancelSearch := context.WithTimeout(ctx, searchBudget)
+	defer cancelSearch()
+
+	candidates := discoverTables(t, searchCtx, client,
 		"SELECT TABNAME FROM DD02L WHERE TABCLASS = 'TRANSP' AND CONTFLAG IN ('C','G') AND AS4LOCAL = 'A' ORDER BY TABNAME",
 		maxCandidates)
 	// Where the system answers the aggregation quickly, start with the tables
 	// that have the most keys: their pagination SQL is the longest.
-	aggCtx, cancel := context.WithTimeout(ctx, aggregationBudget)
+	aggCtx, cancelAgg := context.WithTimeout(searchCtx, aggregationBudget)
 	byKeyCount, err := client.RunQuery(aggCtx, customizingTablesSQL(
 		"b~TABNAME, COUNT(*) AS N",
 		"b~FIELDNAME <> 'MANDT' AND b~FIELDNAME NOT LIKE '.%'",
 		"GROUP BY b~TABNAME HAVING COUNT(*) >= 4 ORDER BY N DESCENDING, b~TABNAME"), maxByKeyCount)
-	cancel()
+	cancelAgg()
 	if err == nil && len(byKeyCount.Rows) > 0 {
 		candidates = candidates[:0]
 		for _, row := range byKeyCount.Rows {
@@ -487,26 +509,31 @@ func TestExportCustomizing_LongKeyPagination(t *testing.T) {
 		}
 	}
 
-	table, sourceRows, manyKeys, sized := "", 0, 0, 0
+	table, sourceRows, checked, manyKeys, sized := "", 0, 0, 0, 0
 	for _, c := range candidates {
-		if len(adt.FilterNonMandtKeys(tableKeyFields(t, client, c))) < minKeys {
+		if searchCtx.Err() != nil {
+			break
+		}
+		checked++
+		keys := tableKeyFields(t, searchCtx, client, c)
+		if len(adt.FilterNonMandtKeys(keys)) < minKeys {
 			continue
 		}
 		manyKeys++
-		n := sourceRowCount(t, client, c)
+		n := sourceRowCount(t, searchCtx, client, c)
 		if n <= pageSize || n >= 200000 {
 			continue
 		}
 		sized++
-		if paginationSQLTooLong(t, client, c) {
+		if paginationSQLTooLong(t, searchCtx, client, c, keys) {
 			table, sourceRows = c, n
 			break
 		}
 	}
-	t.Logf("%d customizing tables checked, %d with >= %d non-client keys, %d of suitable size, long pagination SQL found: %t",
-		len(candidates), manyKeys, minKeys, sized, table != "")
+	t.Logf("%d of %d customizing tables checked, %d with >= %d non-client keys, %d of suitable size, long pagination SQL found: %t",
+		checked, len(candidates), manyKeys, minKeys, sized, table != "")
 	if table == "" {
-		t.Skip("no customizing table with >= 4 keys whose pagination SQL exceeds the export limit")
+		t.Skip("no customizing table with >= 4 keys whose pagination SQL has a line over the preview limit")
 	}
 
 	summary, err := custexport.RunExport(ctx, client, custexport.ExportConfig{
@@ -533,7 +560,7 @@ func TestExportCustomizing_LongKeyPagination(t *testing.T) {
 
 	var rowCount int
 	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, table)).Scan(&rowCount); err != nil {
-		t.Fatalf("count rows: %v", err)
+		t.Fatalf("counting exported rows failed")
 	}
 	t.Logf("%d source rows, %d rows in SQLite (page_size=%d)", sourceRows, rowCount, pageSize)
 	if rowCount != sourceRows {

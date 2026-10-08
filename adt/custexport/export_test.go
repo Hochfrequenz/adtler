@@ -2,7 +2,10 @@ package custexport
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -291,7 +294,7 @@ func TestFetchAllKeys(t *testing.T) {
 		},
 	}
 
-	keys, err := fetchTableKeys(context.Background(), client, "T001")
+	keys, _, err := fetchTableKeys(context.Background(), client, "T001")
 	if err != nil {
 		t.Fatalf("fetchTableKeys: %v", err)
 	}
@@ -322,7 +325,7 @@ func TestFetchTableKeys_SkipsPseudoFields(t *testing.T) {
 		},
 	}
 
-	keys, err := fetchTableKeys(context.Background(), client, "SOMETABLE")
+	keys, _, err := fetchTableKeys(context.Background(), client, "SOMETABLE")
 	if err != nil {
 		t.Fatalf("fetchTableKeys: %v", err)
 	}
@@ -351,7 +354,7 @@ func TestExportTable_SinglePage(t *testing.T) {
 		},
 	}
 
-	result, err := exportTable(context.Background(), client, "T001", []string{"MANDT", "BUKRS"}, 100)
+	result, err := exportTable(context.Background(), client, "T001", []string{"MANDT", "BUKRS"}, nil, 100)
 	if err != nil {
 		t.Fatalf("exportTable: %v", err)
 	}
@@ -426,7 +429,7 @@ func TestExportTable_ThreePages(t *testing.T) {
 		},
 	}
 
-	result, err := exportTable(context.Background(), client, "T001", []string{"MANDT", "BUKRS"}, pageSize)
+	result, err := exportTable(context.Background(), client, "T001", []string{"MANDT", "BUKRS"}, nil, pageSize)
 	if err != nil {
 		t.Fatalf("exportTable: %v", err)
 	}
@@ -466,7 +469,7 @@ func TestExportTable_NoKeys(t *testing.T) {
 		},
 	}
 
-	result, err := exportTable(context.Background(), client, "T000", nil, 100)
+	result, err := exportTable(context.Background(), client, "T000", nil, nil, 100)
 	if err != nil {
 		t.Fatalf("exportTable: %v", err)
 	}
@@ -487,7 +490,7 @@ func TestExportTable_ErrorOnQuery(t *testing.T) {
 		},
 	}
 
-	_, err := exportTable(context.Background(), client, "T001", []string{"MANDT", "BUKRS"}, 100)
+	_, err := exportTable(context.Background(), client, "T001", []string{"MANDT", "BUKRS"}, nil, 100)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -592,5 +595,190 @@ func TestRunExport_EndToEnd(t *testing.T) {
 	}
 	if summary.Client != "100" {
 		t.Errorf("expected client %q, got %q", "100", summary.Client)
+	}
+}
+
+// pageWhereRe matches one comparison of the keyset-pagination WHERE clause.
+var pageWhereRe = regexp.MustCompile(`(?:CAST\( (\w+) AS CHAR\( 6 \) \)|(\w+)) (=|>) '([^']*)'`)
+
+// errTimeLiteral mimics the data preview's refusal of '240000' as a literal
+// compared with a TIMS field.
+var errTimeLiteral = errors.New("'240000' is not a valid value for T(6,0)")
+
+// matchesPageWhere evaluates the OR-chain WHERE clause built by
+// adt.BuildExportSQL against a row, the way the database would. Plain
+// comparisons of a column in timeColumns with '240000' are refused like the
+// data preview does; CAST( col AS CHAR( 6 ) ) comparisons are text compares.
+func matchesPageWhere(sql string, columns []string, row []string, timeColumns ...string) (bool, error) {
+	_, where, found := strings.Cut(sql, " WHERE ")
+	if !found {
+		return true, nil
+	}
+	where, _, _ = strings.Cut(where, " ORDER BY ")
+	value := func(name string) string {
+		for i, c := range columns {
+			if c == name {
+				return row[i]
+			}
+		}
+		return ""
+	}
+	for _, term := range strings.Split(where, " OR ") {
+		all := true
+		for _, m := range pageWhereRe.FindAllStringSubmatch(term, -1) {
+			name, cast, op, lit := m[1], true, m[3], m[4]
+			if name == "" {
+				name, cast = m[2], false
+			}
+			if !cast && lit == "240000" && slices.Contains(timeColumns, name) {
+				return false, errTimeLiteral
+			}
+			v := value(name)
+			if (op == "=" && v != lit) || (op == ">" && v <= lit) {
+				all = false
+			}
+		}
+		if all {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// TestExportTable_LongKeyPaginationKeepsAllRows exports a table whose
+// pagination SQL is far longer than 250 characters, with page boundaries
+// inside groups of rows that share their first key. Every row must arrive.
+func TestExportTable_LongKeyPaginationKeepsAllRows(t *testing.T) {
+	const pageSize = 4
+	keys := []string{
+		"MANDT",
+		"FIRST_KEY_FIELD_WITH_A_LONG_NAME",
+		"SECOND_KEY_FIELD_WITH_A_LONG_NAME",
+		"THIRD_KEY_FIELD_WITH_A_LONG_NAME",
+		"FOURTH_KEY_FIELD_WITH_A_LONG_NAME",
+	}
+	columns := append(append([]string{}, keys...), "PAYLOAD")
+
+	// 3 first-key groups of 6 rows each; with a page size of 4 every page
+	// boundary falls inside a group.
+	var all [][]string
+	for _, first := range []string{"FIRST_VALUE_A", "FIRST_VALUE_B", "FIRST_VALUE_C"} {
+		for i := 1; i <= 6; i++ {
+			second := fmt.Sprintf("SECOND_VALUE_%02d", i)
+			all = append(all, []string{"100", first, second, "THIRD_VALUE_CONSTANT", "FOURTH_VALUE_CONSTANT", first + "/" + second})
+		}
+	}
+
+	fullSQL, err := adt.BuildExportSQL("SOMETABLE", keys, adt.FilterNonMandtKeys(keys), all[0][1:5])
+	if err != nil {
+		t.Fatalf("BuildExportSQL: %v", err)
+	}
+	if len(fullSQL) <= 250 {
+		t.Fatalf("test setup: full-key pagination SQL is %d characters, want more than 250", len(fullSQL))
+	}
+
+	resultColumns := make([]adt.QueryColumn, len(columns))
+	for i, c := range columns {
+		resultColumns[i] = adt.QueryColumn{Name: c, Type: "C"}
+	}
+	client := &mockClient{
+		runQueryFn: func(_ context.Context, sql string, maxRows int) (*adt.QueryResult, error) {
+			var page [][]string
+			for _, row := range all { // all is already in key order
+				ok, err := matchesPageWhere(sql, columns, row)
+				if err != nil {
+					return nil, err
+				}
+				if len(page) < maxRows && ok {
+					page = append(page, row)
+				}
+			}
+			return &adt.QueryResult{Columns: resultColumns, Rows: page}, nil
+		},
+	}
+
+	result, err := exportTable(context.Background(), client, "SOMETABLE", keys, nil, pageSize)
+	if err != nil {
+		t.Fatalf("exportTable: %v", err)
+	}
+	if len(result.Rows) != len(all) {
+		t.Fatalf("exported %d rows, want %d", len(result.Rows), len(all))
+	}
+	for i, row := range all {
+		if got := strings.Join(result.Rows[i], "|"); got != strings.Join(row, "|") {
+			t.Errorf("row %d: got %q, want %q", i, got, strings.Join(row, "|"))
+		}
+	}
+}
+
+// TestExportTable_TimsKeyAtPageBoundary exports a table whose page boundaries
+// fall on a TIMS key holding 240000. The data preview refuses that value as a
+// literal, so the export has to compare TIMS keys as text.
+func TestExportTable_TimsKeyAtPageBoundary(t *testing.T) {
+	const pageSize = 3
+	keys := []string{"MANDT", "DAY_KEY", "END_TIME"}
+	columns := []string{"MANDT", "DAY_KEY", "END_TIME", "PAYLOAD"}
+
+	// Three rows per day, the last one at 24:00:00, so every page ends on it.
+	var all [][]string
+	for _, day := range []string{"20250101", "20250102", "20250103"} {
+		for _, tm := range []string{"080000", "160000", "240000"} {
+			all = append(all, []string{"100", day, tm, day + "/" + tm})
+		}
+	}
+	resultColumns := make([]adt.QueryColumn, len(columns))
+	for i, c := range columns {
+		resultColumns[i] = adt.QueryColumn{Name: c, Type: "C"}
+	}
+	client := &mockClient{
+		runQueryFn: func(_ context.Context, sql string, maxRows int) (*adt.QueryResult, error) {
+			var page [][]string
+			for _, row := range all {
+				ok, err := matchesPageWhere(sql, columns, row, "END_TIME")
+				if err != nil {
+					return nil, err
+				}
+				if len(page) < maxRows && ok {
+					page = append(page, row)
+				}
+			}
+			return &adt.QueryResult{Columns: resultColumns, Rows: page}, nil
+		},
+	}
+
+	result, err := exportTable(context.Background(), client, "SOMETABLE", keys,
+		map[string]string{"MANDT": "CLNT", "DAY_KEY": "DATS", "END_TIME": "TIMS"}, pageSize)
+	if err != nil {
+		t.Fatalf("exportTable: %v", err)
+	}
+	if len(result.Rows) != len(all) {
+		t.Fatalf("exported %d rows, want %d", len(result.Rows), len(all))
+	}
+	for i, row := range all {
+		if got := strings.Join(result.Rows[i], "|"); got != strings.Join(row, "|") {
+			t.Errorf("row %d: got %q, want %q", i, got, strings.Join(row, "|"))
+		}
+	}
+}
+
+func TestFetchTableKeys_ReturnsDataTypes(t *testing.T) {
+	client := &mockClient{
+		runQueryFn: func(_ context.Context, sql string, _ int) (*adt.QueryResult, error) {
+			if !strings.Contains(sql, "DATATYPE") {
+				t.Errorf("key query must select DATATYPE, got: %s", sql)
+			}
+			return &adt.QueryResult{Rows: [][]string{
+				{"MANDT", "0001", "CLNT"},
+				{".INCLUDE", "0002", ""},
+				{"END_TIME", "0003", "TIMS"},
+			}}, nil
+		},
+	}
+	keys, types, err := fetchTableKeys(context.Background(), client, "SOMETABLE")
+	if err != nil {
+		t.Fatalf("fetchTableKeys: %v", err)
+	}
+	if len(keys) != 2 || types["END_TIME"] != "TIMS" || types["MANDT"] != "CLNT" {
+		t.Errorf("got keys %v, types %v", keys, types)
 	}
 }

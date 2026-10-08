@@ -60,11 +60,11 @@ const (
 	// Each worker does 2 sequential HTTP requests per table (DD03L keys + data).
 	defaultWorkers = 20
 	maxWorkers     = 40
-	// ADT data preview endpoint rejects SQL bodies longer than ~255 chars.
-	// Empirically determined: TA23HOTELS with 261-char SQL got truncated to
-	// "PROPERT" (cutting "PROPERTY"), and 303-char SQL caused grammar errors.
-	// 250 is conservative. See issues #93, #94.
-	maxSQLLength     = 250
+	// The data preview cuts each SQL line after 255 characters. RunQuery
+	// re-wraps longer lines since #183 (adt/query_wrap.go), so the export
+	// imposes no length limit on its pagination SQL and always paginates on
+	// the full key. Shortening the key would skip rows that share a key prefix
+	// across a page boundary (#93, #94 introduced the limit).
 	perQueryTimeout  = 120 * time.Second
 	progressInterval = 100
 )
@@ -146,11 +146,12 @@ func discoverCustomerTables(ctx context.Context, client adt.Client) ([]string, e
 	return customerTables, nil
 }
 
-// fetchTableKeys queries DD03L for key fields of a single table.
+// fetchTableKeys queries DD03L for key fields of a single table and returns
+// them in key order together with their DDIC data types (key name to type).
 // Called by each worker just before exporting the table.
-func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]string, error) {
+func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]string, map[string]string, error) {
 	sql := fmt.Sprintf(
-		"SELECT FIELDNAME, POSITION FROM DD03L WHERE TABNAME = '%s' AND KEYFLAG = 'X' AND AS4LOCAL = 'A' ORDER BY POSITION",
+		"SELECT FIELDNAME, POSITION, DATATYPE FROM DD03L WHERE TABNAME = '%s' AND KEYFLAG = 'X' AND AS4LOCAL = 'A' ORDER BY POSITION",
 		adt.EscapeValue(table),
 	)
 	queryCtx, cancel := context.WithTimeout(ctx, perQueryTimeout)
@@ -158,10 +159,11 @@ func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]str
 
 	result, err := client.RunQuery(queryCtx, sql, 1000)
 	if err != nil {
-		return nil, fmt.Errorf("fetchTableKeys %s: %w", table, err)
+		return nil, nil, fmt.Errorf("fetchTableKeys %s: %w", table, err)
 	}
 
 	var keys []string
+	keyTypes := make(map[string]string)
 	for _, row := range result.Rows {
 		if len(row) > 0 {
 			name := strings.TrimSpace(row[0])
@@ -169,20 +171,23 @@ func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]str
 			// metadata markers for include structures, not real column names.
 			if name != "" && !strings.HasPrefix(name, ".") {
 				keys = append(keys, name)
+				if len(row) > 2 {
+					keyTypes[name] = strings.TrimSpace(row[2])
+				}
 			}
 		}
 	}
-	return keys, nil
+	return keys, keyTypes, nil
 }
 
 // exportTable performs a paginated export of a single table.
-// keys is the full list of key fields (including MANDT).
-func exportTable(ctx context.Context, client adt.Client, table string, keys []string, pageSize int) (*TableExportResult, error) {
+// keys is the full list of key fields (including MANDT), keyTypes their DDIC
+// data types (key name to type, may be nil).
+func exportTable(ctx context.Context, client adt.Client, table string, keys []string, keyTypes map[string]string, pageSize int) (*TableExportResult, error) {
 	nonMandtKeys := adt.FilterNonMandtKeys(keys)
 
-	// Start with all non-MANDT keys for pagination. The OR-chain WHERE clause
-	// grows with more keys — if the SQL exceeds the ADT endpoint's ~300 char limit,
-	// we reduce keys dynamically when building the pagination SQL.
+	// Paginate on all non-MANDT keys. The OR-chain WHERE clause grows with
+	// the number of keys, but RunQuery wraps long lines (#183).
 	paginateKeys := nonMandtKeys
 
 	var allRows [][]string
@@ -191,30 +196,9 @@ func exportTable(ctx context.Context, client adt.Client, table string, keys []st
 	var lastValues []string
 
 	for {
-		sqlStr, err := adt.BuildExportSQL(table, keys, paginateKeys, lastValues)
+		sqlStr, err := adt.BuildExportSQLTyped(table, keys, paginateKeys, lastValues, keyTypes)
 		if err != nil {
 			return nil, fmt.Errorf("build SQL for %s: %w", table, err)
-		}
-
-		// ADT endpoint has a ~300 char SQL length limit. If the OR-chain
-		// pagination WHERE clause makes it too long, reduce pagination keys.
-		// The reduction persists across pages (if page 2 needed it, page 3 will too).
-		origKeyCount := len(paginateKeys)
-		for len(sqlStr) > maxSQLLength && len(paginateKeys) > 1 {
-			paginateKeys = paginateKeys[:len(paginateKeys)-1]
-			lastValues = lastValues[:len(paginateKeys)] // trim to match
-			sqlStr, err = adt.BuildExportSQL(table, keys, paginateKeys, lastValues)
-			if err != nil {
-				return nil, fmt.Errorf("build SQL for %s (reduced keys): %w", table, err)
-			}
-		}
-		if len(paginateKeys) < origKeyCount {
-			log.Printf("[export] %s: reduced pagination keys from %d to %d (SQL was %d chars, limit %d)",
-				table, origKeyCount, len(paginateKeys), len(sqlStr), maxSQLLength)
-		}
-		if len(sqlStr) > maxSQLLength {
-			log.Printf("[export] WARNING: %s SQL still %d chars after key reduction (limit %d), query may fail",
-				table, len(sqlStr), maxSQLLength)
 		}
 
 		queryCtx, cancel := context.WithTimeout(ctx, perQueryTimeout)
@@ -348,12 +332,12 @@ func RunExport(ctx context.Context, client adt.Client, cfg ExportConfig) (*Expor
 		go func() {
 			defer wg.Done()
 			for table := range workCh {
-				keys, kErr := fetchTableKeys(ctx, client, table)
+				keys, keyTypes, kErr := fetchTableKeys(ctx, client, table)
 				if kErr != nil {
 					resultCh <- &TableExportResult{TableName: table, Error: kErr}
 					continue
 				}
-				result, err := exportTable(ctx, client, table, keys, pageSize)
+				result, err := exportTable(ctx, client, table, keys, keyTypes, pageSize)
 				if err != nil {
 					resultCh <- &TableExportResult{
 						TableName: table,

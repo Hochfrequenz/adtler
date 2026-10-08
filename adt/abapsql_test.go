@@ -1,6 +1,7 @@
 package adt
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -214,5 +215,34 @@ func TestBuildExportSQL(t *testing.T) {
 				t.Errorf("expected:\n  %s\ngot:\n  %s", tt.expected, got)
 			}
 		})
+	}
+}
+
+// The data preview rejects '240000' as a literal for a TIMS field although the
+// database stores it, so TIMS key fields are compared as text.
+func TestBuildExportSQLTyped_TimsKeysCompareAsText(t *testing.T) {
+	keys := []string{"MANDT", "DAYKEY", "ENDTIME"}
+	got, err := BuildExportSQLTyped("SOMETABLE", keys, []string{"DAYKEY", "ENDTIME"},
+		[]string{"20250101", "240000"}, map[string]string{"ENDTIME": "TIMS", "DAYKEY": "DATS"})
+	if err != nil {
+		t.Fatalf("BuildExportSQLTyped: %v", err)
+	}
+	want := "SELECT * FROM SOMETABLE WHERE DAYKEY > '20250101' OR ( DAYKEY = '20250101' AND CAST( ENDTIME AS CHAR( 6 ) ) > '240000' )" +
+		" ORDER BY MANDT, DAYKEY, ENDTIME"
+	if got != want {
+		t.Errorf("expected:\n  %s\ngot:\n  %s", want, got)
+	}
+
+	// A TIMS key that is only compared for equality is cast as well.
+	got, _ = BuildExportSQLTyped("SOMETABLE", keys, []string{"ENDTIME", "DAYKEY"},
+		[]string{"240000", "20250101"}, map[string]string{"ENDTIME": "TIMS"})
+	if !strings.Contains(got, "CAST( ENDTIME AS CHAR( 6 ) ) = '240000'") {
+		t.Errorf("equality on a TIMS key must be cast, got: %s", got)
+	}
+
+	// Without types the SQL is unchanged.
+	plain, _ := BuildExportSQL("SOMETABLE", keys, []string{"DAYKEY", "ENDTIME"}, []string{"20250101", "240000"})
+	if strings.Contains(plain, "CAST") {
+		t.Errorf("untyped SQL must not cast, got: %s", plain)
 	}
 }
