@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -21,6 +23,10 @@ import (
 // port. Both are forbidden in this public repository, and the only path that
 // prints them is the failure path: exactly the output someone pastes into a
 // pull request.
+//
+// Matching is case-insensitive and also covers the url.PathEscape form of each
+// value: a namespaced object such as /ABC/CL_EXAMPLE reaches error text
+// percent-encoded (%2fabc%2fcl_example or %2FABC%2FCL_EXAMPLE), in either case.
 func redact(text, host, name string) string {
 	for _, r := range []struct{ secret, placeholder string }{
 		{host, "<host>"},
@@ -29,8 +35,13 @@ func redact(text, host, name string) string {
 		if r.secret == "" {
 			continue
 		}
-		for _, variant := range []string{r.secret, strings.ToLower(r.secret), strings.ToUpper(r.secret)} {
-			text = strings.ReplaceAll(text, variant, r.placeholder)
+		variants := []string{r.secret}
+		if escaped := url.PathEscape(r.secret); escaped != r.secret {
+			variants = append(variants, escaped)
+		}
+		for _, variant := range variants {
+			re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(variant))
+			text = re.ReplaceAllLiteralString(text, r.placeholder)
 		}
 	}
 	return text

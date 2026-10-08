@@ -100,11 +100,12 @@ func (c *httpClient) sourceContentType(endpoint string) string {
 }
 
 func (c *httpClient) GetSource(ctx context.Context, objectURI string) (*SourceResult, error) {
+	objectURI = bareObjectURI(objectURI)
 	if err := c.ensureCSRF(ctx); err != nil {
 		return nil, fmt.Errorf("GetSource: %w", err)
 	}
 	accept := c.sourceContentType(objectURI)
-	resp, err := c.doRead(ctx, objectURI+"/source/main", map[string]string{"Accept": accept})
+	resp, err := c.doRead(ctx, objectURI+sourceMainSuffix, map[string]string{"Accept": accept})
 	if err != nil {
 		return nil, fmt.Errorf("GetSource: %w", err)
 	}
@@ -162,6 +163,7 @@ func parseDefinitionEndLine(data []byte) (int, error) {
 // It fetches objectstructure (for the definition line range) and source/main concurrently,
 // then truncates the source to the definition block.
 func (c *httpClient) GetClassDefinition(ctx context.Context, objectURI string) (*SourceResult, error) {
+	objectURI = bareObjectURI(objectURI)
 	type structResult struct {
 		data []byte
 		err  error
@@ -236,6 +238,7 @@ func classIncludePath(objectURI, include string) (string, error) {
 }
 
 func (c *httpClient) GetIncludeSource(ctx context.Context, objectURI, include string) (*SourceResult, error) {
+	objectURI = bareObjectURI(objectURI)
 	path, err := classIncludePath(objectURI, include)
 	if err != nil {
 		return nil, err
@@ -260,6 +263,7 @@ func (c *httpClient) GetIncludeSource(ctx context.Context, objectURI, include st
 }
 
 func (c *httpClient) SetIncludeSource(ctx context.Context, objectURI, include, source, lockHandle, transport, etag string) (string, error) {
+	objectURI = bareObjectURI(objectURI)
 	path, err := classIncludePath(objectURI, include)
 	if err != nil {
 		return "", err
@@ -315,6 +319,7 @@ func (c *httpClient) SetIncludeSource(ctx context.Context, objectURI, include, s
 // CreateTestInclude creates the test classes include for a class that doesn't have one yet.
 // Requires a stateful lock on the parent class (LockObject uses stateful sessions).
 func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandle, transport string) error {
+	objectURI = bareObjectURI(objectURI)
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <class:abapClassInclude xmlns:class="http://www.sap.com/adt/oo/classes"
   xmlns:adtcore="http://www.sap.com/adt/core"
@@ -342,6 +347,7 @@ func (c *httpClient) CreateTestInclude(ctx context.Context, objectURI, lockHandl
 }
 
 func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	objectURI = bareObjectURI(objectURI)
 	if err := c.ensureCSRF(ctx); err != nil {
 		return "", fmt.Errorf("SetSource: %w", err)
 	}
@@ -367,6 +373,27 @@ func (c *httpClient) SetSource(ctx context.Context, objectURI, source, lockHandl
 // isDDLSourceURI reports whether objectURI is a DDL source (CDS view / DDLS).
 func isDDLSourceURI(objectURI string) bool {
 	return strings.HasPrefix(objectURI, "/sap/bc/adt/ddic/ddl/sources/")
+}
+
+// sourceMainSuffix is the sub-path ADT serves an object's main source at.
+const sourceMainSuffix = "/source/main"
+
+// bareObjectURI reduces a URI that may point at an object's main source to
+// the bare object URI the source methods build their paths from. ADT itself
+// hands out source URIs — syntax-check messages and navigation targets carry
+// ".../source/main#start=L,C" — so callers pass them back, and appending
+// "/source/main" again yields a path SAP answers with 404 (adtler#210).
+//
+// On top of normalizeObjectURI (query, fragment, trailing slash) it strips a
+// trailing "/source/main", case-insensitively. Dropping the query loses
+// nothing that worked: every caller appends a sub-path after the URI, which
+// turned any query into garbage before.
+func bareObjectURI(uri string) string {
+	uri = normalizeObjectURI(uri)
+	if n := len(uri) - len(sourceMainSuffix); n >= 0 && strings.EqualFold(uri[n:], sourceMainSuffix) {
+		uri = uri[:n]
+	}
+	return uri
 }
 
 // trySetSource attempts SetSource with the lock handle retry
@@ -426,7 +453,7 @@ func (c *httpClient) setSourceWithLockHeader(ctx context.Context, objectURI, sou
 	if lockHandle != "" {
 		headers["X-SAP-Lock-Handle"] = lockHandle
 	}
-	path := objectURI + "/source/main"
+	path := objectURI + sourceMainSuffix
 	if transport != "" {
 		path += "?corrNr=" + url.QueryEscape(transport)
 	}
@@ -452,7 +479,7 @@ func (c *httpClient) setSourceWithLockParam(ctx context.Context, objectURI, sour
 	if transport != "" {
 		params.Set("corrNr", transport)
 	}
-	path := objectURI + "/source/main"
+	path := objectURI + sourceMainSuffix
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}

@@ -54,6 +54,8 @@ func TestResolveTextElementPath(t *testing.T) {
 		{"/sap/bc/adt/programs/programs/ZTEST", "/sap/bc/adt/textelements/programs/ZTEST"},
 		{"/sap/bc/adt/oo/classes/ZCL_TEST", "/sap/bc/adt/textelements/classes/ZCL_TEST"},
 		{"/sap/bc/adt/functions/groups/ZFGRP", "/sap/bc/adt/textelements/functiongroups/ZFGRP"},
+		{"/sap/bc/adt/programs/programs/ZTEST/source/main", "/sap/bc/adt/textelements/programs/ZTEST"},
+		{"/sap/bc/adt/oo/classes/ZCL_TEST/source/main#start=3,0", "/sap/bc/adt/textelements/classes/ZCL_TEST"},
 	}
 	for _, tt := range tests {
 		got, err := resolveTextElementPath(tt.uri)
