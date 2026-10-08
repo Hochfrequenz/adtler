@@ -19,9 +19,9 @@ import (
 // which holds only modifiable requests — exactly the ECC situation the E071
 // fallback exists for.
 const (
-	releasedRequestNumber = "DEVK901000"
-	releasedTaskOne       = "DEVK901001"
-	releasedTaskTwo       = "DEVK901002"
+	releasedRequestNumber = "AAAK901000"
+	releasedTaskOne       = "AAAK901001"
+	releasedTaskTwo       = "AAAK901002"
 )
 
 // dataPreviewXML renders a column-oriented data preview response body — the
@@ -237,7 +237,7 @@ func TestGetTransportObjects_AbsentFromWorklist_ResolvesViaE071(t *testing.T) {
 // reach a caller. The query excludes it; this test additionally proves the
 // result is clean even when a server hands it over regardless.
 func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T) {
-	const releasedNumber = "DEVK900123"
+	const releasedNumber = "AAAK900123"
 
 	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
 		if strings.Contains(sql, "FROM E070") {
@@ -247,8 +247,8 @@ func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T)
 		return http.StatusOK, dataPreviewXML(
 			[]string{"TRKORR", "AS4POS", "PGMID", "OBJECT", "OBJ_NAME"},
 			[][]string{
-				{releasedNumber, "000001", "CORR", "RELE", "DEVK900124 20240101 120000 TESTUSER1"},
-				{releasedNumber, "000002", "LIMU", "METH", "ZCL_EDM_MIG_GINF              GET_GT_DATA"},
+				{releasedNumber, "000001", "CORR", "RELE", "AAAK900124 20240101 120000 TESTUSER1"},
+				{releasedNumber, "000002", "LIMU", "METH", "ZCL_EXAMPLE_CLASS             GET_DATA"},
 			},
 		)
 	})
@@ -270,7 +270,7 @@ func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T)
 	want := adt.TransportObject{
 		PgmID:    "LIMU",
 		Type:     "METH",
-		Name:     "ZCL_EDM_MIG_GINF              GET_GT_DATA",
+		Name:     "ZCL_EXAMPLE_CLASS             GET_DATA",
 		Position: "000002",
 	}
 	if objs[0] != want {
@@ -330,7 +330,7 @@ func TestGetTransportObjects_PresentInWorklist_NeverQueries(t *testing.T) {
 		return http.StatusInternalServerError, ""
 	})
 
-	objs, err := client.GetTransportObjects(context.Background(), "DEVK900178")
+	objs, err := client.GetTransportObjects(context.Background(), "AAAK900178")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,10 +347,10 @@ func TestGetTransportObjects_PresentInWorklist_NeverQueries(t *testing.T) {
 // validator, with nothing sent to the data preview endpoint.
 func TestGetTransportObjects_InvalidNumber_RejectedBeforeAnyQuery(t *testing.T) {
 	for _, number := range []string{
-		"DEVK9' OR '1'='1",
-		`DEVK900178"`,
-		"DEVK9 00178",
-		"DEVK901000000000000000000", // longer than E070-TRKORR (CHAR20)
+		"AAAK9' OR '1'='1",
+		`AAAK900178"`,
+		"AAAK9 00178",
+		"AAAK901000000000000000000", // longer than E070-TRKORR (CHAR20)
 	} {
 		t.Run(number, func(t *testing.T) {
 			client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
@@ -445,14 +445,14 @@ func TestGetTransportObjects_NoE070Entry_ReportsAbsentNotEmpty(t *testing.T) {
 		return http.StatusInternalServerError, ""
 	})
 
-	objs, err := client.GetTransportObjects(context.Background(), "DEVK999999")
+	objs, err := client.GetTransportObjects(context.Background(), "AAAK999999")
 	if err == nil {
 		t.Fatalf("expected an absent error, got a successful result: %+v", objs)
 	}
 	if objs != nil {
 		t.Errorf("expected no objects alongside the error, got %+v", objs)
 	}
-	if !strings.Contains(err.Error(), "DEVK999999") ||
+	if !strings.Contains(err.Error(), "AAAK999999") ||
 		!strings.Contains(err.Error(), "transport-organizer worklist") ||
 		!strings.Contains(err.Error(), "no E070 entry on this system either") {
 		t.Errorf("error should say the request is absent from both sources: %v", err)
@@ -479,14 +479,14 @@ func TestGetTransportObjects_NoE070EntryNoColumnMetadata_ReportsAbsentNotMalform
 		return http.StatusInternalServerError, ""
 	})
 
-	_, err := client.GetTransportObjects(context.Background(), "DEVK999999")
+	_, err := client.GetTransportObjects(context.Background(), "AAAK999999")
 	if err == nil {
 		t.Fatal("expected an absent error, got a successful result")
 	}
 	if strings.Contains(err.Error(), "no TRKORR column") {
 		t.Errorf("error should report absence, not missing column metadata: %v", err)
 	}
-	if !strings.Contains(err.Error(), "DEVK999999") ||
+	if !strings.Contains(err.Error(), "AAAK999999") ||
 		!strings.Contains(err.Error(), "no E070 entry on this system either") {
 		t.Errorf("error should say the request is absent from both sources: %v", err)
 	}

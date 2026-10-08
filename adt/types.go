@@ -287,7 +287,7 @@ func (e *ADTError) Error() string {
 	}
 }
 
-// ctsRequestRe matches a CTS transport request ID (e.g. "S4UK901974"):
+// ctsRequestRe matches a CTS transport request ID (e.g. "CCCK901974"):
 // a 3-character system ID, the request-category letter 'K', then six digits.
 // This is a language-independent format, so it survives message localisation —
 // SAP's "locked in request <TR>" text is translated but the ID is not.

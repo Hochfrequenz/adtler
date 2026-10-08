@@ -47,11 +47,11 @@ const euEnqueueLockBody = `<?xml version="1.0"?>
 <exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
   <namespace id="com.sap.adt"/>
   <type id="ExceptionResourceNoAccess"/>
-  <message lang="EN">User DACHNERM is currently editing Z_ADT_MCP_TEST_REPORT</message>
+  <message lang="EN">User USERB is currently editing Z_ADT_MCP_TEST_REPORT</message>
   <properties>
     <entry key="T100KEY-ID">EU</entry>
     <entry key="T100KEY-NO">510</entry>
-    <entry key="T100KEY-V1">DACHNERM</entry>
+    <entry key="T100KEY-V1">USERB</entry>
     <entry key="T100KEY-V2">Z_ADT_MCP_TEST_REPORT</entry>
   </properties>
 </exc:exception>`
@@ -65,7 +65,7 @@ func TestADTError_PropertiesParsed(t *testing.T) {
 	want := map[string]string{
 		"T100KEY-ID": "EU",
 		"T100KEY-NO": "510",
-		"T100KEY-V1": "DACHNERM",
+		"T100KEY-V1": "USERB",
 		"T100KEY-V2": "Z_ADT_MCP_TEST_REPORT",
 	}
 	if len(adtErr.Properties) != len(want) {
@@ -90,7 +90,7 @@ func TestADTError_T100KeyPromoted(t *testing.T) {
 	if adtErr.T100KeyNo != "510" {
 		t.Errorf("T100KeyNo: got %q, want %q", adtErr.T100KeyNo, "510")
 	}
-	wantVars := [4]string{"DACHNERM", "Z_ADT_MCP_TEST_REPORT", "", ""}
+	wantVars := [4]string{"USERB", "Z_ADT_MCP_TEST_REPORT", "", ""}
 	if adtErr.T100Vars != wantVars {
 		t.Errorf("T100Vars: got %v, want %v", adtErr.T100Vars, wantVars)
 	}
@@ -104,7 +104,7 @@ const eccCorrNrOnlyBody = `<?xml version="1.0"?>
   <type id="ExceptionResourceSaveFailure"/>
   <message lang="EN">Object locked</message>
   <properties>
-    <entry key="corrNr">S4UK902339</entry>
+    <entry key="corrNr">CCCK902339</entry>
   </properties>
 </exc:exception>`
 
@@ -114,8 +114,8 @@ func TestADTError_PropertiesParsed_SparseECCBody(t *testing.T) {
 
 	adtErr := setSourceErr(t, srv)
 
-	if got := adtErr.Properties["corrNr"]; got != "S4UK902339" {
-		t.Errorf("Properties[corrNr]: got %q, want %q", got, "S4UK902339")
+	if got := adtErr.Properties["corrNr"]; got != "CCCK902339" {
+		t.Errorf("Properties[corrNr]: got %q, want %q", got, "CCCK902339")
 	}
 	if adtErr.T100KeyID != "" || adtErr.T100KeyNo != "" {
 		t.Errorf("expected empty T100Key fields, got ID=%q NO=%q", adtErr.T100KeyID, adtErr.T100KeyNo)
@@ -149,8 +149,8 @@ func TestADTError_IsEnqueueLock_MatchesEU510(t *testing.T) {
 	if !ok {
 		t.Fatalf("IsEnqueueLock: got ok=false, want true (err: %v)", adtErr)
 	}
-	if user != "DACHNERM" {
-		t.Errorf("user: got %q, want %q", user, "DACHNERM")
+	if user != "USERB" {
+		t.Errorf("user: got %q, want %q", user, "USERB")
 	}
 	if object != "Z_ADT_MCP_TEST_REPORT" {
 		t.Errorf("object: got %q, want %q", object, "Z_ADT_MCP_TEST_REPORT")
@@ -174,13 +174,13 @@ const ctsTransportLockedBody = `<?xml version="1.0"?>
 <exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">
   <namespace id="com.sap.adt"/>
   <type id="ExceptionResourceSaveFailure"/>
-  <message lang="EN">Object R3TR PROG Z_ADT_MCP_TEST_REPORT is already locked in request S4UK902339 of user KLEINK</message>
+  <message lang="EN">Object R3TR PROG Z_ADT_MCP_TEST_REPORT is already locked in request CCCK902339 of user USERC</message>
   <properties>
-    <entry key="corrNr">S4UK902339</entry>
+    <entry key="corrNr">CCCK902339</entry>
     <entry key="T100KEY-ID">CTS_WBO_API</entry>
     <entry key="T100KEY-NO">020</entry>
-    <entry key="T100KEY-V3">S4UK902339</entry>
-    <entry key="T100KEY-V4">KLEINK</entry>
+    <entry key="T100KEY-V3">CCCK902339</entry>
+    <entry key="T100KEY-V4">USERC</entry>
   </properties>
 </exc:exception>`
 
@@ -194,11 +194,11 @@ func TestADTError_IsTransportLocked_MatchesCTSWBOAPI020(t *testing.T) {
 	if !ok {
 		t.Fatalf("IsTransportLocked: got ok=false, want true (err: %v)", adtErr)
 	}
-	if corrNr != "S4UK902339" {
-		t.Errorf("corrNr: got %q, want %q", corrNr, "S4UK902339")
+	if corrNr != "CCCK902339" {
+		t.Errorf("corrNr: got %q, want %q", corrNr, "CCCK902339")
 	}
-	if owner != "KLEINK" {
-		t.Errorf("owner: got %q, want %q", owner, "KLEINK")
+	if owner != "USERC" {
+		t.Errorf("owner: got %q, want %q", owner, "USERC")
 	}
 }
 

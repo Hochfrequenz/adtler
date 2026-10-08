@@ -22,7 +22,7 @@ const (
 // R3TR/DEVC/Z_TESTPKG in s4SingleRequestXML, s4ObjectAtBothLevelsXML, and
 // s4ObjectDivergentPositionAndTaskXML — referenced repeatedly across the
 // dedup/attribution tests below.
-const s4FirstTaskNumber = "S4DK904439"
+const s4FirstTaskNumber = "BBBK904439"
 
 // newFixtureClient returns a TestClient whose transportrequests/<transport>
 // endpoint always answers with body, regardless of which transport number is
@@ -56,20 +56,20 @@ func newFixtureClient(t *testing.T, body string) adt.TestClient {
 func TestGetTransportObjects_ECCWorklist_FiltersByNumber(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	objs178, err := client.GetTransportObjects(context.Background(), "DEVK900178")
+	objs178, err := client.GetTransportObjects(context.Background(), "AAAK900178")
 	if err != nil {
-		t.Fatalf("DEVK900178: unexpected error: %v", err)
+		t.Fatalf("AAAK900178: unexpected error: %v", err)
 	}
 	if len(objs178) != 1 || objs178[0].Name != eccOrderRequestObjName {
-		t.Fatalf("DEVK900178: got %+v, want single /ZTEST/ORDER_REQUEST object", objs178)
+		t.Fatalf("AAAK900178: got %+v, want single /ZTEST/ORDER_REQUEST object", objs178)
 	}
 
-	objs952, err := client.GetTransportObjects(context.Background(), "DEVK902952")
+	objs952, err := client.GetTransportObjects(context.Background(), "AAAK902952")
 	if err != nil {
-		t.Fatalf("DEVK902952: unexpected error: %v", err)
+		t.Fatalf("AAAK902952: unexpected error: %v", err)
 	}
 	if len(objs952) != 1 || objs952[0].Name != eccLockReproObjName {
-		t.Fatalf("DEVK902952: got %+v, want single ZCL_LOCKREPRO_2 object", objs952)
+		t.Fatalf("AAAK902952: got %+v, want single ZCL_LOCKREPRO_2 object", objs952)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestGetTransportObjects_ECCWorklist_FiltersByNumber(t *testing.T) {
 func TestGetTransportObjects_ECCWorklist_LowercaseNumberMatches(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "devk900178")
+	objs, err := client.GetTransportObjects(context.Background(), "aaaK900178")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,11 +93,11 @@ func TestGetTransportObjects_ECCWorklist_LowercaseNumberMatches(t *testing.T) {
 func TestGetTransportObjects_ECCWorklist_AbsentNumberErrors(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	_, err := client.GetTransportObjects(context.Background(), "DEVK999999")
+	_, err := client.GetTransportObjects(context.Background(), "AAAK999999")
 	if err == nil {
 		t.Fatal("expected error for a transport absent from the worklist body")
 	}
-	if !strings.Contains(err.Error(), "DEVK999999") ||
+	if !strings.Contains(err.Error(), "AAAK999999") ||
 		!strings.Contains(err.Error(), "transport-organizer worklist") ||
 		!strings.Contains(err.Error(), "released requests cannot be read this way") {
 		t.Errorf("error text missing expected content: %v", err)
@@ -113,25 +113,25 @@ func TestGetTransportObjects_ECCWorklistEmptyNumber_UnnumberedRequestNeverMatche
 
 	// The other, still-numbered request must be unaffected and must not pick
 	// up the blanked request's object.
-	objs178, err := client.GetTransportObjects(context.Background(), "DEVK900178")
+	objs178, err := client.GetTransportObjects(context.Background(), "AAAK900178")
 	if err != nil {
-		t.Fatalf("DEVK900178: unexpected error: %v", err)
+		t.Fatalf("AAAK900178: unexpected error: %v", err)
 	}
 	if len(objs178) != 1 || objs178[0].Name != eccOrderRequestObjName {
-		t.Fatalf("DEVK900178: got %+v, want only its own object", objs178)
+		t.Fatalf("AAAK900178: got %+v, want only its own object", objs178)
 	}
 	for _, o := range objs178 {
 		if o.Name == eccLockReproObjName {
-			t.Error("DEVK900178: must not contain the blanked request's object")
+			t.Error("AAAK900178: must not contain the blanked request's object")
 		}
 	}
 
 	// Asking for the now-blanked number itself must be treated as absent, not
 	// present-with-objects: the empty tm:number attribute must never satisfy
 	// a lookup, including a lookup for "" itself.
-	_, err = client.GetTransportObjects(context.Background(), "DEVK902952")
+	_, err = client.GetTransportObjects(context.Background(), "AAAK902952")
 	if err == nil {
-		t.Fatal("expected error: DEVK902952's number was blanked in this fixture")
+		t.Fatal("expected error: AAAK902952's number was blanked in this fixture")
 	}
 }
 
@@ -141,7 +141,7 @@ func TestGetTransportObjects_ECCWorklistEmptyNumber_UnnumberedRequestNeverMatche
 func TestGetTransportObjects_ECCCustomizing_ReturnsCustomizingGroupObjects(t *testing.T) {
 	client := newFixtureClient(t, eccCustomizingXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "DEVK902952")
+	objs, err := client.GetTransportObjects(context.Background(), "AAAK902952")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestGetTransportObjects_ECCCustomizing_ReturnsCustomizingGroupObjects(t *te
 func TestGetTransportObjects_S4SingleRequest_BindsAllObjectsWrapper(t *testing.T) {
 	client := newFixtureClient(t, s4SingleRequestXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "S4DK904438")
+	objs, err := client.GetTransportObjects(context.Background(), "BBBK904438")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,15 +175,15 @@ func TestGetTransportObjects_S4SingleRequest_BindsAllObjectsWrapper(t *testing.T
 func TestGetTransportObjects_S4SingleRequest_WrongNumberIsAbsent(t *testing.T) {
 	client := newFixtureClient(t, s4SingleRequestXML)
 
-	_, err := client.GetTransportObjects(context.Background(), "S4DK000000")
+	_, err := client.GetTransportObjects(context.Background(), "BBBK000000")
 	if err == nil {
-		t.Fatal("expected error: fixture body is for S4DK904438, not S4DK000000")
+		t.Fatal("expected error: fixture body is for BBBK904438, not BBBK000000")
 	}
 }
 
 // TestGetTransportObjects_S4RequestPresentButEmpty_ReturnsEmptySliceNilError
 // pins the present-but-empty case directly: s4RequestNoObjectsXML's request
-// (S4DK904476) IS the addressed request — it is present, per
+// (BBBK904476) IS the addressed request — it is present, per
 // absentTransportError's contract — it simply holds no abap_object anywhere.
 // That must come back as an empty slice and a nil error, never as
 // absentTransportError; absent and empty are deliberately different outcomes
@@ -194,7 +194,7 @@ func TestGetTransportObjects_S4SingleRequest_WrongNumberIsAbsent(t *testing.T) {
 func TestGetTransportObjects_S4RequestPresentButEmpty_ReturnsEmptySliceNilError(t *testing.T) {
 	client := newFixtureClient(t, s4RequestNoObjectsXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "S4DK904476")
+	objs, err := client.GetTransportObjects(context.Background(), "BBBK904476")
 	if err != nil {
 		t.Fatalf("unexpected error for a present-but-empty request: %v", err)
 	}
@@ -209,20 +209,20 @@ func TestGetTransportObjects_S4RequestPresentButEmpty_ReturnsEmptySliceNilError(
 func TestGetTransportTasks_ECCWorklist_FiltersByNumber(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	tasks178, err := client.GetTransportTasks(context.Background(), "DEVK900178")
+	tasks178, err := client.GetTransportTasks(context.Background(), "AAAK900178")
 	if err != nil {
-		t.Fatalf("DEVK900178: unexpected error: %v", err)
+		t.Fatalf("AAAK900178: unexpected error: %v", err)
 	}
-	if len(tasks178) != 1 || tasks178[0] != "DEVK900635" {
-		t.Fatalf("DEVK900178: got %v, want [DEVK900635]", tasks178)
+	if len(tasks178) != 1 || tasks178[0] != "AAAK900635" {
+		t.Fatalf("AAAK900178: got %v, want [AAAK900635]", tasks178)
 	}
 
-	tasks952, err := client.GetTransportTasks(context.Background(), "DEVK902952")
+	tasks952, err := client.GetTransportTasks(context.Background(), "AAAK902952")
 	if err != nil {
-		t.Fatalf("DEVK902952: unexpected error: %v", err)
+		t.Fatalf("AAAK902952: unexpected error: %v", err)
 	}
-	if len(tasks952) != 1 || tasks952[0] != "DEVK902953" {
-		t.Fatalf("DEVK902952: got %v, want [DEVK902953]", tasks952)
+	if len(tasks952) != 1 || tasks952[0] != "AAAK902953" {
+		t.Fatalf("AAAK902952: got %v, want [AAAK902953]", tasks952)
 	}
 }
 
@@ -232,7 +232,7 @@ func TestGetTransportTasks_ECCWorklist_FiltersByNumber(t *testing.T) {
 func TestGetTransportTasks_ECCWorklist_AbsentNumberErrors(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	_, err := client.GetTransportTasks(context.Background(), "DEVK999999")
+	_, err := client.GetTransportTasks(context.Background(), "AAAK999999")
 	if err == nil {
 		t.Fatal("expected error for a transport absent from the worklist body")
 	}
@@ -245,20 +245,20 @@ func TestGetTransportTasks_ECCWorklist_AbsentNumberErrors(t *testing.T) {
 func TestGetTransportObjects_ECCWorklist_AttributesTaskNumber(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	objs178, err := client.GetTransportObjects(context.Background(), "DEVK900178")
+	objs178, err := client.GetTransportObjects(context.Background(), "AAAK900178")
 	if err != nil {
-		t.Fatalf("DEVK900178: unexpected error: %v", err)
+		t.Fatalf("AAAK900178: unexpected error: %v", err)
 	}
-	if len(objs178) != 1 || objs178[0].Task != "DEVK900635" {
-		t.Fatalf("DEVK900178: got %+v, want single object with Task DEVK900635", objs178)
+	if len(objs178) != 1 || objs178[0].Task != "AAAK900635" {
+		t.Fatalf("AAAK900178: got %+v, want single object with Task AAAK900635", objs178)
 	}
 
-	objs952, err := client.GetTransportObjects(context.Background(), "DEVK902952")
+	objs952, err := client.GetTransportObjects(context.Background(), "AAAK902952")
 	if err != nil {
-		t.Fatalf("DEVK902952: unexpected error: %v", err)
+		t.Fatalf("AAAK902952: unexpected error: %v", err)
 	}
-	if len(objs952) != 1 || objs952[0].Task != "DEVK902953" {
-		t.Fatalf("DEVK902952: got %+v, want single object with Task DEVK902953", objs952)
+	if len(objs952) != 1 || objs952[0].Task != "AAAK902953" {
+		t.Fatalf("AAAK902952: got %+v, want single object with Task AAAK902953", objs952)
 	}
 }
 
@@ -270,7 +270,7 @@ func TestGetTransportObjects_ECCWorklist_AttributesTaskNumber(t *testing.T) {
 func TestGetTransportObjects_S4SingleRequest_DedupUpgradesTask(t *testing.T) {
 	client := newFixtureClient(t, s4SingleRequestXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "S4DK904438")
+	objs, err := client.GetTransportObjects(context.Background(), "BBBK904438")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestGetTransportObjects_S4SingleRequest_DedupUpgradesTask(t *testing.T) {
 func TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPosition(t *testing.T) {
 	client := newFixtureClient(t, s4ObjectAtBothLevelsXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "S4DK904438")
+	objs, err := client.GetTransportObjects(context.Background(), "BBBK904438")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestGetTransportObjects_S4ObjectAtBothLevels_DedupesToOneWithTaskAndFirstPo
 func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstSeenPosition(t *testing.T) {
 	client := newFixtureClient(t, s4ObjectDivergentPositionAndTaskXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "S4DK904438")
+	objs, err := client.GetTransportObjects(context.Background(), "BBBK904438")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -344,12 +344,12 @@ func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstSeenPosition(t *
 func TestGetTransportInfo_ECCWorklist_SelectsMatchingRequest(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	info, err := client.GetTransportInfo(context.Background(), "DEVK902952")
+	info, err := client.GetTransportInfo(context.Background(), "AAAK902952")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := &adt.TransportRequest{
-		Number:      "DEVK902952",
+		Number:      "AAAK902952",
 		Owner:       "TESTUSER1",
 		Description: "Lock reproducer probe (throwaway, delete after)",
 		Status:      adt.TransportStatusModifiable,
@@ -359,13 +359,13 @@ func TestGetTransportInfo_ECCWorklist_SelectsMatchingRequest(t *testing.T) {
 	}
 
 	// The other request in the same worklist body must resolve to its own
-	// data, not DEVK902952's.
-	info178, err := client.GetTransportInfo(context.Background(), "DEVK900178")
+	// data, not AAAK902952's.
+	info178, err := client.GetTransportInfo(context.Background(), "AAAK900178")
 	if err != nil {
-		t.Fatalf("DEVK900178: unexpected error: %v", err)
+		t.Fatalf("AAAK900178: unexpected error: %v", err)
 	}
-	if info178.Number != "DEVK900178" || info178.Owner != "TESTUSER2" {
-		t.Errorf("DEVK900178: got %+v, want Number=DEVK900178 Owner=TESTUSER2", info178)
+	if info178.Number != "AAAK900178" || info178.Owner != "TESTUSER2" {
+		t.Errorf("AAAK900178: got %+v, want Number=AAAK900178 Owner=TESTUSER2", info178)
 	}
 }
 
@@ -376,11 +376,11 @@ func TestGetTransportInfo_ECCWorklist_SelectsMatchingRequest(t *testing.T) {
 func TestGetTransportInfo_ECCWorklist_AbsentNumberErrors(t *testing.T) {
 	client := newFixtureClient(t, eccWorklistXML)
 
-	_, err := client.GetTransportInfo(context.Background(), "DEVK999999")
+	_, err := client.GetTransportInfo(context.Background(), "AAAK999999")
 	if err == nil {
 		t.Fatal("expected error for a transport absent from the worklist body")
 	}
-	if !strings.Contains(err.Error(), "DEVK999999") ||
+	if !strings.Contains(err.Error(), "AAAK999999") ||
 		!strings.Contains(err.Error(), "transport-organizer worklist") ||
 		!strings.Contains(err.Error(), "released requests cannot be read this way") {
 		t.Errorf("error text missing expected content: %v", err)
@@ -392,12 +392,12 @@ func TestGetTransportInfo_ECCWorklist_AbsentNumberErrors(t *testing.T) {
 func TestGetTransportInfo_S4SingleRequest_StillPasses(t *testing.T) {
 	client := newFixtureClient(t, s4SingleRequestXML)
 
-	info, err := client.GetTransportInfo(context.Background(), "S4DK904438")
+	info, err := client.GetTransportInfo(context.Background(), "BBBK904438")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.Number != "S4DK904438" || info.Owner != "TESTUSER3" || info.Status != adt.TransportStatusModifiable {
-		t.Errorf("got %+v, want Number=S4DK904438 Owner=TESTUSER3 Status=D", info)
+	if info.Number != "BBBK904438" || info.Owner != "TESTUSER3" || info.Status != adt.TransportStatusModifiable {
+		t.Errorf("got %+v, want Number=BBBK904438 Owner=TESTUSER3 Status=D", info)
 	}
 }
 
@@ -407,24 +407,24 @@ func TestGetTransportInfo_S4SingleRequest_StillPasses(t *testing.T) {
 func TestGetTransportInfo_S4SingleRequest_WrongNumberIsAbsent(t *testing.T) {
 	client := newFixtureClient(t, s4SingleRequestXML)
 
-	_, err := client.GetTransportInfo(context.Background(), "S4DK000000")
+	_, err := client.GetTransportInfo(context.Background(), "BBBK000000")
 	if err == nil {
-		t.Fatal("expected error: fixture body is for S4DK904438, not S4DK000000")
+		t.Fatal("expected error: fixture body is for BBBK904438, not BBBK000000")
 	}
 }
 
 // TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstAttributedTask
 // uses the same fixture to pin the other half of the upgrade rule: once an
-// entry has been attributed to a task (S4DK904439, the first task to record
+// entry has been attributed to a task (BBBK904439, the first task to record
 // the object), a second, different task recording the same object
-// (S4DK904440) must not overwrite that attribution. No other fixture in this
+// (BBBK904440) must not overwrite that attribution. No other fixture in this
 // package attributes one object to two different tasks, so nothing else
 // catches an unconditional "last task wins" simplification of the
 // Task=="" upgrade guard.
 func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstAttributedTask(t *testing.T) {
 	client := newFixtureClient(t, s4ObjectDivergentPositionAndTaskXML)
 
-	objs, err := client.GetTransportObjects(context.Background(), "S4DK904438")
+	objs, err := client.GetTransportObjects(context.Background(), "BBBK904438")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -432,6 +432,6 @@ func TestGetTransportObjects_DivergentPositionAndTask_KeepsFirstAttributedTask(t
 		t.Fatalf("got %d objects, want exactly 1 (deduped across all three occurrences): %+v", len(objs), objs)
 	}
 	if got := objs[0].Task; got != s4FirstTaskNumber {
-		t.Errorf("got Task %q, want the first task to record the object (%s), not the second (S4DK904440)", got, s4FirstTaskNumber)
+		t.Errorf("got Task %q, want the first task to record the object (%s), not the second (BBBK904440)", got, s4FirstTaskNumber)
 	}
 }

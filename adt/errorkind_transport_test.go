@@ -13,14 +13,14 @@ import (
 // runtime ENQUEUE. Both arrive as HTTP 409 / ExceptionResourceLockConflict and
 // name the blocking request; retargeting the write at that request succeeds.
 const (
-	lockedInTransportDDLS = "Object R3TR DDLS /HFQ/DD_ADRESSE is already locked in request S4UK901974 of user BECKT"
-	lockedInTransportCINC = "Object LIMU CINC /HFQ/BP_DD_ADRESSE============CCIMP is already locked in request S4UK901974 of user BECKT"
+	lockedInTransportDDLS = "Object R3TR DDLS /HFQ/DD_ADRESSE is already locked in request CCCK901974 of user USERA"
+	lockedInTransportCINC = "Object LIMU CINC /HFQ/BP_DD_ADRESSE============CCIMP is already locked in request CCCK901974 of user USERA"
 	// A German-locale rendering of the same message. The extractor keys on the
 	// request-ID format, not the surrounding words, so localisation must not
 	// break it.
-	lockedInTransportDE = "Objekt R3TR DDLS /HFQ/DD_ADRESSE ist bereits in Auftrag S4UK901974 von Benutzer BECKT gesperrt"
+	lockedInTransportDE = "Objekt R3TR DDLS /HFQ/DD_ADRESSE ist bereits in Auftrag CCCK901974 von Benutzer USERA gesperrt"
 	// trFixture is the request ID named in each captured message above.
-	trFixture = "S4UK901974"
+	trFixture = "CCCK901974"
 )
 
 func TestClassifyError_ObjectLockedInTransport(t *testing.T) {
@@ -103,11 +103,11 @@ func TestADTError_LockingTransport(t *testing.T) {
 		// Ordering hazard: the object name precedes the request in the message.
 		// If the name itself matches the <SID>K<6digit> shape, the FIRST match
 		// would be the name — the request ID is always LAST, so last-match wins.
-		{"object_name_matches_pattern", "Object R3TR PROG ABCK123456 is already locked in request S4UK901974 of user X", trFixture, true},
+		{"object_name_matches_pattern", "Object R3TR PROG ABCK123456 is already locked in request CCCK901974 of user X", trFixture, true},
 		// Task + request both present (both share the <SID>K###### format); the
 		// request is named last.
-		{"task_and_request", "locked in task S4UK901975 request S4UK901974 of user X", trFixture, true},
-		{"lowercase_not_matched", "already locked in request s4uk901974", "", false},
+		{"task_and_request", "locked in task CCCK901975 request CCCK901974 of user X", trFixture, true},
+		{"lowercase_not_matched", "already locked in request cccK901974", "", false},
 		{"non_K_category_not_matched", "already locked in request ABCT123456", "", false},
 	}
 	for _, tc := range cases {

@@ -56,8 +56,8 @@ func TestRemoveFromTransport_Gate_Integration(t *testing.T) {
 	// Synthetic coordinates — see the SAFETY note above. They only have to
 	// satisfy the library's own transport-number validation.
 	const (
-		taskNumber   = "DEVK900124"
-		parentNumber = "DEVK900123"
+		taskNumber   = "AAAK900124"
+		parentNumber = "AAAK900123"
 		pgmID        = "R3TR"
 		objectType   = "PROG"
 		objectName   = "Z_ADT_MCP_GATE_NOOP"

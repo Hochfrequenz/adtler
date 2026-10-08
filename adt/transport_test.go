@@ -19,7 +19,7 @@ const datapreviewXMLResponse = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<dataPreview:queryExecutionTime>12.5</dataPreview:queryExecutionTime>` +
 	`<dataPreview:columns>` +
 	`<dataPreview:metadata dataPreview:name="TRKORR" dataPreview:type="C" dataPreview:keyAttribute="true"/>` +
-	`<dataPreview:dataSet><dataPreview:data>S4UK901071</dataPreview:data><dataPreview:data>S4UK901072</dataPreview:data></dataPreview:dataSet>` +
+	`<dataPreview:dataSet><dataPreview:data>CCCK901071</dataPreview:data><dataPreview:data>CCCK901072</dataPreview:data></dataPreview:dataSet>` +
 	`</dataPreview:columns>` +
 	`<dataPreview:columns>` +
 	`<dataPreview:metadata dataPreview:name="AS4USER" dataPreview:type="C"/>` +
@@ -59,7 +59,7 @@ func TestCheckTransport(t *testing.T) {
       <REQUESTS>
         <CTS_REQUEST>
           <REQ_HEADER>
-            <TRKORR>DEVK900001</TRKORR>
+            <TRKORR>AAAK900001</TRKORR>
             <TRFUNCTION>K</TRFUNCTION>
             <TRSTATUS>D</TRSTATUS>
             <AS4TEXT>My transport</AS4TEXT>
@@ -91,7 +91,7 @@ func TestCheckTransport(t *testing.T) {
 	if len(result.Requests) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(result.Requests))
 	}
-	if result.Requests[0].Number != "DEVK900001" {
+	if result.Requests[0].Number != "AAAK900001" {
 		t.Errorf("transport number: got %q", result.Requests[0].Number)
 	}
 }
@@ -111,15 +111,15 @@ func TestGetTransportRequests(t *testing.T) {
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" xmlns:adtcore="http://www.sap.com/adt/core">
   <tm:workbench tm:category="Workbench">
     <tm:modifiable tm:status="Modifiable">
-      <tm:request tm:number="DEVK900123" tm:owner="DEVELOPER" tm:desc="Feature transport" tm:status="D"/>
+      <tm:request tm:number="AAAK900123" tm:owner="DEVELOPER" tm:desc="Feature transport" tm:status="D"/>
     </tm:modifiable>
     <tm:released tm:status="Released">
-      <tm:request tm:number="DEVK900124" tm:owner="DEVELOPER" tm:desc="Released transport" tm:status="L"/>
+      <tm:request tm:number="AAAK900124" tm:owner="DEVELOPER" tm:desc="Released transport" tm:status="L"/>
     </tm:released>
   </tm:workbench>
   <tm:customizing tm:category="Customizing">
     <tm:modifiable tm:status="Modifiable">
-      <tm:request tm:number="DEVK900125" tm:owner="DEVELOPER" tm:desc="Customizing transport" tm:status="D"/>
+      <tm:request tm:number="AAAK900125" tm:owner="DEVELOPER" tm:desc="Customizing transport" tm:status="D"/>
     </tm:modifiable>
   </tm:customizing>
 </tm:root>`))
@@ -136,13 +136,13 @@ func TestGetTransportRequests(t *testing.T) {
 	if len(transports) != 3 {
 		t.Fatalf("expected 3 transports (1 modifiable wb + 1 released wb + 1 customizing), got %d", len(transports))
 	}
-	if transports[0].Number != "DEVK900123" {
+	if transports[0].Number != "AAAK900123" {
 		t.Errorf("workbench modifiable: got %q", transports[0].Number)
 	}
-	if transports[1].Number != "DEVK900124" {
+	if transports[1].Number != "AAAK900124" {
 		t.Errorf("workbench released: got %q", transports[1].Number)
 	}
-	if transports[2].Number != "DEVK900125" {
+	if transports[2].Number != "AAAK900125" {
 		t.Errorf("customizing: got %q", transports[2].Number)
 	}
 }
@@ -163,11 +163,11 @@ func TestAddToTransport(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.AddToTransport(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", "DEVK900123")
+	err := client.AddToTransport(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", "AAAK900123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expected := "/sap/bc/adt/cts/transportrequests/DEVK900123/abaptransportcomponents"
+	expected := "/sap/bc/adt/cts/transportrequests/AAAK900123/abaptransportcomponents"
 	if gotPath != expected {
 		t.Errorf("path: got %q, want %q", gotPath, expected)
 	}
@@ -191,7 +191,7 @@ func TestRemoveFromTransport(t *testing.T) {
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
 			return
-		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/DEVK900123":
+		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/AAAK900123":
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(s4SingleRequestXML))
@@ -210,11 +210,11 @@ func TestRemoveFromTransport(t *testing.T) {
 	client := adt.NewClient(cfg)
 
 	err := client.RemoveFromTransport(context.Background(),
-		"DEVK900124", "DEVK900123", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
+		"AAAK900124", "AAAK900123", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotPath != "/sap/bc/adt/cts/transportrequests/DEVK900124" {
+	if gotPath != "/sap/bc/adt/cts/transportrequests/AAAK900124" {
 		t.Errorf("path: got %q, want task number in path", gotPath)
 	}
 	if gotMethod != http.MethodPut {
@@ -225,8 +225,8 @@ func TestRemoveFromTransport(t *testing.T) {
 	}
 	for _, want := range []string{
 		`tm:useraction="removeobject"`,
-		`tm:number="DEVK900124"`,
-		`tm:number="DEVK900123"`,
+		`tm:number="AAAK900124"`,
+		`tm:number="AAAK900123"`,
 		`tm:name="ZTEST"`,
 		`tm:wbtype="PROG/P"`,
 		`tm:position="000001"`,
@@ -258,7 +258,7 @@ func TestCreateTransport(t *testing.T) {
 <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
   <asx:values>
     <DATA>
-      <TRKORR>DEVK900999</TRKORR>
+      <TRKORR>AAAK900999</TRKORR>
     </DATA>
   </asx:values>
 </asx:abap>`))
@@ -272,8 +272,8 @@ func TestCreateTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if nr != "DEVK900999" {
-		t.Errorf("transport number: got %q, want %q", nr, "DEVK900999")
+	if nr != "AAAK900999" {
+		t.Errorf("transport number: got %q, want %q", nr, "AAAK900999")
 	}
 	// REQUEST_TEXT sets AS4TEXT (short text) on both ECC and S4 (see #226).
 	// DESCRIPTION sets the documentation tab (required for release on some systems).
@@ -304,7 +304,7 @@ func TestCreateTransportWithoutPackage(t *testing.T) {
 <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
   <asx:values>
     <DATA>
-      <TRKORR>DEVK900888</TRKORR>
+      <TRKORR>AAAK900888</TRKORR>
     </DATA>
   </asx:values>
 </asx:abap>`))
@@ -318,7 +318,7 @@ func TestCreateTransportWithoutPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if nr != "DEVK900888" {
+	if nr != "AAAK900888" {
 		t.Errorf("transport number: got %q", nr)
 	}
 	if strings.Contains(gotBody, "<DEVCLASS>") {
@@ -418,7 +418,7 @@ func TestReleaseTransportAsync(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClientWithPollInterval(cfg, 10*time.Millisecond)
 
-	_, err := client.ReleaseTransport(context.Background(), "DEVK900123")
+	_, err := client.ReleaseTransport(context.Background(), "AAAK900123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestCreateTransportTask(t *testing.T) {
 		w.Header().Set("Content-Type", "application/vnd.sap.as+xml")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
-<tm:root tm:number="S4UK902500" xmlns:tm="http://www.sap.com/cts/adt/tm">
+<tm:root tm:number="CCCK902500" xmlns:tm="http://www.sap.com/cts/adt/tm">
   <tm:task tm:owner="U" tm:desc="My task"/>
 </tm:root>`))
 	}))
@@ -449,19 +449,19 @@ func TestCreateTransportTask(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	taskNumber, err := client.CreateTransportTask(context.Background(), "S4UK902339", "", "My task")
+	taskNumber, err := client.CreateTransportTask(context.Background(), "CCCK902339", "", "My task")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotMethod != http.MethodPost {
 		t.Errorf("method: got %q, want POST", gotMethod)
 	}
-	expected := "/sap/bc/adt/cts/transportrequests/S4UK902339/tasks"
+	expected := "/sap/bc/adt/cts/transportrequests/CCCK902339/tasks"
 	if gotPath != expected {
 		t.Errorf("path: got %q, want %q", gotPath, expected)
 	}
-	if taskNumber != "S4UK902500" {
-		t.Errorf("task number: got %q, want S4UK902500", taskNumber)
+	if taskNumber != "CCCK902500" {
+		t.Errorf("task number: got %q, want CCCK902500", taskNumber)
 	}
 }
 
@@ -474,18 +474,18 @@ func TestDeleteAndReleaseTransport(t *testing.T) {
 	}{
 		{
 			name:       "delete",
-			call:       func(c adt.Client) error { return c.DeleteTransport(context.Background(), "DEVK900123") },
+			call:       func(c adt.Client) error { return c.DeleteTransport(context.Background(), "AAAK900123") },
 			wantMethod: http.MethodDelete,
-			wantPath:   "/sap/bc/adt/cts/transportrequests/DEVK900123",
+			wantPath:   "/sap/bc/adt/cts/transportrequests/AAAK900123",
 		},
 		{
 			name: "release",
 			call: func(c adt.Client) error {
-				_, err := c.ReleaseTransport(context.Background(), "DEVK900123")
+				_, err := c.ReleaseTransport(context.Background(), "AAAK900123")
 				return err
 			},
 			wantMethod: http.MethodPost,
-			wantPath:   "/sap/bc/adt/cts/transportrequests/DEVK900123/newreleasejobs",
+			wantPath:   "/sap/bc/adt/cts/transportrequests/AAAK900123/newreleasejobs",
 		},
 	}
 
@@ -566,8 +566,8 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if len(transports) != 2 {
 		t.Fatalf("expected 2 transports from E070 fallback, got %d", len(transports))
 	}
-	if transports[0].Number != "S4UK901071" {
-		t.Errorf("transport[0].Number: got %q, want S4UK901071", transports[0].Number)
+	if transports[0].Number != "CCCK901071" {
+		t.Errorf("transport[0].Number: got %q, want CCCK901071", transports[0].Number)
 	}
 	if transports[0].Owner != "METZEJ" {
 		t.Errorf("transport[0].Owner: got %q, want METZEJ", transports[0].Owner)
@@ -627,7 +627,7 @@ func TestGetTransportRequests_SkipsFallbackWhenADTReturnsResults(t *testing.T) {
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
   <tm:workbench><tm:modifiable>
-    <tm:request tm:number="DEVK900001" tm:owner="DEV" tm:desc="normal transport" tm:status="D"/>
+    <tm:request tm:number="AAAK900001" tm:owner="DEV" tm:desc="normal transport" tm:status="D"/>
   </tm:modifiable></tm:workbench>
 </tm:root>`))
 		case strings.Contains(r.URL.Path, "datapreview"):

@@ -182,7 +182,7 @@ func TestSecureCookieOnHTTPDetected(t *testing.T) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
 			// Simulate S4 behavior: set cookie with Secure flag over HTTP
-			w.Header().Add("Set-Cookie", "sap-XSRF_S4U_100=abc123; path=/; secure; HttpOnly")
+			w.Header().Add("Set-Cookie", "sap-XSRF_AAA_100=abc123; path=/; secure; HttpOnly")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
