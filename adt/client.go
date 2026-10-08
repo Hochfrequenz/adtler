@@ -17,6 +17,11 @@ import (
 )
 
 // SourceClient reads and writes ABAP source code.
+//
+// Methods taking an objectURI accept either the bare object URI
+// ("/sap/bc/adt/programs/programs/ztest") or its main-source URI as ADT hands
+// it out (".../source/main", optionally with a "#start=L,C" fragment); both
+// address the same object. A query string on objectURI is ignored.
 type SourceClient interface {
 	GetSource(ctx context.Context, objectURI string) (*SourceResult, error)
 	GetClassDefinition(ctx context.Context, objectURI string) (*SourceResult, error)
@@ -114,6 +119,11 @@ type QualityClient interface {
 }
 
 // VersionClient provides version history and comparison.
+//
+// GetVersionHistory and DiffActiveInactive accept either the bare object URI
+// or its ".../source/main" URI, like the SourceClient methods.
+// GetVersionSource is different: it takes a version content URI from
+// VersionInfo and uses it as given.
 type VersionClient interface {
 	GetVersionHistory(ctx context.Context, objectURI string) ([]VersionInfo, error)
 	GetVersionSource(ctx context.Context, contentURI string) (string, error)
