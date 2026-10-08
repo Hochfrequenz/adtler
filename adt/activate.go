@@ -21,14 +21,14 @@ import (
 // message — if a requested object is still listed there.
 //
 // Activating any one URI of a class pool — the class, its /source/main, or
-// one of its /includes/* — activates every inactive part of that class pool
-// with it: the class, its includes, and its method and source-unit entries.
-// Measured on SAP ERP 6.0 EHP8 (SAP_BASIS 750) and SAP S/4HANA 2025
-// (SAP_BASIS 816); TestActivateObjects_ClassPoolSubIncludes_Integration
-// guards it. Callers therefore need not collect a class's sub-includes
-// themselves. A requested URI that stays inactive despite a successful POST
-// — or a part nested under it, or one it is nested under — is the silent
-// no-op above and comes back as Success: false (#70).
+// its /includes/testclasses — activates every inactive part of that class
+// pool with it: the class, its includes, and its method and source-unit
+// entries. Measured on local ($TMP) classes on SAP ERP 6.0 EHP8
+// (SAP_BASIS 750) and SAP S/4HANA 2025 (SAP_BASIS 816);
+// TestActivateObjects_ClassPoolSubIncludes_Integration guards it. A
+// requested URI that stays inactive despite a successful POST — or a part
+// nested under it, or one it is nested under — is the silent no-op above
+// and comes back as Success: false (#70).
 //
 // This mirrors ReleaseTransport (adt/transport.go): if the
 // activation body already carries an explicit error, verification is
