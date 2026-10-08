@@ -470,7 +470,7 @@ func sqlWords(line string) []string {
 	for i := 0; i < len(rs); i++ {
 		r := rs[i]
 		switch {
-		case quote == '|' && r == '\' && i+1 < len(rs):
+		case quote == '|' && r == '\\' && i+1 < len(rs):
 			cur.WriteRune(r)
 			cur.WriteRune(rs[i+1])
 			i++
