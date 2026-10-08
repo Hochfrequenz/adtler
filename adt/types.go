@@ -57,12 +57,45 @@ type TestCase struct {
 	Messages      []string
 }
 
+// TestAlert is an ABAP Unit alert that SAP attached outside a test method:
+// to the run itself, to a tested program, or to a test class.
+type TestAlert struct {
+	// Kind is SAP's language-independent alert kind, e.g. "noTestClasses".
+	Kind string
+	// Severity is SAP's severity, e.g. "tolerable" or "critical".
+	Severity string
+	// Title is the alert text in the logon language.
+	Title string
+}
+
 // TestResult is returned by RunUnitTests.
 type TestResult struct {
 	Passed    int
 	Failed    int
 	Errors    int
 	TestCases []TestCase
+	// Alerts holds the alerts SAP attached outside a test method, in document
+	// order: run level, then per program, then per test class. For a run that
+	// executed no test method they are often the only explanation. Measured on
+	// SAP_BASIS 750 and 816: a test class skipped because its risk level is
+	// not permitted carries a test-class alert of kind "warning" on both; an
+	// uncatchable runtime error carries a test-class alert of kind
+	// "runtimeAbortion" on 750, while 816 reports it on the test method and
+	// adds test-class alerts of kind "abortion"; an object without active test
+	// classes carries a run-level alert of kind "noTestClasses" on 750 only.
+	Alerts []TestAlert
+	// InactiveURIs is filled only when the run executed no test method. It
+	// lists, as SAP spells them, the GetInactiveObjects entries related to the
+	// requested object URI: the object itself, a part nested under it, or an
+	// object it is nested under — for example an inactive test-classes
+	// include, whose tests a run cannot execute because ABAP Unit runs the
+	// active version. The relation is by URI nesting, which holds for a
+	// class and its includes (measured); a program's test classes live in a
+	// separate include object and a package contains its objects without
+	// nesting their URIs, so neither is covered. Nil means no related entry
+	// was found or the inactive-objects read failed; it does not prove that
+	// the object has no tests.
+	InactiveURIs []string
 }
 
 // TransportRequest describes a CTS transport request.

@@ -80,12 +80,16 @@ type ObjectRef struct {
 
 // RunResult is the XML response from a unit test run.
 type RunResult struct {
-	XMLName  xml.Name  `xml:"runResult"`
+	XMLName xml.Name `xml:"runResult"`
+	// Alerts are attached to the run itself, outside any program. SAP_BASIS
+	// 750 reports "no test classes" here; SAP_BASIS 816 omits it.
+	Alerts   []Alert   `xml:"alerts>alert"`
 	Programs []Program `xml:"program"`
 }
 
 // Program is a single program in a unit test result.
 type Program struct {
+	Alerts  []Alert     `xml:"alerts>alert"`
 	Classes []TestClass `xml:"testClasses>testClass"`
 }
 
@@ -94,6 +98,7 @@ type TestClass struct {
 	Name         string       `xml:"name,attr"`
 	FailureCount int          `xml:"failureCount,attr"`
 	ErrorCount   int          `xml:"errorCount,attr"`
+	Alerts       []Alert      `xml:"alerts>alert"`
 	Methods      []TestMethod `xml:"testMethods>testMethod"`
 }
 

@@ -113,6 +113,45 @@ func TestActivateObjects_WithErrors_Integration(t *testing.T) {
 	}
 }
 
+// newActiveClassPool70 creates a $TMP class named prefix plus a timestamp,
+// registers its deletion as cleanup, and gives it an active baseline source
+// without a test-classes include. It returns the class name and its
+// lower-case object URI.
+func newActiveClassPool70(t *testing.T, c adt.Client, prefix string) (name, uri string) {
+	t.Helper()
+	ctx := context.Background()
+	name = fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano()%10000000000)
+	uri = "/sap/bc/adt/oo/classes/" + strings.ToLower(name)
+
+	if err := c.CreateObject(ctx, "CLAS", name, "$TMP", "adtler class-pool fixture", ""); err != nil {
+		t.Fatalf("CreateObject %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if err := c.DeleteObject(context.Background(), uri, "", ""); err != nil {
+			t.Logf("cleanup delete %s failed: %v", name, err)
+		}
+	})
+	// S/4 leaves a session-bound ESRDIRE enqueue after CreateObject.
+	_ = c.Logout(ctx)
+
+	lock, err := c.LockObject(ctx, uri)
+	if err != nil {
+		t.Fatalf("LockObject: %v", err)
+	}
+	src, err := c.GetSource(ctx, uri)
+	if err == nil {
+		_, err = c.SetSource(ctx, uri, classPool70Source(name, "baseline"), lock, "", src.ETag)
+	}
+	_ = c.UnlockObject(ctx, uri, lock)
+	if err != nil {
+		t.Fatalf("baseline source: %v", err)
+	}
+	if res, err := c.ActivateObjects(ctx, []string{uri}); err != nil || !res.Success {
+		t.Fatalf("baseline activation: result=%+v err=%v", res, err)
+	}
+	return name, uri
+}
+
 // TestActivateObjects_ClassPoolSubIncludes_Integration is the regression guard
 // for #70: activating a class pool after writing its test-classes include and
 // its main source must leave no part of the class inactive, so that the unit
@@ -130,36 +169,7 @@ func TestActivateObjects_ClassPoolSubIncludes_Integration(t *testing.T) {
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
 			c := sys.Client
-			name := fmt.Sprintf("ZCL_ADT70_%d", time.Now().UnixNano()%10000000000)
-			uri := "/sap/bc/adt/oo/classes/" + strings.ToLower(name)
-
-			if err := c.CreateObject(ctx, "CLAS", name, "$TMP", "issue70 class-pool activation", ""); err != nil {
-				t.Fatalf("CreateObject %s: %v", name, err)
-			}
-			t.Cleanup(func() {
-				if err := c.DeleteObject(context.Background(), uri, "", ""); err != nil {
-					t.Logf("cleanup delete %s failed: %v", name, err)
-				}
-			})
-			// S/4 leaves a session-bound ESRDIRE enqueue after CreateObject.
-			_ = c.Logout(ctx)
-
-			// Baseline: an active class with no test-classes include yet.
-			lock, err := c.LockObject(ctx, uri)
-			if err != nil {
-				t.Fatalf("LockObject: %v", err)
-			}
-			src, err := c.GetSource(ctx, uri)
-			if err == nil {
-				_, err = c.SetSource(ctx, uri, classPool70Source(name, "baseline"), lock, "", src.ETag)
-			}
-			_ = c.UnlockObject(ctx, uri, lock)
-			if err != nil {
-				t.Fatalf("baseline source: %v", err)
-			}
-			if res, err := c.ActivateObjects(ctx, []string{uri}); err != nil || !res.Success {
-				t.Fatalf("baseline activation: result=%+v err=%v", res, err)
-			}
+			name, uri := newActiveClassPool70(t, c, "ZCL_ADT70")
 
 			rounds := []struct {
 				label         string

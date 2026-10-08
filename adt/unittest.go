@@ -21,6 +21,22 @@ import (
 // test class, or a test method suspended at an external breakpoint while a
 // debugger is attached — and http.Client.Timeout would otherwise cut it off
 // regardless of timeoutSeconds.
+//
+// SAP answers a run that executes no test method with HTTP 200 on both
+// SAP_BASIS 750 and 816, and the reason is only partly visible in the
+// response. A test class skipped for its risk level carries a test-class
+// alert of kind "warning" on both releases, and on 750 a test class aborted
+// by a runtime error carries one of kind "runtimeAbortion"; both reach
+// TestResult.Alerts. An object without active test classes gets a run-level
+// alert of kind "noTestClasses" on 750 and no alert on 816, and "without
+// active test classes" includes an object whose test-classes include is
+// still inactive, because the run uses the active version. For any run
+// without an executed test method, TestResult.InactiveURIs therefore lists
+// the inactive entries related to objectURI by URI nesting, which tells the
+// inactive-include case apart for classes; see InactiveURIs for its limits.
+// A URI naming no existing object yields neither an alert nor an error and
+// is not detected. A response body that is not an ABAP Unit run result,
+// including an empty one, is returned as an error.
 func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds+5)*time.Second)
 	defer cancel()
@@ -68,13 +84,23 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 		return nil, err
 	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("RunUnitTests reading body: %w", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return nil, fmt.Errorf("RunUnitTests: empty response body")
+	}
 	var runResult adtxml.RunResult
-	xml.Unmarshal(data, &runResult) //nolint:errcheck
+	if err := xml.Unmarshal(data, &runResult); err != nil {
+		return nil, fmt.Errorf("RunUnitTests parsing: %w", err)
+	}
 
-	result := &TestResult{}
+	result := &TestResult{Alerts: toTestAlerts(runResult.Alerts)}
 	for _, prog := range runResult.Programs {
+		result.Alerts = append(result.Alerts, toTestAlerts(prog.Alerts)...)
 		for _, class := range prog.Classes {
+			result.Alerts = append(result.Alerts, toTestAlerts(class.Alerts)...)
 			for _, method := range class.Methods {
 				tc := TestCase{
 					Name:          method.Name,
@@ -94,5 +120,42 @@ func (c *httpClient) RunUnitTests(ctx context.Context, objectURI string, timeout
 			result.Errors += class.ErrorCount
 		}
 	}
+	if len(result.TestCases) == 0 {
+		// reqCtx, not ctx: the lookup stays within the documented
+		// timeoutSeconds + 5 s budget. If that budget is spent, the lookup
+		// fails and InactiveURIs stays empty; the run result is kept.
+		result.InactiveURIs = c.relatedInactiveURIs(reqCtx, objectURI)
+	}
 	return result, nil
+}
+
+// toTestAlerts converts parsed ABAP Unit alerts, returning nil for none.
+func toTestAlerts(alerts []adtxml.Alert) []TestAlert {
+	var out []TestAlert
+	for _, a := range alerts {
+		out = append(out, TestAlert{Kind: a.Kind, Severity: a.Severity, Title: a.Title})
+	}
+	return out
+}
+
+// relatedInactiveURIs returns the GetInactiveObjects entries that objectURI
+// relates to per objectURIMatches: the object itself, a part nested under it,
+// or an object it is nested under. A failed read returns nil, because the
+// check only annotates a test result and must not turn it into an error.
+func (c *httpClient) relatedInactiveURIs(ctx context.Context, objectURI string) []string {
+	// An empty URI would match every inactive object (objectURIMatches treats "" as a prefix of everything).
+	if normalizeObjectURI(objectURI) == "" {
+		return nil
+	}
+	inactive, err := c.GetInactiveObjects(ctx)
+	if err != nil {
+		return nil
+	}
+	var uris []string
+	for _, obj := range inactive {
+		if objectURIMatches(objectURI, obj.URI) {
+			uris = append(uris, obj.URI)
+		}
+	}
+	return uris
 }
