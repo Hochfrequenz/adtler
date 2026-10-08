@@ -294,7 +294,7 @@ func TestRemoveObjectSupport_CachedByGetTransportObjects_RemoveFromTransportIssu
 	}
 
 	err := client.RemoveFromTransport(context.Background(),
-		"AAAK900635", "AAAK900178", "R3TR", "PROG", "/ZTEST/ORDER_REQUEST", "PROG/P", "000001")
+		"AAAK900635", "AAAK900178", "R3TR", "PROG", "/XYZ/ORDER_REQUEST", "PROG/P", "000001")
 	if err == nil {
 		t.Fatal("RemoveFromTransport: expected ErrorNotSupported, got nil (cached state is Unsupported)")
 	}

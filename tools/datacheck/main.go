@@ -19,7 +19,11 @@ import (
 )
 
 var (
-	transportRe = regexp.MustCompile(`\b([A-Z][A-Z0-9]{2})K[0-9]{6}\b`)
+	// transportRe matches the number itself; transportNumbers applies the
+	// boundary rules. \b is not usable here: it does not fire between two
+	// word characters, so a number after "%2f" or after a client prefix in a
+	// lock argument would slip through.
+	transportRe = regexp.MustCompile(`([A-Z][A-Z0-9]{2})K[0-9]{6}`)
 	namespaceRe = regexp.MustCompile(`/([A-Z][A-Z0-9]{1,9})/[A-Z0-9_]`)
 	encodedRe   = regexp.MustCompile(`(?i)%2f([a-z][a-z0-9]{1,9})%2f`)
 )
@@ -38,10 +42,7 @@ var allowedPrefixes = map[string]bool{
 	"ABC": true, // placeholder namespace
 	"XYZ": true, // placeholder namespace
 
-	// Generic Z-prefixed demo and test namespaces used in fixtures and docs.
-	"ZDEMO": true, // adt/transport.go, adt/transport_e071_fallback_test.go
-	"ZTEST": true, // adt/transport_ecc_test.go, adt/transport_ecc_parsing_test.go
-	"NS":    true, // generic namespace placeholder (adt/dependencies_test.go)
+	"NS": true, // generic namespace placeholder (adt/dependencies_test.go)
 
 	// Upper-case path and type segments that only look like a namespace.
 	"SOURCE": true, // ADT path segment "/SOURCE/MAIN" (adt/source_uri_*_test.go)
@@ -58,11 +59,29 @@ type finding struct {
 	kind string
 }
 
+// transportNumbers returns the system ID of every transport or task number in
+// line. A number counts unless a letter directly precedes it (then it is the
+// tail of a longer word) or a digit directly follows it (a longer number).
+// A digit, "%2f" or any other character in front does count.
+func transportNumbers(line string) []string {
+	var sids []string
+	for _, m := range transportRe.FindAllStringSubmatchIndex(line, -1) {
+		if m[0] > 0 && line[m[0]-1] >= 'A' && line[m[0]-1] <= 'Z' {
+			continue
+		}
+		if m[1] < len(line) && line[m[1]] >= '0' && line[m[1]] <= '9' {
+			continue
+		}
+		sids = append(sids, line[m[2]:m[3]])
+	}
+	return sids
+}
+
 func scan(content []byte) []finding {
 	var out []finding
 	for i, line := range strings.Split(string(content), "\n") {
-		for _, m := range transportRe.FindAllStringSubmatch(line, -1) {
-			if !placeholderSIDs[m[1]] {
+		for _, sid := range transportNumbers(line) {
+			if !placeholderSIDs[sid] {
 				out = append(out, finding{i + 1, "transport or task number on a non-placeholder system ID"})
 			}
 		}

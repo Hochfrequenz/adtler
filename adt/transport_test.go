@@ -23,7 +23,7 @@ const datapreviewXMLResponse = `<?xml version="1.0" encoding="utf-8"?>` +
 	`</dataPreview:columns>` +
 	`<dataPreview:columns>` +
 	`<dataPreview:metadata dataPreview:name="AS4USER" dataPreview:type="C"/>` +
-	`<dataPreview:dataSet><dataPreview:data>METZEJ</dataPreview:data><dataPreview:data>METZEJ</dataPreview:data></dataPreview:dataSet>` +
+	`<dataPreview:dataSet><dataPreview:data>USERE</dataPreview:data><dataPreview:data>USERE</dataPreview:data></dataPreview:dataSet>` +
 	`</dataPreview:columns>` +
 	`<dataPreview:columns>` +
 	`<dataPreview:metadata dataPreview:name="TRSTATUS" dataPreview:type="C"/>` +
@@ -559,7 +559,7 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	transports, err := client.GetTransportRequests(context.Background(), "METZEJ", "D")
+	transports, err := client.GetTransportRequests(context.Background(), "USERE", "D")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -569,8 +569,8 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if transports[0].Number != "CCCK901071" {
 		t.Errorf("transport[0].Number: got %q, want CCCK901071", transports[0].Number)
 	}
-	if transports[0].Owner != "METZEJ" {
-		t.Errorf("transport[0].Owner: got %q, want METZEJ", transports[0].Owner)
+	if transports[0].Owner != "USERE" {
+		t.Errorf("transport[0].Owner: got %q, want USERE", transports[0].Owner)
 	}
 	if transports[0].Status != "D" {
 		t.Errorf("transport[0].Status: got %q, want D", transports[0].Status)
@@ -580,7 +580,7 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if transports[0].Description != "" {
 		t.Errorf("transport[0].Description: fallback path must return empty description, got %q", transports[0].Description)
 	}
-	if !strings.Contains(gotDatapreviewSQL, "AS4USER = 'METZEJ'") {
+	if !strings.Contains(gotDatapreviewSQL, "AS4USER = 'USERE'") {
 		t.Errorf("fallback SQL must filter by user, got: %s", gotDatapreviewSQL)
 	}
 	if !strings.Contains(gotDatapreviewSQL, "TRSTATUS = 'D'") {
@@ -607,7 +607,7 @@ func TestGetTransportRequests_RejectsInvalidUserInFallback(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	_, err := client.GetTransportRequests(context.Background(), "ME'TZEJ", "D")
+	_, err := client.GetTransportRequests(context.Background(), "US'ERE", "D")
 	if err == nil {
 		t.Fatal("expected error for user containing single quote, got nil")
 	}

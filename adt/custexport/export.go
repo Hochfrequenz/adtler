@@ -46,6 +46,9 @@ type ExportSummary struct {
 type TableError struct {
 	Table string `json:"table"`
 	Error string `json:"error"`
+	// Err is the original error, kept so callers can classify it with
+	// errors.As. It is not part of the JSON summary.
+	Err error `json:"-"`
 }
 
 const (
@@ -58,13 +61,8 @@ const (
 	//   30 workers: 4.3 tables/sec → no improvement, SAP saturated
 	//   40 workers: 4.3 tables/sec → no improvement
 	// Each worker does 2 sequential HTTP requests per table (DD03L keys + data).
-	defaultWorkers = 20
-	maxWorkers     = 40
-	// The data preview cuts each SQL line after 255 characters. RunQuery
-	// re-wraps longer lines since #183 (adt/query_wrap.go), so the export
-	// imposes no length limit on its pagination SQL and always paginates on
-	// the full key. Shortening the key would skip rows that share a key prefix
-	// across a page boundary (#93, #94 introduced the limit).
+	defaultWorkers   = 20
+	maxWorkers       = 40
 	perQueryTimeout  = 120 * time.Second
 	progressInterval = 100
 )
@@ -186,8 +184,12 @@ func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]str
 func exportTable(ctx context.Context, client adt.Client, table string, keys []string, keyTypes map[string]string, pageSize int) (*TableExportResult, error) {
 	nonMandtKeys := adt.FilterNonMandtKeys(keys)
 
-	// Paginate on all non-MANDT keys. The OR-chain WHERE clause grows with
-	// the number of keys, but RunQuery wraps long lines (#183).
+	// Paginate on all non-MANDT keys. The data preview cuts each SQL line after
+	// 255 characters, but RunQuery re-wraps longer lines since #183
+	// (adt/query_wrap.go), so the OR-chain WHERE clause has no length limit and
+	// the export always paginates on the full key. Shortening the key would skip
+	// rows that share a key prefix across a page boundary (#93, #94 introduced
+	// the limit).
 	paginateKeys := nonMandtKeys
 
 	var allRows [][]string
@@ -368,6 +370,7 @@ func RunExport(ctx context.Context, client adt.Client, cfg ExportConfig) (*Expor
 			tableErrors = append(tableErrors, TableError{
 				Table: result.TableName,
 				Error: result.Error.Error(),
+				Err:   result.Error,
 			})
 		} else if writerErr != nil {
 			// Writer already failed — skip writes, just drain results.

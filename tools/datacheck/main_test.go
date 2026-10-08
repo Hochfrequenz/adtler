@@ -22,6 +22,12 @@ func TestScan(t *testing.T) {
 		{"placeholder encoded", "/sap/bc/adt/oo/classes/%2fabc%2fcl_example", 0},
 		{"foreign encoded", "/sap/bc/adt/oo/classes/" + foreignEncoded, 1},
 		{"lower-case path", "/sap/bc/adt/oo/classes/zcl_test", 0},
+		{"number glued after encoded slash", "obj%2f" + foreignNumber, 1},
+		{"number glued after a digit", "100" + foreignNumber, 1},
+		{"number glued after a lower-case letter", "x" + foreignNumber, 1},
+		{"two numbers one space apart", foreignNumber + " " + "QQR" + "K900002", 2},
+		{"number tail of a longer word", "XQQQK" + "900001", 0},
+		{"number followed by a digit", foreignNumber + "7", 0},
 		{"two in one line", foreignNumber + " " + foreignNS, 2},
 	}
 	for _, c := range cases {

@@ -292,7 +292,7 @@ func TestGetTransportObjects_ReleasedRequest_DropsReleaseMarkerRow(t *testing.T)
 // namespaced request number — which legitimately contains "/" — passes
 // validation instead of being rejected as unsafe.
 func TestGetTransportObjects_NamespacedNumber_ReachesTheQuery(t *testing.T) {
-	const namespaced = "/ZDEMO/TESTOBJ001"
+	const namespaced = "/ABC/TESTOBJ001"
 
 	client, probe := newQueryFallbackClient(t, eccWorklistXML, func(sql string) (int, string) {
 		if strings.Contains(sql, "FROM E070") {

@@ -99,9 +99,7 @@ func buildPaginationWhereTyped(keys, lastValues []string, keyTypes map[string]st
 // BuildExportSQL generates the SELECT statement for exporting a customizing table.
 //
 // allKeys: all key fields including MANDT (used for ORDER BY).
-// paginateKeys: non-MANDT keys used for pagination WHERE clause (may be truncated
-//
-//	to maxKeysForPaginate by the caller). Must NOT include MANDT.
+// paginateKeys: non-MANDT keys used for pagination WHERE clause. Must NOT include MANDT.
 //
 // lastValues: values from the last row for pagination. Must match paginateKeys length.
 //
@@ -111,8 +109,11 @@ func BuildExportSQL(table string, allKeys []string, paginateKeys []string, lastV
 }
 
 // BuildExportSQLTyped is BuildExportSQL with the DDIC data type of the key
-// fields (key name to type such as "TIMS"). Key fields of type TIMS are
-// compared as text in the pagination WHERE clause, see timeKeyOperand.
+// fields (key name to type such as "TIMS"). keyTypes may be nil, and the type
+// match is case-insensitive. Only keys of type TIMS are treated specially: in
+// the pagination WHERE clause they are compared as CAST( f AS CHAR( 6 ) )
+// because the data preview rejects the stored value 240000 as a time literal.
+// The ORDER BY clause is unchanged.
 func BuildExportSQLTyped(table string, allKeys []string, paginateKeys []string, lastValues []string, keyTypes map[string]string) (string, error) {
 	if err := validateIdentifier(table); err != nil {
 		return "", fmt.Errorf("invalid table name: %w", err)

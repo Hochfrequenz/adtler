@@ -950,7 +950,7 @@ func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber st
 // transportNumberRe matches a SAP transport request or task number that is
 // safe to embed as a literal in a SQL WHERE clause. E070-TRKORR is CHAR20.
 // "/" is admitted because namespaced requests are legitimate
-// (/ZDEMO/TESTOBJ001), as are "-" and "." for SAP's own piece lists
+// (/ABC/TESTOBJ001), as are "-" and "." for SAP's own piece lists
 // (SAPK-70003INSAPBW). Everything else — quotes of either kind, whitespace,
 // backslashes, semicolons, parentheses, %, comment markers — is rejected, so
 // a validated value cannot terminate or escape the literal it goes into.
@@ -1030,7 +1030,7 @@ const e071ObjectQueryMaxRows = 5000
 //   - Granularity itself is NOT a difference between the two paths, despite
 //     an earlier version of this comment claiming one: the same measurement
 //     found the ADT XML path reporting a LIMU/METH row (e.g.
-//     "/ZDEMO/CL_TEST_PROCESS        CHECK_STATUS", WBType
+//     "/ABC/CL_TEST_PROCESS          CHECK_STATUS", WBType
 //     "CLAS/OM") at the same position as the equivalent E071 row, among 16
 //     entries that matched between the two paths row-for-row. Granularity is
 //     a property of what SAP recorded in the transport, not of which path

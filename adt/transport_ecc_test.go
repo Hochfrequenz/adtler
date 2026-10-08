@@ -59,7 +59,7 @@ const eccWorklistXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/AAAK900635/consistencychecks" rel="http://www.sap.com/cts/relations/consistencycheck" type="application/xml" title="Transport Organizer Request/Task Consistency Check" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/AAAK900635/releasejobs" rel="http://www.sap.com/cts/relations/releasejobs" type="application/xml" title="Transport Organizer Request/Task Release" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/AAAK900635" rel="http://www.sap.com/cts/relations/modify" type="application/xml" title="Transport Organizer Request/Modify" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
-	`<tm:abap_object tm:pgmid="R3TR" tm:type="PROG" tm:name="/ZTEST/ORDER_REQUEST" tm:wbtype="PROG/P" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=/ZTEST/ORDER_REQUEST&amp;obj_wbtype=PROG&amp;pgmid=R3TR" tm:obj_info="Programm"/>` +
+	`<tm:abap_object tm:pgmid="R3TR" tm:type="PROG" tm:name="/XYZ/ORDER_REQUEST" tm:wbtype="PROG/P" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=/XYZ/ORDER_REQUEST&amp;obj_wbtype=PROG&amp;pgmid=R3TR" tm:obj_info="Programm"/>` +
 	`</tm:task>` +
 	`</tm:request>` +
 	`<tm:request tm:number="AAAK902952" tm:owner="TESTUSER1" tm:desc="Lock reproducer probe (throwaway, delete after)" tm:status="D" tm:uri="/sap/bc/adt/vit/wb/object_type/%20%20%20%20rq/object_name/AAAK902952">` +
@@ -101,7 +101,7 @@ const eccCustomizingXML = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/AAAK900178" rel="http://www.sap.com/cts/relations/modify" type="application/xml" title="Transport Organizer Request/Modify" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
 	`<tm:task tm:number="AAAK900635" tm:owner="TESTUSER1" tm:desc="Entwicklung/Korrektur" tm:status="R" tm:uri="/sap/bc/adt/vit/wb/object_type/%20%20%20%20rq/object_name/AAAK900635">` +
 	`<atom:link href="/sap/bc/adt/cts/transportrequests/AAAK900635" rel="http://www.sap.com/cts/relations/modify" type="application/xml" title="Transport Organizer Request/Modify" xmlns:atom="http://www.w3.org/2005/Atom"/>` +
-	`<tm:abap_object tm:pgmid="R3TR" tm:type="PROG" tm:name="/ZTEST/ORDER_REQUEST" tm:wbtype="PROG/P" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=/ZTEST/ORDER_REQUEST&amp;obj_wbtype=PROG&amp;pgmid=R3TR" tm:obj_info="Programm"/>` +
+	`<tm:abap_object tm:pgmid="R3TR" tm:type="PROG" tm:name="/XYZ/ORDER_REQUEST" tm:wbtype="PROG/P" tm:dummy_uri="/sap/bc/adt/cts/transportrequests/reference?obj_name=/XYZ/ORDER_REQUEST&amp;obj_wbtype=PROG&amp;pgmid=R3TR" tm:obj_info="Programm"/>` +
 	`</tm:task>` +
 	`</tm:request>` +
 	`</tm:modifiable>` +

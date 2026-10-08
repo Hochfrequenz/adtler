@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -394,6 +395,7 @@ func TestExportCustomizing_IncludeTables(t *testing.T) {
 
 	if len(summary.Errors) > 0 {
 		t.Errorf("%d of %d tables failed to export", len(summary.Errors), len(tables))
+		logTableErrorKinds(t, summary.Errors)
 	}
 	if summary.ExportedTables != len(tables) {
 		t.Errorf("exported %d tables, want %d", summary.ExportedTables, len(tables))
@@ -547,6 +549,7 @@ func TestExportCustomizing_LongKeyPagination(t *testing.T) {
 	}
 	if len(summary.Errors) > 0 {
 		t.Errorf("%d export errors", len(summary.Errors))
+		logTableErrorKinds(t, summary.Errors)
 	}
 	if summary.ExportedTables != 1 {
 		t.Errorf("expected 1 exported table, got %d", summary.ExportedTables)
@@ -565,5 +568,20 @@ func TestExportCustomizing_LongKeyPagination(t *testing.T) {
 	t.Logf("%d source rows, %d rows in SQLite (page_size=%d)", sourceRows, rowCount, pageSize)
 	if rowCount != sourceRows {
 		t.Errorf("exported %d rows, source has %d", rowCount, sourceRows)
+	}
+}
+
+// logTableErrorKinds logs the HTTP status and ADT exception type of each
+// per-table error, or the Go type for a non-ADT error. It deliberately logs no
+// table name and no message text.
+func logTableErrorKinds(t *testing.T, tableErrors []custexport.TableError) {
+	t.Helper()
+	for i, te := range tableErrors {
+		var adtErr *adt.ADTError
+		if errors.As(te.Err, &adtErr) {
+			t.Logf("error %d: ADT status=%d type=%q", i, adtErr.StatusCode, adtErr.Type)
+		} else {
+			t.Logf("error %d: %T", i, te.Err)
+		}
 	}
 }

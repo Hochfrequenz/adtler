@@ -14,7 +14,7 @@ import (
 // Object names shared by eccWorklistXML's two requests, referenced repeatedly
 // across the tests below.
 const (
-	eccOrderRequestObjName = "/ZTEST/ORDER_REQUEST"
+	eccOrderRequestObjName = "/XYZ/ORDER_REQUEST"
 	eccLockReproObjName    = "ZCL_LOCKREPRO_2"
 )
 
@@ -61,7 +61,7 @@ func TestGetTransportObjects_ECCWorklist_FiltersByNumber(t *testing.T) {
 		t.Fatalf("AAAK900178: unexpected error: %v", err)
 	}
 	if len(objs178) != 1 || objs178[0].Name != eccOrderRequestObjName {
-		t.Fatalf("AAAK900178: got %+v, want single /ZTEST/ORDER_REQUEST object", objs178)
+		t.Fatalf("AAAK900178: got %+v, want single /XYZ/ORDER_REQUEST object", objs178)
 	}
 
 	objs952, err := client.GetTransportObjects(context.Background(), "AAAK902952")
@@ -83,7 +83,7 @@ func TestGetTransportObjects_ECCWorklist_LowercaseNumberMatches(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(objs) != 1 || objs[0].Name != eccOrderRequestObjName {
-		t.Fatalf("got %+v, want single /ZTEST/ORDER_REQUEST object", objs)
+		t.Fatalf("got %+v, want single /XYZ/ORDER_REQUEST object", objs)
 	}
 }
 
