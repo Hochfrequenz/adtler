@@ -27,6 +27,12 @@ func parseObjectReferences(data []byte) ([]ObjectInfo, error) {
 	return result, nil
 }
 
+// SearchObjects runs the quick search. ADT sends no description for a search
+// that names the object type in its fully qualified form (for example CLAS/OC
+// instead of CLAS): the attribute is missing from the response itself, so
+// Description stays empty. It was measured on SAP ERP 6.0 and on SAP S/4HANA,
+// on-premise (adtler#152). Use the short type, or GetObjectInfo, when the
+// description matters.
 func (c *httpClient) SearchObjects(ctx context.Context, query, objectType string, maxResults int) ([]ObjectInfo, error) {
 	params := url.Values{}
 	params.Set("operation", "quickSearch")

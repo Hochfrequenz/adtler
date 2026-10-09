@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -21,6 +22,11 @@ const searchPathSuffix = "/informationsystem/search"
 
 // searchSampleLimit is how many objects each diagnostic search asks for.
 const searchSampleLimit = 25
+
+// searchSamplePattern is the name pattern of the diagnostic searches. A bare
+// wildcard runs into the 30-second client timeout for classes on a large
+// SAP ERP 6.0 system; customer-namespace objects are enough for the comparison.
+const searchSamplePattern = "Z*"
 
 // objectReferenceTag matches the opening tag of one search result entry,
 // whatever namespace prefix the response uses.
@@ -130,7 +136,14 @@ func TestSearchObjects_DescriptionBySpelling_Diagnostic_Integration(t *testing.T
 			// measure runs one search and logs what ADT sent next to what the
 			// client parsed. It returns the number of entries ADT sent.
 			measure := func(objectType string) int {
-				results, err := client.SearchObjects(ctx, "*", objectType, searchSampleLimit)
+				results, err := client.SearchObjects(ctx, searchSamplePattern, objectType, searchSampleLimit)
+				var adtErr *adt.ADTError
+				if errors.As(err, &adtErr) && adtErr.StatusCode == http.StatusBadRequest && adtErr.Type == "ExceptionInvalidData" {
+					// The release does not know this object type (SAP ERP 6.0
+					// has no behavior definitions), so there is nothing to compare.
+					t.Logf("objectType %s: not supported by this system", objectType)
+					return 0
+				}
 				if err != nil {
 					t.Fatalf("SearchObjects with objectType %s: %v", objectType, err)
 				}

@@ -247,6 +247,15 @@ SAP_INTEGRATION_SYSTEMS=hfq,s4u go test -tags=integration -v ./adt/...
 Where `hfq` and `s4u` are the keys of your R/3 and S/4 entries in
 `systems.json`.
 
+## Descriptions in search results
+
+`SearchObjects` returns an empty `Description` when the object type filter is
+given in its fully qualified form (`CLAS/OC`, `BDEF/BDO`, `PROG/P`). ADT leaves
+the `description` attribute out of the response in that case, on SAP ERP 6.0 and
+on SAP S/4HANA alike, so this is not a parsing gap in the client. The short
+spelling (`CLAS`, `BDEF`, `PROG`) returns descriptions, and so does
+`GetObjectInfo` for a single object (adtler#152).
+
 ## Reading RAP objects, and what a 406 means
 
 A behavior definition (`BDEF`), a service definition (`SRVD`) and a service
