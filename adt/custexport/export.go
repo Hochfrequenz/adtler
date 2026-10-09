@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -181,6 +182,12 @@ func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]str
 // exportTable performs a paginated export of a single table.
 // keys is the full list of key fields (including MANDT), keyTypes their DDIC
 // data types (key name to type, may be nil).
+//
+// A table ends on the first page with fewer rows than pageSize (an empty page
+// included). A full page that cannot be continued, because a key column is
+// missing from the result or because the next page would start where the
+// previous one did, is an error: the export never reports such a table as
+// complete (#218).
 func exportTable(ctx context.Context, client adt.Client, table string, keys []string, keyTypes map[string]string, pageSize int) (*TableExportResult, error) {
 	nonMandtKeys := adt.FilterNonMandtKeys(keys)
 
@@ -233,12 +240,25 @@ func exportTable(ctx context.Context, client adt.Client, table string, keys []st
 			break
 		}
 
-		// Extract last row's non-MANDT key values for pagination.
+		// Extract last row's non-MANDT key values for pagination. A page that
+		// is full but cannot be continued is an error, never the end of the
+		// table: stopping here would report a partial export as a success (#218).
 		lastRow := result.Rows[len(result.Rows)-1]
-		lastValues = extractKeyValues(columns, paginateKeys, lastRow)
-		if lastValues == nil {
-			break // cannot paginate further
+		nextValues := extractKeyValues(columns, paginateKeys, lastRow)
+		if nextValues == nil {
+			return nil, fmt.Errorf("export %s page %d: cannot determine the pagination keys from the result (key columns %s, missing from result: %s); the table would be exported incompletely",
+				table, pages, strings.Join(paginateKeys, ", "), strings.Join(missingColumns(columns, paginateKeys, lastRow), ", "))
 		}
+		// The next query asks for rows after these key values. If they equal
+		// the ones the current page was requested after, the page did not move
+		// on and the same page would come back forever (#218). The keys are the
+		// full primary key without the client, which is unique per row, so two
+		// successive pages cannot legitimately end on the same values.
+		if slices.Equal(nextValues, lastValues) {
+			return nil, fmt.Errorf("export %s page %d: no progress, the last row has the same key values (%s) as the last row of the previous page; stopping instead of fetching the same page again",
+				table, pages, strings.Join(paginateKeys, ", "))
+		}
+		lastValues = nextValues
 	}
 
 	return &TableExportResult{
@@ -248,6 +268,22 @@ func exportTable(ctx context.Context, client adt.Client, table string, keys []st
 		TotalRows: len(allRows),
 		Pages:     pages,
 	}, nil
+}
+
+// missingColumns lists the keys for which the row has no value, because the
+// result lacks the column or the row is shorter than the column list.
+func missingColumns(columns []adt.QueryColumn, keys []string, row []string) []string {
+	colIndex := make(map[string]int, len(columns))
+	for i, col := range columns {
+		colIndex[col.Name] = i
+	}
+	var missing []string
+	for _, key := range keys {
+		if idx, ok := colIndex[key]; !ok || idx >= len(row) {
+			missing = append(missing, key)
+		}
+	}
+	return missing
 }
 
 // extractKeyValues gets the values for the given key fields from a row,
