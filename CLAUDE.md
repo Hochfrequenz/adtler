@@ -136,9 +136,9 @@ An integration test that falls back on an existing object when creation fails �
 if that errors, carry on with the one already there"* — passes forever once the object exists.
 Where the object cannot be deleted again it always exists after the first run, so the fallback
 becomes permanent. That is how #149 shipped: `CreatePackage` could not work on S/4 at all, and
-`TestCreatePackage_Integration` reported success anyway, because this client cannot currently
-delete a package (#150, open — an ETag bug here, not an ADT limitation) and so the fixture from
-an earlier run was always there to fall back on.
+`TestCreatePackage_Integration` reported success anyway, because this client could not
+delete a package (#150, an ETag bug here, not an ADT limitation, fixed since) and so the fixture
+from an earlier run was always there to fall back on.
 
 A fallback is legitimate for failures that say *this object is already in the way* — a duplicate,
 a lock, a missing authorization. It is never legitimate for a failure that says *SAP would not
@@ -154,7 +154,7 @@ refused; the other corrects the request and still fails loudly if the second att
 Where an operation cannot be undone, say so in README.md under "What this client cannot
 currently undo" and in the pull request, rather than leaving the next reader to infer it from a
 test that creates nothing. Say **what** cannot undo it, too: "adtler cannot delete a package
-(#150)" is a bug someone can fix, while "a package cannot be deleted over ADT" reads as a
+(as it was with #150)" is a bug someone can fix, while "a package cannot be deleted over ADT" reads as a
 permanent property of SAP and quietly discourages anyone from trying.
 
 ### A regression test is not one until you have seen it fail

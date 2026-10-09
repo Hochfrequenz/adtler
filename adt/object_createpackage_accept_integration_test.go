@@ -40,14 +40,13 @@ func endpointUnavailable(err error) bool {
 // answers the same with or without the header.
 //
 // So a live guard for #149 must let the request succeed, which means creating a
-// package — and this client cannot currently delete one (adtler#150, an open
-// ETag bug here rather than an ADT limitation), so each run would strand one on
-// every system until that is fixed. That trade is not worth making
-// for a header that TestCreatePackage_SendsAcceptHeader already guards on every
-// CI run. TestCreatePackage_Integration is the live check, and it is single-use
-// per system: it catches the bug on a system where its package does not exist
-// yet, and from the next run onward it can only smoke-test. README.md records
-// this under "What this client cannot currently undo".
+// package. This client could not delete one until adtler#150 (an ETag bug
+// here rather than an ADT limitation) was fixed, so each run would have
+// stranded one on every system. TestCreatePackage_Integration is the live
+// check, and it is still single-use per system, because it does not remove its
+// package: it catches the bug on a system where its package does not exist yet,
+// and from the next run onward it can only smoke-test. README.md records this
+// under "What this client cannot currently undo".
 //
 // The POST here cannot modify the package it names — SAP rejects a duplicate
 // before reading the rest of the payload — so it is safe against a package the
