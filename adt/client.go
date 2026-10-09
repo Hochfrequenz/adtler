@@ -39,6 +39,9 @@ type ObjectClient interface {
 	CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error
 	CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error
 	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, transport string) error
+	// DeleteObject deletes the object. lockHandle is optional: pass "" when
+	// you hold no lock, or the handle from LockObject and it is released
+	// before the delete (adtler#187).
 	DeleteObject(ctx context.Context, objectURI, lockHandle, transport string) error
 	ActivateObjects(ctx context.Context, objectURIs []string) (*ActivationResult, error)
 	GetInactiveObjects(ctx context.Context) ([]ObjectInfo, error)
