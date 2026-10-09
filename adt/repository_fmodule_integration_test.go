@@ -64,8 +64,8 @@ func (r *fmoduleRequestRecorder) acceptHeaders() []string {
 // the FIRST request carried, which the retry cannot repair.
 //
 // The test reads only: it finds a function module through the system's own
-// search, so it depends on no object existing anywhere, and it skips on a
-// system without one. It logs counts and booleans, never object names.
+// search, so it does not depend on a particular fixture object, and it skips
+// on a system without any function module. It logs counts and booleans, never object names.
 //
 // What to look for in the -v output, per system: "first request carried the
 // fmodules media type" must be true. "requests for the object" is 1 on a
@@ -90,7 +90,7 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 
 			hits, err := client.SearchObjects(ctx, "*", fmoduleSearchType, fmoduleSearchLimit)
 			if err != nil {
-				t.Fatalf("SearchObjects for function modules: %v", err)
+				t.Fatalf("SearchObjects for function modules: %s", redact(err.Error(), sys.Config.Host, ""))
 			}
 			var uri string
 			for _, h := range hits {
@@ -106,7 +106,7 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 			rec.watch(uri)
 			info, err := client.GetObjectInfo(ctx, uri)
 			if err != nil {
-				t.Fatalf("GetObjectInfo on a function module: %v", err)
+				t.Fatalf("GetObjectInfo on a function module: %s", redact(err.Error(), sys.Config.Host, ""))
 			}
 
 			accepts := rec.acceptHeaders()
