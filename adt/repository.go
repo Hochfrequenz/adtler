@@ -82,6 +82,15 @@ var objectTypeAcceptHeaders = map[string]string{
 // URIs. See adtler#17 / mcp-server-abap#296.
 const fugrIncludeContentType = "application/vnd.sap.adt.functions.fincludes.v2+xml"
 
+// fugrModuleContentType is the vendor MIME type S/4 requires for function
+// module sub-resources (.../functions/groups/<fg>/fmodules/<fm>). Like the
+// includes, they share the function group URI prefix but not its media type:
+// S/4 answers the group type with 406 and names this one as the only type it
+// produces. The version is the one that 406 response names; a system that does
+// not know it answers 406 as well and the */* retry in readWithAcceptFallback
+// covers that case. See adtler#169.
+const fugrModuleContentType = "application/vnd.sap.adt.functions.fmodules.v3+xml"
+
 // vitObjectPropertiesContentType is the vendor MIME type required by SAP for
 // all VIT (Visual IT Tools) object types whose ADT URIs start with
 // /sap/bc/adt/vit/wb/object_type/. SAP advertises this type in the 406
@@ -103,6 +112,10 @@ func (c *httpClient) acceptHeaderForURI(objectURI string) string {
 	if strings.HasPrefix(objectURI, "/sap/bc/adt/functions/groups/") &&
 		strings.Contains(objectURI, "/includes/") {
 		return fugrIncludeContentType + ", application/xml"
+	}
+	if strings.HasPrefix(objectURI, "/sap/bc/adt/functions/groups/") &&
+		strings.Contains(objectURI, "/fmodules/") {
+		return fugrModuleContentType + ", application/xml"
 	}
 
 	// Find the best matching prefix from the hardcoded map.
@@ -179,13 +192,15 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 	}
 
 	data, _ := io.ReadAll(resp.Body)
-	return parseGenericObjectInfo(data)
+	return parseGenericObjectInfo(data, objectURI)
 }
 
 // parseGenericObjectInfo extracts ObjectInfo from any ADT object XML response.
 // All ADT object types share adtcore:name, adtcore:type, adtcore:description
 // attributes on the root element and an <adtcore:packageRef> child element.
-func parseGenericObjectInfo(data []byte) (*ObjectInfo, error) {
+// The object document does not reliably repeat its own address, so the URI
+// the caller fetched it from is reported as ObjectInfo.URI.
+func parseGenericObjectInfo(data []byte, objectURI string) (*ObjectInfo, error) {
 	var obj struct {
 		Name        string `xml:"name,attr"`
 		Type        string `xml:"type,attr"`
@@ -209,6 +224,7 @@ func parseGenericObjectInfo(data []byte) (*ObjectInfo, error) {
 		return nil, fmt.Errorf("GetObjectInfo parsing: response carried no adtcore:name — it is not an ADT object document")
 	}
 	return &ObjectInfo{
+		URI:         objectURI,
 		Name:        obj.Name,
 		Type:        obj.Type,
 		Description: obj.Description,
