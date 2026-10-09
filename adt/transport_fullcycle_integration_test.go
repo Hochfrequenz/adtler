@@ -10,7 +10,7 @@ import (
 )
 
 // extractTransportFromError parses a transport number from SAP error messages
-// like "already locked in request S4UK902592 of user ...".
+// like "already locked in request CCCK902592 of user ...".
 func extractTransportFromError(err error) string {
 	re := regexp.MustCompile(`(?:request|Auftrag)\s+([A-Z0-9]{10})`)
 	if m := re.FindStringSubmatch(err.Error()); len(m) > 1 {
@@ -36,7 +36,7 @@ func TestCreateTransport_Integration(t *testing.T) {
 		t.Fatal("expected non-empty transport number")
 	}
 	if len(trNumber) != 10 {
-		t.Errorf("expected 10-char transport number (e.g. S4UK900001), got %q", trNumber)
+		t.Errorf("expected 10-char transport number (e.g. CCCK900001), got %q", trNumber)
 	}
 	t.Logf("created transport: %s", trNumber)
 

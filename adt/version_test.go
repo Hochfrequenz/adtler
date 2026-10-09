@@ -13,7 +13,7 @@ func TestParseVersionFeed(t *testing.T) {
     <title>Version 1</title>
     <author><name>DEVELOPER</name></author>
     <content src="/sap/bc/adt/programs/programs/ZTEST/source/main/versions/20250115103000/00001/content"/>
-    <link rel="http://www.sap.com/adt/relations/trans_req" href="Transport for change" name="S4DK900042"/>
+    <link rel="http://www.sap.com/adt/relations/trans_req" href="Transport for change" name="BBBK900042"/>
   </entry>
   <entry>
     <id>00002</id>
@@ -39,8 +39,8 @@ func TestParseVersionFeed(t *testing.T) {
 	if v1.Author != "DEVELOPER" {
 		t.Errorf("author: got %q, want DEVELOPER", v1.Author)
 	}
-	if v1.Transport != "S4DK900042" {
-		t.Errorf("transport: got %q, want S4DK900042", v1.Transport)
+	if v1.Transport != "BBBK900042" {
+		t.Errorf("transport: got %q, want BBBK900042", v1.Transport)
 	}
 	if v1.ContentURI != "/sap/bc/adt/programs/programs/ZTEST/source/main/versions/20250115103000/00001/content" {
 		t.Errorf("content URI: got %q", v1.ContentURI)

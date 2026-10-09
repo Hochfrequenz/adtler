@@ -11,7 +11,7 @@
 // corrections). On some S/4HANA systems, K is no longer used at all.
 //
 // These tests probe four hypotheses derived from ABAP source analysis of
-// IF_CTS_ADT_TM_CONSTANTS and CL_CTS_ADT_TM_CONFIG_HANDLER on S4U:
+// IF_CTS_ADT_TM_CONSTANTS and CL_CTS_ADT_TM_CONFIG_HANDLER on the S/4 system:
 //
 //  1. GapDocumentation: confirms that GetTransportRequests returns fewer
 //     transports than E070 contains. Does not fail — documents the bug.
@@ -25,9 +25,9 @@
 //
 //  4. CombinedHypothesis: non-tree accept header + all type params together.
 //
-// Run against S4U:
+// Run against the S/4 system:
 //
-//	SAP_INTEGRATION_SYSTEMS=S4U go test -tags=integration -v -run TestGetTransportRequests_SystCust ./adt/...
+//	SAP_INTEGRATION_SYSTEMS=<s4-key> go test -tags=integration -v -run TestGetTransportRequests_SystCust ./adt/...
 //
 // See: https://github.com/Hochfrequenz/adtler/issues/63
 package adt

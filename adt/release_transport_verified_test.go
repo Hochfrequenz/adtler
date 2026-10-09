@@ -55,7 +55,7 @@ func TestReleaseTransport_Verified(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			const transport = "DEVK900123"
+			const transport = "AAAK900123"
 			srv := releaseTransportServer(t, transport, tc.postReleaseStatus)
 			defer srv.Close()
 
@@ -82,16 +82,16 @@ func TestReleaseTransport_Verified(t *testing.T) {
 // it comes back as the whole transport-organizer worklist (eccWorklistXML),
 // nesting requests under <tm:workbench>/<tm:modifiable>. Before Task 5,
 // parseTransportInfo only bound a request as a direct child of the root, so
-// it never found DEVK902952 in that shape and GetTransportInfo always
+// it never found AAAK902952 in that shape and GetTransportInfo always
 // errored on ECC; ReleaseTransport treats a failed status read as "assume
 // released" (see its doc comment), so the silent-failure detection this
 // method exists for never fired on the one system it targets. With
-// parseTransportInfo fixed, the status read succeeds, finds DEVK902952 still
+// parseTransportInfo fixed, the status read succeeds, finds AAAK902952 still
 // at status "D" (modifiable — see eccWorklistXML), and this test asserts the
 // caller now gets Released: false instead of the false-positive Released:
 // true.
 func TestReleaseTransport_ECCWorklistStatusRead_ReportsModifiable(t *testing.T) {
-	const transport = "DEVK902952"
+	const transport = "AAAK902952"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == csrfEndpoint:
@@ -147,7 +147,7 @@ func TestReleaseTransport_ReleaseErrorPropagates(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	res, err := client.ReleaseTransport(context.Background(), "DEVK900123")
+	res, err := client.ReleaseTransport(context.Background(), "AAAK900123")
 	if err == nil {
 		t.Fatalf("expected error, got result %+v", res)
 	}

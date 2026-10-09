@@ -39,7 +39,7 @@ func TestGetCompletions_MultiSystem_Integration(t *testing.T) {
 				t.Fatalf("[%s] GetCompletions returned error: %v", sys.Name, err)
 			}
 			// SAP returns 0 proposals for `sy-` at end-of-file with no
-			// surrounding statement context (verified on hfq + s4u). The
+			// surrounding statement context (verified on an ECC and an S/4 system). The
 			// canary for the URI-shape / asXML regression is
 			// TestGetCompletions_Integration which uses `WRITE ` mid-file
 			// and expects a non-empty list.

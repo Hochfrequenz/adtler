@@ -116,7 +116,7 @@ disk **outside the repo**. Run it with the env triple from the Global Constraint
 **small** request — the S/4 bodies measured so far reached 10.3 MB and `c.http` has a
 30-second timeout (`adt/client.go:222`); choose one
 by enumerating `GetTransportRequests(user, "D")` and taking a request with a short object
-list. (`/ZDEMO/TESTOBJ001` is known to work but is the 10.3 MB one; prefer smaller.)
+list. (The request measured while writing this plan returned 10.3 MB; prefer smaller.)
 
 Reduce each body by hand to a small fixture preserving the structural features later tasks
 depend on, and add them as Go string constants in a new file `adt/transport_ecc_test.go`
@@ -278,7 +278,7 @@ one.** It validates its inputs against `transportUserRe` / `transportStatusRe` b
 interpolating them into the query string. The transport number goes into a `WHERE` clause the
 same way, so validate it against an equivalent anchored pattern and return an error rather
 than querying when it does not match. A transport number can legitimately contain `/`
-(namespaced requests such as `/ZDEMO/TESTOBJ001`), so the pattern must admit that without
+(namespaced requests such as `/ABC/TESTOBJ001`), so the pattern must admit that without
 admitting quotes.
 
 Two queries, because a request's object entries live on its task rows as well as its own:

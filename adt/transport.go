@@ -950,7 +950,7 @@ func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber st
 // transportNumberRe matches a SAP transport request or task number that is
 // safe to embed as a literal in a SQL WHERE clause. E070-TRKORR is CHAR20.
 // "/" is admitted because namespaced requests are legitimate
-// (/ZDEMO/TESTOBJ001), as are "-" and "." for SAP's own piece lists
+// (/ABC/TESTOBJ001), as are "-" and "." for SAP's own piece lists
 // (SAPK-70003INSAPBW). Everything else — quotes of either kind, whitespace,
 // backslashes, semicolons, parentheses, %, comment markers — is rejected, so
 // a validated value cannot terminate or escape the literal it goes into.
@@ -963,7 +963,7 @@ var errTransportNumberUnsafe = errors.New("contains characters not allowed in a 
 
 // pgmIDReleaseMarker is the E071 PGMID of a release marker row (paired with
 // OBJECT "RELE"). Such a row is bookkeeping, not a repository object: its
-// OBJ_NAME is a packed audit string like "DEVK900124 20240101 120000 TESTUSER1".
+// OBJ_NAME is a packed audit string like "AAAK900124 20240101 120000 TESTUSER1".
 // Released requests always carry one, so the E071 fallback must not hand it
 // to callers as if it were transported content.
 const pgmIDReleaseMarker = "CORR"
@@ -1012,25 +1012,25 @@ const e071ObjectQueryMaxRows = 5000
 // here.
 //
 // Differences from the ADT XML path (GetTransportObjects's primary source),
-// measured by reading the same released S/4 request (S4DK900013) through
+// measured by reading the same released S/4 request (BBBK900013) through
 // both paths and comparing, not merely inferred:
 //
 //   - E071 records more than repository objects. A released request carries a
 //     release marker row (PGMID CORR, OBJECT RELE) whose OBJ_NAME is a packed
-//     audit string such as "DEVK900124 20240101 120000 TESTUSER1", not an object
+//     audit string such as "AAAK900124 20240101 120000 TESTUSER1", not an object
 //     name. PGMID CORR is excluded in the query itself, so the exclusion is
 //     visible in the statement rather than buried in a post-filter; the row
 //     loop drops any that survive anyway, as a guard against a server that
 //     ignores the predicate. The ADT XML path does the opposite: the same
 //     measurement found the equivalent CORR/RELE row (positions 1-2, e.g.
-//     "S4DK900014 20250526 112849 SANDBOX-BASIS") passed through unfiltered. Both
+//     "BBBK900014 20250526 112849 USERD") passed through unfiltered. Both
 //     behaviours are deliberate — this path's exclusion is not a bug to
 //     "fix" into matching the XML path's, and the XML path's filtering is out
 //     of scope here.
 //   - Granularity itself is NOT a difference between the two paths, despite
 //     an earlier version of this comment claiming one: the same measurement
 //     found the ADT XML path reporting a LIMU/METH row (e.g.
-//     "/ZDEMO/CL_TEST_PROCESS        CHECK_STATUS", WBType
+//     "/ABC/CL_TEST_PROCESS          CHECK_STATUS", WBType
 //     "CLAS/OM") at the same position as the equivalent E071 row, among 16
 //     entries that matched between the two paths row-for-row. Granularity is
 //     a property of what SAP recorded in the transport, not of which path

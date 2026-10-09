@@ -788,9 +788,9 @@ func parseHTMLErrorBody(data []byte) string {
 
 // encodeNamespacePath detects SAP namespace objects in ADT paths and
 // percent-encodes the namespace slashes. When a user passes an object URI
-// like /sap/bc/adt/programs/programs//HFQ/REPORT, the double slash indicates
+// like /sap/bc/adt/programs/programs//ABC/REPORT, the double slash indicates
 // a namespace object. This function converts it to the ADT-required format:
-// /sap/bc/adt/programs/programs/%2fhfq%2freport
+// /sap/bc/adt/programs/programs/%2fabc%2freport
 func encodeNamespacePath(path string) string {
 	// Split the query off BEFORE searching for "//": a query value (a
 	// base64-shaped lock handle, say) can easily contain "//" with no

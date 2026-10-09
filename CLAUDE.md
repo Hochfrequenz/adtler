@@ -178,18 +178,26 @@ the `SAP_INTEGRATION_SYSTEMS` default set where it is documented or defined, and
 branches that key off one system's real behaviour. The prose, comments and commit messages
 *around* that value are not covered — write "the ECC system", not the alias.
 
-Unit-test fixture strings are not covered either; use `sysA` / `sysB` for system keys and generic
-placeholders for object names. This section is bound by the same rule: where an example is needed,
-write `<alias>`.
+Unit-test fixture strings are not covered either; use `sysA` / `sysB` for system keys, generic
+placeholders for object names, `AAA`/`BBB`/`CCC` as the system ID of transport and task numbers,
+`USERA`… for logon IDs, and `/ABC/` / `/XYZ/` as namespaces. This section is bound by the same
+rule: where an example is needed, write `<alias>`.
 
 `.mcp.json` is **not** an exception. It is git-ignored and may hold credentials; it must never be
 committed at all.
 
 ### Before pushing
 
-Grep the diff for the shapes that matter — an internal domain suffix, a `<SID>K9…` transport
-number, a `/XXX/` namespace prefix — rather than for the alias names, so the guard itself does not
-leak them.
+CI runs `tools/datacheck` over every tracked file. It fails on a transport or task number whose
+system ID is not a placeholder (`AAA`, `BBB`, `CCC`, and SAP's public demo system ID), and on a
+`/X/`-prefixed name, raw or URL-encoded, whose prefix is not allowlisted in
+`tools/datacheck/main.go`. Run it before pushing:
+`git ls-files -z | xargs -0 go run ./tools/datacheck`. It prints file and line, never the value.
+It cannot see host names, logon IDs, system aliases (also inside identifiers), lower-case namespace
+forms, or customer object names outside a namespace. Grep the diff for those yourself, by shape
+rather than by value, so the guard does not leak them: for logon IDs that means the values of
+user and owner attributes and fields in captured XML or JSON (`owner`, `responsible`, `changedBy`,
+`createdBy`, `AS4USER`) and the user argument of a test call.
 
 When you find internal data already published, redact it in place (edit the issue body, or open a
 PR) rather than only noting it. For a host name, credential or logon ID, assume the value is

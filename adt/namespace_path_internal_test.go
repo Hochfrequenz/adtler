@@ -24,10 +24,10 @@ func TestEncodeNamespacePath_QuerySlashesDoNotPanic(t *testing.T) {
 
 func TestEncodeNamespacePath_NamespaceInPathStillEncoded(t *testing.T) {
 	// Regression: a genuine customer-namespace class path (the classrun.go
-	// case: appending "/na2/foo" after a base with no trailing slash
-	// produces "//na2/foo") must still be percent-encoded correctly.
-	in := "/sap/bc/adt/oo/classrun//na2/foo"
-	want := "/sap/bc/adt/oo/classrun/%2fna2%2ffoo"
+	// case: appending "/xyz/foo" after a base with no trailing slash
+	// produces "//xyz/foo") must still be percent-encoded correctly.
+	in := "/sap/bc/adt/oo/classrun//xyz/foo"
+	want := "/sap/bc/adt/oo/classrun/%2fxyz%2ffoo"
 	got := encodeNamespacePath(in)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -37,8 +37,8 @@ func TestEncodeNamespacePath_NamespaceInPathStillEncoded(t *testing.T) {
 func TestEncodeNamespacePath_NamespaceInPathPlusQuerySlashes(t *testing.T) {
 	// Both a real namespace segment AND an unrelated "//" in the query must
 	// work together: namespace gets encoded, query passes through as-is.
-	in := "/sap/bc/adt/oo/classrun//na2/foo?_action=UNLOCK&lockHandle=AB//CD"
-	want := "/sap/bc/adt/oo/classrun/%2fna2%2ffoo?_action=UNLOCK&lockHandle=AB//CD"
+	in := "/sap/bc/adt/oo/classrun//xyz/foo?_action=UNLOCK&lockHandle=AB//CD"
+	want := "/sap/bc/adt/oo/classrun/%2fxyz%2ffoo?_action=UNLOCK&lockHandle=AB//CD"
 	got := encodeNamespacePath(in)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)

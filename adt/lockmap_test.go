@@ -127,8 +127,8 @@ func TestLockMapConcurrent(t *testing.T) {
 }
 
 func TestLockKey(t *testing.T) {
-	got := adt.LockKey("DEV", "/sap/bc/adt/programs/programs/ZTEST")
-	want := "DEV:/sap/bc/adt/programs/programs/ZTEST"
+	got := adt.LockKey("sysA", "/sap/bc/adt/programs/programs/ZTEST")
+	want := "sysA:/sap/bc/adt/programs/programs/ZTEST"
 	if got != want {
 		t.Errorf("LockKey = %q, want %q", got, want)
 	}

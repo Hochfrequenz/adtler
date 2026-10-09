@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-22
 - **Repo:** adtler
-- **Status:** Proposed (revised after agent review + live handler verification on HFQ and S4U, 2026-07-23)
+- **Status:** Proposed (revised after agent review + live handler verification on the ECC and S/4 systems, 2026-07-23)
 - **Companion spec:** aibap.mcp `run_class` tool — `<aibap.mcp>/docs/superpowers/specs/2026-07-22-run-class-tool-design.md` (consumer of this endpoint; that PR is `blocked-by-adtler` until this ships in a tagged release).
 
 ## Motivation
@@ -19,11 +19,11 @@ classrun. `RunClass` is the generic primitive that makes that (and other
 diagnostic/helper flows) possible. This spec covers **only** the generic
 endpoint client; no lock-specific logic lives here.
 
-Verified precondition (2026-07-23, HFQ **and** S4U): the classrun framework is
+Verified precondition (2026-07-23, the ECC **and** S/4 systems): the classrun framework is
 present on **both** systems. The request handler `CL_OO_ADT_RES_CLASSRUN`
 (package `SEO_ADT`) and interface `IF_OO_ADT_CLASSRUN` exist on each; its source
 was read on both to confirm the endpoint contract (see "The classrun endpoint"
-and "Error handling"). Note the HFQ (ECC) handler is an older variant:
+and "Error handling"). Note the ECC system handler is an older variant:
 `IF_OO_ADT_CLASSRUN_OUT` is absent there and the console-out object uses
 `write_text`, and the ECC handler additionally accepts `PROG`/`DDLS` object
 types — none of which affects the `text/plain` client contract.
@@ -55,8 +55,8 @@ Notes / decisions:
   `/sap/bc/adt/oo/classrun/` (mirrors `object.go` `endpoint + "/" +
   strings.ToLower(name)`). No manual escaping call is needed: `doMutate`
   applies `encodeNamespacePath` automatically (it triggers on `//`), so a
-  namespaced class built as `/sap/bc/adt/oo/classrun//na2/foo` is encoded to
-  `%2fna2%2ffoo` by the client. Just build the raw URI and let `doMutate` handle it.
+  namespaced class built as `/sap/bc/adt/oo/classrun//xyz/foo` is encoded to
+  `%2fxyz%2ffoo` by the client. Just build the raw URI and let `doMutate` handle it.
   (Verified 2026-07-23: the handler `TRANSLATE`s the class name `TO UPPER CASE`
   server-side, so lower-casing is a convention/namespace-encoding requirement,
   not a functional one — both forms resolve to the same class.)
@@ -147,12 +147,12 @@ S/4, per the repo convention):**
   (e.g. `ZCL_ADT_MCP_CLASSRUN_TST`, implements `IF_OO_ADT_CLASSRUN`, writes a
   known string via `out->write`) → asserts the known string comes back.
 - A **namespaced** class variant → exercises the `//`-encoding path against a
-  live system (HFQ `/NA2/` context relevant).
+  live system (ECC system `/XYZ/` context relevant).
 - A **throwing** variant of the fixture class → **resolves the runtime-exception
   verification point** (records whether it arrives as HTTP error or 200-with-text;
   update this doc + any assertion to match).
 - `eachSystem(t)` also confirms whether the classrun framework
-  (`IF_OO_ADT_CLASSRUN`) exists on HFQ/ECC, not just S4U.
+  (`IF_OO_ADT_CLASSRUN`) exists on the ECC system, not just the S/4 system.
 - Fixture class added to [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST).
 
 ## Verification points
@@ -163,8 +163,8 @@ S/4, per the repo convention):**
    body. See Error handling. Runtime confirmation lands with the integration
    test (`TestRunClass_ThrowingClass`).
 2. **Resolved (2026-07-23).** The classrun endpoint is available on **both**
-   HFQ (ECC/R3) and S4U — handler `CL_OO_ADT_RES_CLASSRUN` and interface
-   `IF_OO_ADT_CLASSRUN` exist on each. The HFQ handler is an older variant (no
+   ECC system (R/3) and the S/4 system — handler `CL_OO_ADT_RES_CLASSRUN` and interface
+   `IF_OO_ADT_CLASSRUN` exist on each. The ECC handler is an older variant (no
    `IF_OO_ADT_CLASSRUN_OUT`, uses `write_text`, also serves `PROG`/`DDLS`), but
    the `text/plain` client contract is identical.
 3. **Resolved (2026-07-23).** Plain stateless POST, no special session type or

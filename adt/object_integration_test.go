@@ -5,6 +5,7 @@ package adt_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -75,8 +76,20 @@ func TestCreatePackage_Integration(t *testing.T) {
 
 	const pkgName = "Z_ADT_MCP_INTTEST_PKG"
 
-	err := client.CreatePackage(ctx, pkgName, "Integration test package",
-		cfg.User, "HOME", "ZS4U", "")
+	// Use the transport layer of the existing public test package, so the test
+	// does not name a layer of any particular landscape.
+	layerRes, err := client.RunQuery(ctx,
+		"SELECT pdevclass FROM tdevc WHERE devclass = '"+testPackage+"'", 1)
+	if err != nil {
+		t.Fatalf("transport layer discovery failed: %v", err)
+	}
+	if len(layerRes.Rows) == 0 || len(layerRes.Rows[0]) == 0 || strings.TrimSpace(layerRes.Rows[0][0]) == "" {
+		t.Skipf("package %s has no transport layer on this system", testPackage)
+	}
+	transportLayer := strings.TrimSpace(layerRes.Rows[0][0])
+
+	err = client.CreatePackage(ctx, pkgName, "Integration test package",
+		cfg.User, "HOME", transportLayer, "")
 	if err != nil {
 		// The reuse branch below is how adtler#149 stayed invisible. This client
 		// cannot currently delete a package (adtler#150, an open ETag bug here
