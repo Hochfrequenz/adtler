@@ -5,6 +5,8 @@ package adt_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,12 +49,12 @@ func TestCustexportPagination_RowCountMatchesSource_Integration(t *testing.T) {
 			if rows%shortLast == 0 {
 				shortLast++ // keep the last page short, not exact
 			}
-			runPaginationExport(t, sys.Client, table, rows, shortLast, ceilDiv(rows, shortLast))
+			runPaginationExport(t, sys.Client, sys.Config.Host, table, rows, shortLast, ceilDiv(rows, shortLast))
 
 			// An exact multiple of the page size: full pages, then an empty one.
 			if d := smallestFactor(rows); d < rows {
 				exact := rows / d
-				runPaginationExport(t, sys.Client, table, rows, exact, d+1)
+				runPaginationExport(t, sys.Client, sys.Config.Host, table, rows, exact, d+1)
 			} else {
 				t.Logf("row count %d has no divisor, skipping the exact-multiple run", rows)
 			}
@@ -62,8 +64,12 @@ func TestCustexportPagination_RowCountMatchesSource_Integration(t *testing.T) {
 
 // runPaginationExport exports one table with the given page size and checks
 // the row count, the page count and the absence of per-table errors.
-func runPaginationExport(t *testing.T, client adt.Client, table string, rows, pageSize, wantPages int) {
+func runPaginationExport(t *testing.T, client adt.Client, host, table string, rows, pageSize, wantPages int) {
 	t.Helper()
+	// RunExport logs the name of a table whose writer fails. The table is
+	// discovered on the live system, so keep the standard logger quiet.
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	outputDir := t.TempDir()
 
 	summary, err := custexport.RunExport(context.Background(), client, custexport.ExportConfig{
@@ -73,7 +79,7 @@ func runPaginationExport(t *testing.T, client adt.Client, table string, rows, pa
 		Workers:   1,
 	})
 	if err != nil {
-		t.Fatalf("RunExport failed: %v", err)
+		t.Fatalf("RunExport failed: %s", redact(err.Error(), host, table))
 	}
 	for i, te := range summary.Errors {
 		// Not te.Error: the message names the table.
@@ -89,14 +95,14 @@ func runPaginationExport(t *testing.T, client adt.Client, table string, rows, pa
 
 	data, err := os.ReadFile(filepath.Join(outputDir, "json", strings.ReplaceAll(table, "/", "#")+".json"))
 	if err != nil {
-		t.Fatalf("reading the table's JSON file failed: %v", err)
+		t.Fatalf("reading the table's JSON file failed: %s", redact(err.Error(), host, table))
 	}
 	var exported struct {
 		TotalRows int `json:"total_rows"`
 		Pages     int `json:"pages"`
 	}
 	if err := json.Unmarshal(data, &exported); err != nil {
-		t.Fatalf("parsing the table's JSON file failed: %v", err)
+		t.Fatalf("parsing the table's JSON file failed: %s", redact(err.Error(), host, table))
 	}
 	t.Logf("page size %d: %d source rows, %d exported rows on %d pages (expected %d pages)",
 		pageSize, rows, exported.TotalRows, exported.Pages, wantPages)
