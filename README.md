@@ -247,14 +247,22 @@ SAP_INTEGRATION_SYSTEMS=hfq,s4u go test -tags=integration -v ./adt/...
 Where `hfq` and `s4u` are the keys of your R/3 and S/4 entries in
 `systems.json`.
 
-## Descriptions in search results
+## Descriptions in search and browse results
 
+Measured on 2026-10-09 on SAP ERP 6.0 (SAP_BASIS 750) and SAP S/4HANA, on-premise
+(SAP_BASIS 816), with `TestSearchObjects_DescriptionBySpelling_Diagnostic_Integration`:
 `SearchObjects` returns an empty `Description` when the object type filter is
-given in its fully qualified form (`CLAS/OC`, `BDEF/BDO`, `PROG/P`). ADT leaves
-the `description` attribute out of the response in that case, on SAP ERP 6.0 and
-on SAP S/4HANA alike, so this is not a parsing gap in the client. The short
-spelling (`CLAS`, `BDEF`, `PROG`) returns descriptions, and so does
-`GetObjectInfo` for a single object (adtler#152).
+given in its fully qualified form. The raw response then has no `description`
+attribute at all, so this is not a parsing gap in the client. It was measured
+for `CLAS/OC` and `PROG/P` on both releases and for `BDEF/BDO` on S/4HANA only
+(ERP 6.0 has no behavior definitions); the short spellings (`CLAS`, `BDEF`,
+`PROG`) returned descriptions for every object. Other qualified types were not
+measured. `GetObjectInfo` of a single object returned the description in the
+issue's observation on S/4HANA (adtler#152).
+
+`BrowsePackage` sends `withShortDescriptions=true`. Without it, S/4HANA leaves
+every description out of the response (none of 92 objects of one package, 67
+with the parameter); ERP 6.0 sends none either way and accepts the parameter.
 
 ## Reading RAP objects, and what a 406 means
 

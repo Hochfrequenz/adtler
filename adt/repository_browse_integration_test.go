@@ -81,12 +81,24 @@ func TestBrowsePackage_PackageName_MultiSystem_Integration(t *testing.T) {
 					t.Errorf("an object of type %s carries a package that is not the browsed one (empty: %t)", o.Type, o.PackageName == "")
 				}
 			}
-			t.Logf("objects browsed: %d, objects without package: %d", len(objects), missing)
+			described := 0
+			for _, o := range objects {
+				if o.Description != "" {
+					described++
+				}
+			}
+			t.Logf("objects browsed: %d, objects without package: %d, objects with a description: %d", len(objects), missing, described)
 
 			checked, agreeing, undocumented := 0, 0, 0
 			for _, o := range objects {
 				if checked >= browseCrossCheckLimit {
 					break
+				}
+				if strings.HasPrefix(o.Type, "DEVC") {
+					// A sub-package's own document names itself as its package
+					// (measured on both releases), not the package it is
+					// listed in, so the two answers differ by design.
+					continue
 				}
 				info, err := sys.Client.GetObjectInfo(ctx, o.URI)
 				if err != nil {

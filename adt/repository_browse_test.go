@@ -77,3 +77,34 @@ func TestBrowsePackage_SetsPackageName(t *testing.T) {
 		}
 	}
 }
+
+// TestBrowsePackage_AsksForShortDescriptions covers the description half of
+// adtler#152: SAP S/4HANA leaves the description out of a nodestructure
+// response unless the request sets withShortDescriptions=true.
+func TestBrowsePackage_AsksForShortDescriptions(t *testing.T) {
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		asked = r.URL.Query().Get("withShortDescriptions")
+		w.Header().Set("Content-Type", "application/vnd.sap.as+xml; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(browsePackageNodesXML))
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	results, err := client.BrowsePackage(context.Background(), browsedPackage)
+	if err != nil {
+		t.Fatalf("BrowsePackage: %v", err)
+	}
+	if asked != "true" {
+		t.Errorf("withShortDescriptions = %q, want %q", asked, "true")
+	}
+	if len(results) != 2 || results[0].Description != "Example program" {
+		t.Errorf("descriptions must reach the caller, got %+v", results)
+	}
+}

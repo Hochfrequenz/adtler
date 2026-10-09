@@ -18,6 +18,11 @@ func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]O
 	params := url.Values{}
 	params.Set("parent_type", ObjectTypePackage)
 	params.Set("parent_name", packageName)
+	// Without this parameter the response carries no description at all
+	// (measured on SAP S/4HANA, on-premise: none of 92 objects, against 67 with
+	// it; the 25 others have none to give). SAP ERP 6.0 sends none either way and
+	// accepts the parameter. See adtler#152.
+	params.Set("withShortDescriptions", "true")
 	path := "/sap/bc/adt/repository/nodestructure?" + params.Encode()
 
 	resp, err := c.doMutate(ctx, http.MethodPost, path, nil,

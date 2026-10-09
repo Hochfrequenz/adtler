@@ -100,7 +100,7 @@ type searchTypeSpelling struct {
 //     client drops a description ADT sent. That is a client bug, and the test
 //     fails on it.
 //
-// The searches use a bare wildcard, so no object name is baked into the test,
+// The searches use a customer-namespace wildcard, so no object name is baked into the test,
 // and the output holds booleans and counts only. A type pair is skipped when
 // the system has no object of that type.
 func TestSearchObjects_DescriptionBySpelling_Diagnostic_Integration(t *testing.T) {
