@@ -272,7 +272,10 @@ a dead end for this reason; the same URI answers `200` when asked with `*/*`.
 `GetObjectInfo` and `FetchETag` therefore make their specific offer first and,
 on a 406 only, ask once more with `*/*`. That keeps object kinds this client
 has no catalogue entry for readable — enhancement implementations, for one,
-which behave the same way.
+which behave the same way. The retry is a safety net, not the plan: function
+group includes and function modules share the function group's URI prefix but
+not its media type, so each has its own first offer (`fincludes.v2+xml` and
+`fmodules.v3+xml`) and a lookup does not cost a 406 on S/4HANA.
 
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.
