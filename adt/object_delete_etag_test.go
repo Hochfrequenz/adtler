@@ -109,15 +109,13 @@ func TestDeleteObject_Package_RetriesWithoutPreconditionOnETagMismatch(t *testin
 	}
 }
 
-// The retry is not specific to packages: any URI whose ETag is refused as a
-// mismatch is retried the same way, and the transport request that records the
-// deletion stays on both DELETEs.
+// The transport request that records the deletion stays on both DELETEs.
 func TestDeleteObject_ETagMismatchRetryKeepsTheTransportRequest(t *testing.T) {
 	const transport = "AAAK900001"
 	srv := newDeleteMock()
 	defer srv.Close()
 
-	if err := srv.client().DeleteObject(context.Background(), programsEndpoint+"/ZEXAMPLE", "", transport); err != nil {
+	if err := srv.client().DeleteObject(context.Background(), deletePackageURI, "", transport); err != nil {
 		t.Fatalf("DeleteObject: %v", err)
 	}
 	if len(srv.deletes) != 2 {
@@ -127,6 +125,27 @@ func TestDeleteObject_ETagMismatchRetryKeepsTheTransportRequest(t *testing.T) {
 		if d.corrNr != transport {
 			t.Errorf("DELETE %d carried corrNr %q, want %q", i+1, d.corrNr, transport)
 		}
+	}
+}
+
+// The retry without a precondition is for packages only: the mismatch was
+// measured for packages, and for any other object type a 412 may report a real
+// concurrent change, which must reach the caller. One DELETE, with the ETag, and
+// the 412 is returned.
+func TestDeleteObject_ETagMismatchOfOtherTypesIsNotRetried(t *testing.T) {
+	srv := newDeleteMock()
+	defer srv.Close()
+
+	err := srv.client().DeleteObject(context.Background(), programsEndpoint+"/ZEXAMPLE", "", "")
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) || adtErr.Type != "ExceptionPreconditionFailed" {
+		t.Fatalf("want the original ExceptionPreconditionFailed, got: %v", err)
+	}
+	if srv.removed {
+		t.Error("the program must not be deleted behind a refused ETag")
+	}
+	if len(srv.deletes) != 1 || !srv.deletes[0].sentIfMatch {
+		t.Errorf("DELETE requests: got %+v, want exactly one, carrying the ETag", srv.deletes)
 	}
 }
 

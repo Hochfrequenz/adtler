@@ -342,7 +342,7 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 		return err
 	}
 	err = c.sendDelete(ctx, path, etag)
-	if ClassifyError(err) != ErrorEtagMismatch {
+	if ClassifyError(err) != ErrorEtagMismatch || !isPackageURI(objectURI) {
 		return err
 	}
 	// On S/4HANA a package never matches: the ETag a GET returns and the one the
@@ -351,13 +351,19 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	// the ETag again cannot help, and parsing the expected one out of the 412
 	// text would depend on a translatable message.
 	//
-	// The ETag guards nothing here: it was read a moment ago by this very
-	// call, so no other writer's change can be caught by it. It is only a
-	// precondition some object types insist on. When SAP refuses it as a
-	// mismatch, delete without a precondition, once. A second refusal is
-	// returned as it is; the first 412 is then not part of the error, because
-	// the second answer is the one that says why the object stays.
+	// So for a package, and only for a package, delete without a precondition,
+	// once, after SAP refused the ETag as a mismatch. The mismatch was measured
+	// for packages only; for every other object type a 412 may be a real
+	// concurrent change between the read and the DELETE, and it is returned as
+	// it was before. A second refusal is returned as it is; the first 412 is
+	// then not part of the error, because the second answer is the one that
+	// says why the package stays.
 	return c.sendDelete(ctx, path, "")
+}
+
+// isPackageURI reports whether objectURI addresses a package.
+func isPackageURI(objectURI string) bool {
+	return strings.HasPrefix(strings.ToLower(objectURI), "/sap/bc/adt/packages/")
 }
 
 // fetchDeleteETag reads the object's ETag for a DELETE's If-Match header.

@@ -189,12 +189,14 @@ library, not a limit of the ADT protocol. Measured on SAP S/4HANA, on-premise
 (SAP_BASIS 816, S4CORE 109) on 2026-10-09: a `DELETE` with the ETag, with `*`
 or with the quoted ETag answers `412`, and a `DELETE` without `If-Match`
 succeeds. `DeleteObject` reads the ETag itself a moment before it deletes, so
-the header can only catch a change in the short gap inside one call, never a
-change since the caller last looked; the previous code sent it presumably
-because some object types insist on it, which was not measured per type.
-`DeleteObject` therefore still sends it first, and when SAP refuses it as a
-mismatch (any `412`, or an ETag exception) it retries once without a
-precondition.
+the header covers only the short gap between that read and the `DELETE` inside
+one call, never a change since the caller last looked. For a package that
+protection cannot work, because no ETag ever matches. `DeleteObject` therefore
+still sends the ETag first, for every object type, and only for a package whose
+ETag SAP refuses as a mismatch (`412`, or an ETag exception) does it retry once
+without a precondition. For every other object type a `412` is returned as
+before, because the mismatch was measured for packages only and elsewhere it may
+report a real concurrent change.
 `TestDeletePackage_MultiSystem_Integration` creates a local package and deletes
 it again. `TestCreatePackage_Integration` still leaves its own package behind,
 because it was written before packages could be deleted.
