@@ -38,7 +38,12 @@ func removeProgramIfPresent(t *testing.T, client adt.Client, uri string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := client.GetObjectInfo(ctx, uri); err != nil {
-		return // already gone (the happy path), or never created
+		if kind := adt.ClassifyError(err); kind != adt.ErrorNotFound {
+			// Not "gone": an authorization failure or a timeout says nothing
+			// about the program, so it must not pass for a clean cleanup.
+			t.Errorf("cleanup could not tell whether the test program %s is still there (kind %s): %v", uri, kind, err)
+		}
+		return // gone (the happy path), or never created
 	}
 	if err := client.DeleteObject(ctx, uri, "", ""); err != nil {
 		t.Errorf("cleanup could not delete the test program %s, remove it by hand: %v", uri, err)
@@ -161,9 +166,14 @@ func TestVerifySource_LeavesNoProgramBehind_MultiSystem_Integration(t *testing.T
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
-			leftovers := func() map[string]string { // name -> URI
+			// The search before the calls may skip the test; once VerifySource
+			// ran, a failing search must fail it, or a leak would go unnoticed.
+			leftovers := func(afterCalls bool) map[string]string { // name -> URI
 				found, err := sys.Client.SearchObjects(ctx, verifyTempPrefix+"*", "PROG/P", 1000)
 				if err != nil {
+					if afterCalls {
+						t.Fatalf("[%s] cannot list leftovers via quick search after VerifySource: %v", sys.Name, err)
+					}
 					t.Skipf("[%s] cannot list leftovers via quick search: %v", sys.Name, err)
 				}
 				m := make(map[string]string, len(found))
@@ -172,7 +182,7 @@ func TestVerifySource_LeavesNoProgramBehind_MultiSystem_Integration(t *testing.T
 				}
 				return m
 			}
-			before := leftovers()
+			before := leftovers(false)
 
 			for _, src := range []string{"REPORT zdummy.", "REPORT zdummy.\nIF 1 = 1."} {
 				if _, _, err := sys.Client.VerifySource(ctx, src); err != nil {
@@ -181,7 +191,7 @@ func TestVerifySource_LeavesNoProgramBehind_MultiSystem_Integration(t *testing.T
 			}
 
 			var added []string
-			for name, uri := range leftovers() {
+			for name, uri := range leftovers(true) {
 				if _, existed := before[name]; !existed {
 					added = append(added, uri)
 				}

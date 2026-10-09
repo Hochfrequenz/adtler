@@ -345,7 +345,9 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 // fail without holding anything, so that failure does not stop the delete. If
 // the delete then fails as well, the returned error wraps the delete's error
 // and names the failed release, because a lock that is really still held is
-// the likely cause.
+// the likely cause. A successful release is not undone when the delete fails:
+// a caller that wants to keep editing under its handle after a failed delete
+// has to lock the object again.
 func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, transport string) error {
 	var unlockErr error
 	if lockHandle != "" {

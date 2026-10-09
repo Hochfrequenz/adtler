@@ -116,6 +116,11 @@ type DumpClient interface {
 type QualityClient interface {
 	SyntaxCheck(ctx context.Context, objectURI string) ([]SyntaxMessage, error)
 	BatchSyntaxCheck(ctx context.Context, objectURIs []string) []ObjectSyntaxResult
+	// VerifySource syntax-checks free-standing source in a throwaway $TMP
+	// program. If the check ran but the program could not be removed again,
+	// valid and messages still hold the result and err names the leftover, so
+	// read them even when err is not nil; err alone then means the cleanup
+	// failed, not the check.
 	VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error)
 	RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error)
 	RunATCCheck(ctx context.Context, objectURIs []string, checkVariant string) (*ATCResult, error)
