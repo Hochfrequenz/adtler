@@ -60,25 +60,25 @@ func createUnactivatedTempProgram(t *testing.T, sys integrationSystem, label str
 	uri := "/sap/bc/adt/programs/programs/" + name
 
 	if err := sys.Client.CreateObject(ctx, "PROG", name, "$TMP", "adtler#187 delete test", ""); err != nil {
-		t.Fatalf("[%s] CreateObject: %v", sys.Name, err)
+		t.Fatalf("[%s] CreateObject: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 	}
 	t.Cleanup(func() { removeProgramIfPresent(t, sys.Client, uri) })
 
 	lh, err := sys.Client.LockObject(ctx, uri)
 	if err != nil {
-		t.Fatalf("[%s] LockObject: %v", sys.Name, err)
+		t.Fatalf("[%s] LockObject: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 	}
 	src, err := sys.Client.GetSource(ctx, uri)
 	if err != nil {
 		_ = sys.Client.UnlockObject(ctx, uri, lh)
-		t.Fatalf("[%s] GetSource: %v", sys.Name, err)
+		t.Fatalf("[%s] GetSource: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 	}
 	if _, err := sys.Client.SetSource(ctx, uri, "REPORT "+name+".\n", lh, "", src.ETag); err != nil {
 		_ = sys.Client.UnlockObject(ctx, uri, lh)
-		t.Fatalf("[%s] SetSource: %v", sys.Name, err)
+		t.Fatalf("[%s] SetSource: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 	}
 	if err := sys.Client.UnlockObject(ctx, uri, lh); err != nil {
-		t.Fatalf("[%s] UnlockObject: %v", sys.Name, err)
+		t.Fatalf("[%s] UnlockObject: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 	}
 	return uri
 }
@@ -107,10 +107,10 @@ func TestDeleteObject_AfterLockObject_MultiSystem_Integration(t *testing.T) {
 
 			lh, err := sys.Client.LockObject(ctx, uri)
 			if err != nil {
-				t.Fatalf("[%s] LockObject: %v", sys.Name, err)
+				t.Fatalf("[%s] LockObject: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 			}
 			if err := sys.Client.DeleteObject(ctx, uri, lh, ""); err != nil {
-				t.Fatalf("[%s] DeleteObject with the lock handle: %v", sys.Name, err)
+				t.Fatalf("[%s] DeleteObject with the lock handle: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 			}
 			requireProgramGone(t, sys.Client, uri)
 			t.Logf("[%s] lock-then-delete removed the program", sys.Name)
@@ -137,9 +137,9 @@ func TestDeleteObject_NeverActivatedProgram_MultiSystem_Integration(t *testing.T
 			if err := sys.Client.DeleteObject(context.Background(), uri, "", ""); err != nil {
 				var adtErr *adt.ADTError
 				if errors.As(err, &adtErr) && adtErr.StatusCode == 412 {
-					t.Fatalf("[%s] DeleteObject of a never-activated program answered 412 (ETag mismatch): %v", sys.Name, err)
+					t.Fatalf("[%s] DeleteObject of a never-activated program answered 412 (ETag mismatch): %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 				}
-				t.Fatalf("[%s] DeleteObject: %v", sys.Name, err)
+				t.Fatalf("[%s] DeleteObject: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 			}
 			requireProgramGone(t, sys.Client, uri)
 			t.Logf("[%s] never-activated program deleted without a lock", sys.Name)
@@ -172,9 +172,9 @@ func TestVerifySource_LeavesNoProgramBehind_MultiSystem_Integration(t *testing.T
 				found, err := sys.Client.SearchObjects(ctx, verifyTempPrefix+"*", "PROG/P", 1000)
 				if err != nil {
 					if afterCalls {
-						t.Fatalf("[%s] cannot list leftovers via quick search after VerifySource: %v", sys.Name, err)
+						t.Fatalf("[%s] cannot list leftovers via quick search after VerifySource: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 					}
-					t.Skipf("[%s] cannot list leftovers via quick search: %v", sys.Name, err)
+					t.Skipf("[%s] cannot list leftovers via quick search: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 				}
 				m := make(map[string]string, len(found))
 				for _, o := range found {
@@ -186,7 +186,7 @@ func TestVerifySource_LeavesNoProgramBehind_MultiSystem_Integration(t *testing.T
 
 			for _, src := range []string{"REPORT zdummy.", "REPORT zdummy.\nIF 1 = 1."} {
 				if _, _, err := sys.Client.VerifySource(ctx, src); err != nil {
-					t.Errorf("[%s] VerifySource: %v", sys.Name, err)
+					t.Errorf("[%s] VerifySource: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 				}
 			}
 

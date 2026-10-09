@@ -340,12 +340,13 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 // stays behind as an orphaned enqueue (adtler#187). SAP ERP 6.0 (R/3) lets the
 // delete through either way.
 //
-// Releasing is best effort. A handle that is already released, which callers
-// that unlock first and then pass the handle along produce, makes the UNLOCK
-// fail without holding anything, so that failure does not stop the delete. If
-// the delete then fails as well, the returned error wraps the delete's error
-// and names the failed release, because a lock that is really still held is
-// the likely cause. A successful release is not undone when the delete fails:
+// Releasing is best effort. SAP answers an UNLOCK with 200 for a handle that
+// is bogus or already released (see UnlockObject), so a caller that unlocks
+// first and then passes the handle along causes no failure. If the UNLOCK
+// request fails for another reason, such as a transport error, that failure
+// alone does not stop the delete. If the delete then fails as well, the
+// returned error wraps the delete's error and names the failed release,
+// because a lock that is really still held is the likely cause. A successful release is not undone when the delete fails:
 // a caller that wants to keep editing under its handle after a failed delete
 // has to lock the object again.
 func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, transport string) error {

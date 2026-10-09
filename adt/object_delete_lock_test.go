@@ -114,17 +114,17 @@ func TestDeleteObject_WithoutLockHandleSendsNoUnlock(t *testing.T) {
 	}
 }
 
-// A handle that is already released (the caller called UnlockObject and still
-// passes the handle along, which several callers do) makes the UNLOCK fail.
-// That must not block the delete: nothing is held, so the DELETE decides the
-// outcome.
-func TestDeleteObject_StaleLockHandleDoesNotBlockDelete(t *testing.T) {
+// A failing UNLOCK request, for whatever reason, must not stop the delete: the
+// DELETE decides the outcome. (SAP itself answers 200 for a bogus or already
+// released handle, so this covers a failure of the request, not a stale
+// handle.)
+func TestDeleteObject_FailedUnlockDoesNotStopTheDelete(t *testing.T) {
 	srv := newLockAwareDeleteServer(false)
 	srv.unlockCode = http.StatusBadRequest
 	defer srv.Close()
 
 	if err := srv.client().DeleteObject(context.Background(), deleteLockObjectURI, deleteLockHandle, ""); err != nil {
-		t.Fatalf("DeleteObject with a stale handle: %v", err)
+		t.Fatalf("DeleteObject after a failed unlock: %v", err)
 	}
 	if !srv.deleted {
 		t.Fatal("object was not deleted")

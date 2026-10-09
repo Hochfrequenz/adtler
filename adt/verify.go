@@ -4,7 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"time"
 )
+
+// verifyCleanupTimeout bounds the removal of VerifySource's temporary program,
+// which runs even when the caller's context is already done.
+const verifyCleanupTimeout = 30 * time.Second
 
 // VerifySource syntax-checks standalone ABAP source without requiring an
 // existing object. It creates a temporary program in the local $TMP package,
@@ -36,8 +41,16 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 	// LockObject, so on S/4HANA a lock taken here would block it and leave the
 	// program behind (adtler#187). A failure is returned, not dropped, because
 	// a silent failure leaks one program into $TMP per call.
+	//
+	// The cleanup does not use the caller's context: a call that timed out or
+	// was cancelled is exactly when the program would otherwise stay behind.
+	// A lock still held at that point is handed to DeleteObject, which releases
+	// it before it deletes.
+	var held string
 	defer func() {
-		delErr := c.DeleteObject(ctx, objectURI, "", "")
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyCleanupTimeout)
+		defer cancel()
+		delErr := c.DeleteObject(cleanupCtx, objectURI, held, "")
 		if delErr == nil {
 			return
 		}
@@ -55,16 +68,25 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 	if err != nil {
 		return false, nil, fmt.Errorf("VerifySource: lock: %w", err)
 	}
+	held = lockHandle
+	// release lets go of the lock. Only a release that went through clears
+	// held, so the cleanup still releases a lock that could not be released
+	// here, for instance because the caller's context is done.
+	release := func() {
+		if err := c.UnlockObject(ctx, objectURI, lockHandle); err == nil {
+			held = ""
+		}
+	}
 	src, err := c.GetSource(ctx, objectURI)
 	if err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+		release()
 		return false, nil, fmt.Errorf("VerifySource: get source for etag: %w", err)
 	}
 	if _, err := c.SetSource(ctx, objectURI, source, lockHandle, "", src.ETag); err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+		release()
 		return false, nil, fmt.Errorf("VerifySource: set source: %w", err)
 	}
-	_ = c.UnlockObject(ctx, objectURI, lockHandle)
+	release()
 
 	messages, err = c.SyntaxCheck(ctx, objectURI)
 	if err != nil {

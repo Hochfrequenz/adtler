@@ -192,3 +192,40 @@ func TestVerifySource_ReportsFailedCleanup(t *testing.T) {
 		t.Errorf("the syntax-check result should still be returned: valid=%v, %d messages", valid, len(msgs))
 	}
 }
+
+// verifyRoundTrip adapts a function to http.RoundTripper.
+type verifyRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f verifyRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A caller whose context ends while VerifySource holds the lock must not leave
+// the program and the lock behind: the cleanup runs on its own context, releases
+// the lock that could not be released with the dead one, and deletes the
+// program. The mock refuses a DELETE while a lock is held, like S/4HANA.
+func TestVerifySource_CleansUpAfterTheCallersContextEnds(t *testing.T) {
+	st := &verifyServerState{}
+	srv := verifySourceServerWithState(false, st)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := verifyRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/source/main") {
+			cancel() // the caller gives up right after the lock was taken
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})
+	client := adt.NewClientWithTransport(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}, transport)
+
+	if _, _, err := client.VerifySource(ctx, "REPORT zx."); err == nil {
+		t.Fatal("expected an error: the caller's context ended during the call")
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.locked {
+		t.Error("the lock was left behind")
+	}
+	if !st.deleted {
+		t.Error("the temporary program was left behind")
+	}
+}
