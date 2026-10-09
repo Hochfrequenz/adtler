@@ -122,11 +122,12 @@ func discoverPaginationTable(t *testing.T, client adt.Client) (string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), searchBudget)
 	defer cancel()
 
+	// Only DD02L is read here. Joining it with DD03L and DISTINCT is too slow
+	// on ERP 6.0 to finish within the budget; the key columns are checked per
+	// candidate below instead.
 	candidates, err := client.RunQuery(ctx,
-		"SELECT DISTINCT a~TABNAME FROM DD02L AS a INNER JOIN DD03L AS b ON a~TABNAME = b~TABNAME"+
-			" WHERE a~TABCLASS = 'TRANSP' AND a~CONTFLAG IN ('C','G') AND a~AS4LOCAL = 'A'"+
-			" AND b~KEYFLAG = 'X' AND b~AS4LOCAL = 'A' AND b~FIELDNAME <> 'MANDT' AND b~FIELDNAME NOT LIKE '.%'"+
-			" ORDER BY a~TABNAME", maxCandidates)
+		"SELECT TABNAME FROM DD02L WHERE TABCLASS = 'TRANSP' AND CONTFLAG IN ('C','G')"+
+			" AND AS4LOCAL = 'A' AND TABNAME LIKE 'T%' ORDER BY TABNAME", maxCandidates)
 	if err != nil {
 		if ctx.Err() != nil {
 			t.Skip("candidate search exceeded its time budget")
@@ -135,6 +136,7 @@ func discoverPaginationTable(t *testing.T, client adt.Client) (string, int) {
 	}
 
 	checked := 0
+	fallbackName, fallbackRows := "", 0
 	for _, row := range candidates.Rows {
 		if ctx.Err() != nil {
 			break
@@ -155,8 +157,31 @@ func discoverPaginationTable(t *testing.T, client adt.Client) (string, int) {
 		if err != nil || n < minRows || n > maxRows {
 			continue
 		}
+		// The export can only paginate on a key besides the client.
+		keys, err := client.RunQuery(ctx,
+			"SELECT COUNT(*) FROM DD03L WHERE TABNAME = '"+name+"' AND AS4LOCAL = 'A'"+
+				" AND KEYFLAG = 'X' AND FIELDNAME <> 'MANDT' AND FIELDNAME NOT LIKE '.%'", 1)
+		if err != nil || len(keys.Rows) != 1 || len(keys.Rows[0]) != 1 {
+			continue
+		}
+		if k, err := strconv.Atoi(strings.TrimSpace(keys.Rows[0][0])); err != nil || k == 0 {
+			continue
+		}
+		// Prefer a row count with a divisor, so that the exact-multiple run
+		// (full pages, then an empty one) can happen; keep the first suitable
+		// table as a fallback.
+		if smallestFactor(n) == n {
+			if fallbackName == "" {
+				fallbackName, fallbackRows = name, n
+			}
+			continue
+		}
 		t.Logf("%d candidate tables, %d counted, chose a table with %d rows", len(candidates.Rows), checked, n)
 		return name, n
+	}
+	if fallbackName != "" {
+		t.Logf("%d candidate tables, %d counted, only a table with a prime row count (%d) fits", len(candidates.Rows), checked, fallbackRows)
+		return fallbackName, fallbackRows
 	}
 	t.Skipf("no customizing table with %d to %d rows found (%d candidates, %d counted)",
 		minRows, maxRows, len(candidates.Rows), checked)
