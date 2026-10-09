@@ -24,47 +24,32 @@ func writeAdiFailed(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="AdiFailed"/><message>boom</message></exc:exception>`))
 }
 
-// TestAttach_AdiFailedThenSuccess_Retries guards the aibap.mcp#513 mitigation:
-// a fast-failing 500 AdiFailed response from Attach is transparently retried
-// (bounded, fixed delay) rather than surfaced on the first failure, since the
-// issue's live investigation found this specific failure shape intermittent
-// — retrying the same debuggeeId sometimes succeeds.
-func TestAttach_AdiFailedThenSuccess_Retries(t *testing.T) {
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == discoveryPath {
-			w.Header().Set("X-CSRF-Token", "token")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == attachMethod {
-			n := calls.Add(1)
-			if n < 3 {
-				writeAdiFailed(w)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
+// adiFailedSubTypeKey is the <properties> entry the ADT debugger REST
+// framework uses for an AdiFailed response's subtype.
+const adiFailedSubTypeKey = "com.sap.adt.communicationFramework.subType"
 
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	dbg := NewDebugSession(NewClient(cfg), "U")
-
-	if err := dbg.Attach(context.Background(), "debuggee-1"); err != nil {
-		t.Fatalf("Attach: unexpected error after retries: %v", err)
-	}
-	if got := calls.Load(); got != 3 {
-		t.Errorf("attach requests: got %d, want 3", got)
-	}
+// writeAdiFailedSubType writes a 500 AdiFailed response carrying the given
+// subtype, the shape the attach handler uses to say why an attach failed.
+func writeAdiFailedSubType(w http.ResponseWriter, subType, message string) {
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write([]byte(`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">` +
+		`<namespace id="com.sap.adt"/><type id="AdiFailed"/>` +
+		`<message>` + message + `</message>` +
+		`<properties>` +
+		`<entry key="` + adiFailedSubTypeKey + `">` + subType + `</entry>` +
+		`</properties>` +
+		`</exc:exception>`))
 }
 
-// TestAttach_AdiFailedExhausted_ReturnsError guards the retry ceiling: after
-// adiFailedMaxRetries retries all still fail, Attach gives up and returns an
-// error that still lets callers recover the underlying *ADTError.
-func TestAttach_AdiFailedExhausted_ReturnsError(t *testing.T) {
+// TestAttach_AdiFailed_SingleAttempt_ReturnsFirstError guards adtler#195:
+// the attach handler deletes the debuggee's activation row before the kernel
+// attach runs, so after a failed attach the debuggee is consumed and every
+// further attach can only fail with subtype invalidDebuggee. Attach must
+// therefore send exactly one request and return the first response's error
+// unchanged, with its subtype intact. The fake server answers any second
+// attach with invalidDebuggee, exactly as SAP would, so a regression that
+// retries shows up both in the request count and in the returned subtype.
+func TestAttach_AdiFailed_SingleAttempt_ReturnsFirstError(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == discoveryPath {
@@ -73,8 +58,11 @@ func TestAttach_AdiFailedExhausted_ReturnsError(t *testing.T) {
 			return
 		}
 		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == attachMethod {
-			calls.Add(1)
-			writeAdiFailed(w)
+			if calls.Add(1) == 1 {
+				writeAdiFailedSubType(w, "invalidServer", "first")
+				return
+			}
+			writeAdiFailedSubType(w, "invalidDebuggee", "retry")
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -88,25 +76,31 @@ func TestAttach_AdiFailedExhausted_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
-	if got := calls.Load(); got != int32(1+adiFailedMaxRetries) {
-		t.Errorf("attach requests: got %d, want %d", got, 1+adiFailedMaxRetries)
+	if got := calls.Load(); got != 1 {
+		t.Errorf("attach requests: got %d, want 1 (attach must never be retried)", got)
 	}
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
 		t.Fatalf("expected error to wrap *ADTError, got %T: %v", err, err)
 	}
 	if adtErr.Type != ExceptionTypeAdiFailed {
-		t.Errorf("wrapped ADTError.Type: got %q, want %q", adtErr.Type, ExceptionTypeAdiFailed)
+		t.Errorf("ADTError.Type: got %q, want %q", adtErr.Type, ExceptionTypeAdiFailed)
 	}
-	if !strings.Contains(err.Error(), "retries") {
-		t.Errorf("error message should mention retries, got: %v", err)
+	if got := adtErr.Properties[adiFailedSubTypeKey]; got != "invalidServer" {
+		t.Errorf("subtype: got %q, want %q (the first response's)", got, "invalidServer")
+	}
+	if adtErr.Message != "first" {
+		t.Errorf("message: got %q, want %q (the first response's)", adtErr.Message, "first")
+	}
+	if strings.Contains(err.Error(), "retries") {
+		t.Errorf("error must not claim retries, got: %v", err)
 	}
 }
 
-// TestStep_AdiFailedThenSuccess_Retries mirrors the Attach retry test for
-// Step's non-timeout 500 AdiFailed path (the rarer of the two failure sites
-// documented on aibap.mcp#513, e.g. a stepInto failing right after a
-// successful attach).
+// TestStep_AdiFailedThenSuccess_Retries guards Step's bounded retry on a
+// non-timeout 500 AdiFailed (aibap.mcp#513, e.g. a stepInto failing right
+// after a successful attach). Attach deliberately has no such retry — see
+// TestAttach_AdiFailed_SingleAttempt_ReturnsFirstError.
 func TestStep_AdiFailedThenSuccess_Retries(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -195,8 +189,7 @@ func TestStep_DebuggeeEndedError_NeverRetried(t *testing.T) {
 // adtler#159: attaching to a debuggee that already ran to completion hits the
 // same fast AdiFailed/CX_TPDAPI_DEBUGGEE_ENDED signature as Step, but Attach
 // has no DebuggeeEndedError-shaped success to return for it — it's still a
-// real failure (nothing to attach to), just one retrying can never fix, so it
-// must not be retried either.
+// real failure (nothing to attach to), returned after a single request.
 func TestAttach_DebuggeeEndedAdiFailed_NeverRetried(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
