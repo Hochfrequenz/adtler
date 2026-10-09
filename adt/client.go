@@ -39,6 +39,9 @@ type ObjectClient interface {
 	CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error
 	CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error
 	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, transport string) error
+	// DeleteObject deletes the object. lockHandle is optional: pass "" when
+	// you hold no lock, or the handle from LockObject and it is released
+	// before the delete (adtler#187).
 	DeleteObject(ctx context.Context, objectURI, lockHandle, transport string) error
 	ActivateObjects(ctx context.Context, objectURIs []string) (*ActivationResult, error)
 	GetInactiveObjects(ctx context.Context) ([]ObjectInfo, error)
@@ -113,6 +116,11 @@ type DumpClient interface {
 type QualityClient interface {
 	SyntaxCheck(ctx context.Context, objectURI string) ([]SyntaxMessage, error)
 	BatchSyntaxCheck(ctx context.Context, objectURIs []string) []ObjectSyntaxResult
+	// VerifySource syntax-checks free-standing source in a throwaway $TMP
+	// program. If the check ran but the program could not be removed again,
+	// valid and messages still hold the result and err names the leftover, so
+	// read them even when err is not nil; err alone then means the cleanup
+	// failed, not the check.
 	VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error)
 	RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error)
 	RunATCCheck(ctx context.Context, objectURIs []string, checkVariant string) (*ATCResult, error)

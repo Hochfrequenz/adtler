@@ -328,7 +328,42 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 	return checkResponse(resp)
 }
 
+// DeleteObject deletes the object at objectURI. transport is the request that
+// records the deletion for a transportable object and may be empty for a local
+// ($TMP) object.
+//
+// lockHandle is optional. Pass "" if you hold no lock, which is the normal
+// case. If you did lock the object with LockObject, pass the handle and
+// DeleteObject releases that lock before it deletes. The delete runs in a
+// different SAP session than the lock, so on S/4HANA the caller's own lock
+// blocks it with 403 ExceptionResourceNoAccess ("is currently editing") and
+// stays behind as an orphaned enqueue (adtler#187). SAP ERP 6.0 (R/3) lets the
+// delete through either way.
+//
+// Releasing is best effort. SAP answers an UNLOCK with 200 for a handle that
+// is bogus or already released (see UnlockObject), so a caller that unlocks
+// first and then passes the handle along causes no failure. If the UNLOCK
+// request fails for another reason, such as a transport error, that failure
+// alone does not stop the delete. If the delete then fails as well, the
+// returned error wraps the delete's error and names the failed release,
+// because a lock that is really still held is the likely cause. A successful release is not undone when the delete fails:
+// a caller that wants to keep editing under its handle after a failed delete
+// has to lock the object again.
 func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, transport string) error {
+	var unlockErr error
+	if lockHandle != "" {
+		unlockErr = c.UnlockObject(ctx, objectURI, lockHandle)
+	}
+	err := c.deleteObject(ctx, objectURI, transport)
+	if err != nil && unlockErr != nil {
+		return fmt.Errorf("%w (releasing the lock handle beforehand also failed: %v)", err, unlockErr)
+	}
+	return err
+}
+
+// deleteObject is the optimistic-locking delete described in DeleteObject. It
+// takes no lock handle: the caller's lock, if any, is already released.
+func (c *httpClient) deleteObject(ctx context.Context, objectURI, transport string) error {
 	path := objectURI
 	if transport != "" {
 		path += "?corrNr=" + transport
