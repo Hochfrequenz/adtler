@@ -35,12 +35,12 @@ const uriMappingErrorType = "uriMappingError"
 // VIT Accept mapping (adt/repository.go, vitObjectPropertiesContentType) and
 // readWithAcceptFallback's */* retry each mask a failure of the other.
 func TestGetObjectInfo_VIT_Integration(t *testing.T) {
-	// Known gap: on the S/4 system the test was last measured against, UIAD and
-	// WDCC objects exist but ADT has no handler for the segments below
-	// (uriMappingError), so both sub-tests skip as "unmapped", not as "no
-	// object". UIAC, ADVC and LRCC pass there. On ECC every type skips (no
-	// object, or unmapped). The segments for UIAD and WDCC may be wrong; to be
-	// tracked in a follow-up issue.
+	// Known gap (#217): on the S/4 system the test was last measured against,
+	// UIAD objects exist but ADT has no handler for the segment below
+	// (uriMappingError for every object tried), so that sub-test skips as
+	// "unmapped", not as "no object". WDCC is mixed: some objects are
+	// unmapped, most answer 404. UIAC, ADVC and LRCC pass there. On ECC every
+	// type skips (no object, or unmapped). The UIAD segment is probably wrong.
 	tests := []struct {
 		tadir   string // TADIR object type
 		segment string // VIT URI object_type segment
