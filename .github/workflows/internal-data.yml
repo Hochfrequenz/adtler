@@ -1,0 +1,14 @@
+name: internal-data
+on: [push, pull_request]
+jobs:
+  datacheck:
+    runs-on: ubuntu-latest
+    name: datacheck
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - uses: actions/checkout@v7
+      - name: Scan tracked files for internal SAP identifiers
+        run: git ls-files -z | xargs -0 go run ./tools/datacheck

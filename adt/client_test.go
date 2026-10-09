@@ -22,6 +22,13 @@ const checkrunsPath = "/sap/bc/adt/checkruns"
 // files. Hoisted to a constant to satisfy goconst.
 const activationPath = "/sap/bc/adt/activation"
 
+// aunitTestRunsPath is the ABAP Unit run endpoint. Hoisted for goconst.
+const aunitTestRunsPath = "/sap/bc/adt/abapunit/testruns"
+
+// inactiveObjectsPath is the activation inactive-objects endpoint. Hoisted
+// for goconst.
+const inactiveObjectsPath = "/sap/bc/adt/activation/inactiveobjects"
+
 // logoffPath is the ICF logoff endpoint used by Logout and by
 // CreateObject's post-create session cleanup. Hoisted for goconst.
 const logoffPath = "/sap/public/bc/icf/logoff"
@@ -175,7 +182,7 @@ func TestSecureCookieOnHTTPDetected(t *testing.T) {
 		if r.URL.Path == csrfEndpoint {
 			w.Header().Set("X-CSRF-Token", "token")
 			// Simulate S4 behavior: set cookie with Secure flag over HTTP
-			w.Header().Add("Set-Cookie", "sap-XSRF_S4U_100=abc123; path=/; secure; HttpOnly")
+			w.Header().Add("Set-Cookie", "sap-XSRF_AAA_100=abc123; path=/; secure; HttpOnly")
 			w.WriteHeader(http.StatusOK)
 			return
 		}

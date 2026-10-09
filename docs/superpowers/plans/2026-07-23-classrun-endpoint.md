@@ -197,7 +197,7 @@ type ClassRunClient interface {
 // The session is stateless: classrun only executes the class; any locking or
 // commit the class performs is the class's own concern. Namespace slashes in
 // className are percent-encoded automatically by doMutate → encodeNamespacePath
-// (triggered by the "//" that results from appending "/na2/foo" to the base).
+// (triggered by the "//" that results from appending "/xyz/foo" to the base).
 func (c *httpClient) RunClass(ctx context.Context, className string) (*ClassRunResult, error) {
 	uri := "/sap/bc/adt/oo/classrun/" + strings.ToLower(className)
 	resp, err := c.doMutate(ctx, http.MethodPost, uri, nil,
@@ -290,7 +290,7 @@ Expected: PASS.
 
 - [ ] **Step 8: Add the namespace-encoding test**
 
-The `//` produced by appending a lower-cased `/na2/foo` to the base triggers `encodeNamespacePath`, which percent-encodes the namespace slashes. The server sees the encoded form via `r.URL.EscapedPath()` (`r.URL.Path` would decode `%2f` back to `/`). Append to `adt/classrun_test.go`:
+The `//` produced by appending a lower-cased `/xyz/foo` to the base triggers `encodeNamespacePath`, which percent-encodes the namespace slashes. The server sees the encoded form via `r.URL.EscapedPath()` (`r.URL.Path` would decode `%2f` back to `/`). Append to `adt/classrun_test.go`:
 
 ```go
 // TestRunClass_Namespaced verifies that a namespaced class name is
@@ -313,17 +313,17 @@ func TestRunClass_Namespaced(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	result, err := client.RunClass(context.Background(), "/NA2/CL_FOO")
+	result, err := client.RunClass(context.Background(), "/XYZ/CL_FOO")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := classrunBase + "%2fna2%2fcl_foo"
+	want := classrunBase + "%2fxyz%2fcl_foo"
 	if gotEscapedPath != want {
 		t.Errorf("escaped path: got %q, want %q", gotEscapedPath, want)
 	}
 	// ClassName echoes the caller's input verbatim (not lower-cased).
-	if result.ClassName != "/NA2/CL_FOO" {
-		t.Errorf("ClassName: got %q, want /NA2/CL_FOO", result.ClassName)
+	if result.ClassName != "/XYZ/CL_FOO" {
+		t.Errorf("ClassName: got %q, want /XYZ/CL_FOO", result.ClassName)
 	}
 }
 ```
@@ -406,16 +406,16 @@ git commit -m "feat: add RunClass client for ADT classrun endpoint"
 
 **Interfaces:**
 - Consumes: `eachSystem(t)` (`integration_helpers_test.go:161`), `adt.Client.RunClass` (from Task 1), `adt.Client.GetObjectInfo` (fixture-existence pre-check), `adt.ADTError`. The fixture classes live in `testPackage` (`Z_ADT_MCP_TEST`) but are referenced by name via the `classrunFixture`/`classrunThrowFixture` consts, not through the `testPackage` symbol.
-- Produces: nothing consumed by later tasks. Confirms live behaviour against the SAP handler; the spec's open verification points #1 and #2 were already resolved by reading `CL_OO_ADT_RES_CLASSRUN` on both HFQ and S4U (see the "Verified against the SAP handler" note below), and this task is the runtime confirmation of that reading.
+- Produces: nothing consumed by later tasks. Confirms live behaviour against the SAP handler; the spec's open verification points #1 and #2 were already resolved by reading `CL_OO_ADT_RES_CLASSRUN` on both the ECC and S/4 systems (see the "Verified against the SAP handler" note below), and this task is the runtime confirmation of that reading.
 
-**Verified against the SAP handler (2026-07-23, HFQ + S4U):** The classrun request is served by `CL_OO_ADT_RES_CLASSRUN`, method `post`. Reading its source on both systems confirmed: POST; response `text/plain` (`if_rest_media_type=>gc_text_plain`); the class name is read as a URI attribute and `TRANSLATE ... TO UPPER CASE`d server-side (so client lower-casing is a convention, not a functional requirement); no request body is read. The handler wraps the `main()` call in a `TRY ... CATCH cx_sy_create_object_error` only, so:
+**Verified against the SAP handler (2026-07-23, the ECC and S/4 systems):** The classrun request is served by `CL_OO_ADT_RES_CLASSRUN`, method `post`. Reading its source on both systems confirmed: POST; response `text/plain` (`if_rest_media_type=>gc_text_plain`); the class name is read as a URI attribute and `TRANSLATE ... TO UPPER CASE`d server-side (so client lower-casing is a convention, not a functional requirement); no request body is read. The handler wraps the `main()` call in a `TRY ... CATCH cx_sy_create_object_error` only, so:
 - **Uncaught runtime exception in `main()`** (e.g. `cx_sy_zerodivide`) → not caught → propagates → the ADT REST framework returns a **non-2xx HTTP error** → `*adt.ADTError`.
 - **"Soft" failures** — missing `S_DEVELOP` authorization, or a class that does not implement the interface / cannot be instantiated (`cx_sy_create_object_error`) — are written into the body and returned as **HTTP 200 with an error string**. A non-existent class therefore comes back as **200-with-text, NOT 404**. A 404 only happens if the classrun endpoint itself is absent — which it is not, on either system.
 
 **Precondition (ordering dependency):** The fixture classes must exist in `Z_ADT_MCP_TEST` before these tests can pass:
-- `ZCL_ADT_MCP_CLASSRUN_TST` — implements `IF_OO_ADT_CLASSRUN`; its `main` writes a known string (`out->write( 'CLASSRUN_OK' ).`). Note: on HFQ the console-out interface differs (`IF_OO_ADT_CLASSRUN_OUT` is absent; the older handler uses `write_text`), so the fixture's `main` body may need a system-appropriate variant — a fixture concern, not a Go-client one.
+- `ZCL_ADT_MCP_CLASSRUN_TST` — implements `IF_OO_ADT_CLASSRUN`; its `main` writes a known string (`out->write( 'CLASSRUN_OK' ).`). Note: on the ECC system the console-out interface differs (`IF_OO_ADT_CLASSRUN_OUT` is absent; the older handler uses `write_text`), so the fixture's `main` body may need a system-appropriate variant — a fixture concern, not a Go-client one.
 - A throwing variant, e.g. `ZCL_ADT_MCP_CLASSRUN_ERR` — its `main` raises an **uncaught** exception (`RAISE EXCEPTION TYPE cx_sy_zerodivide.` or similar). Per the handler analysis above this surfaces as an `*adt.ADTError` (HTTP 5xx), not 200-with-text.
-- (Optional, HFQ-specific) a namespaced variant `/NA2/CL_ADT_MCP_CLASSRUN` if the `/NA2/` namespace is available on the target system; otherwise the namespace encoding is already covered by the Task 1 unit test.
+- (Optional, ECC-specific) a namespaced variant `/XYZ/CL_ADT_MCP_CLASSRUN` if the `/XYZ/` namespace is available on the target system; otherwise the namespace encoding is already covered by the Task 1 unit test.
 
 These are delivered via the [Z_ADT_MCP_TEST](https://github.com/Hochfrequenz/Z_ADT_MCP_TEST) repo. Because a missing fixture returns 200-with-text (not 404), the sub-tests `t.Skip` by **pre-checking class existence with `GetObjectInfo`**, not by catching a 404.
 
@@ -456,8 +456,8 @@ func classrunClassURI(name string) string {
 // TestRunClass_Integration runs a real classrun class on every whitelisted
 // system (R/3 and S/4 via eachSystem) and asserts the known console string
 // comes back. This also exercises the classrun framework on each system —
-// the endpoint handler CL_OO_ADT_RES_CLASSRUN is present on both HFQ/ECC and
-// S4U (spec open verification point #2, resolved).
+// the endpoint handler CL_OO_ADT_RES_CLASSRUN is present on both the ECC system and
+// the S/4 system (spec open verification point #2, resolved).
 //
 // The fixture-existence pre-check uses GetObjectInfo, NOT a 404 from RunClass:
 // the handler returns HTTP 200 with an error string for a missing/invalid
@@ -578,7 +578,7 @@ The real-SAP integration run (workflow step 4) will exercise `TestRunClass_Integ
 - HTTP errors via `checkResponse` → `ADTError` with body preserved → Task 1, Steps 10-11. ✅
 - Runtime-exception open verification point → Task 2, Step 3. ✅
 - Unit tests: success (POST, empty body, CSRF header, text/plain, parsed body), URI, UTF-8, HTTP error → Task 1. ✅
-- Integration via `eachSystem(t)` over R/3 + S/4, namespaced + throwing variants, HFQ availability → Task 2. ✅
+- Integration via `eachSystem(t)` over R/3 + S/4, namespaced + throwing variants, `/XYZ/` availability → Task 2. ✅
 - Fixture-first ordering dependency → Task 2 precondition + Step 6. ✅
 
 **2. Placeholder scan:** No "TBD"/"handle edge cases"/"similar to Task N". Every code step carries full code. The one deferred item — the throwing-class strict assertion — is intentional per the spec's open verification point and is explicitly scheduled in Task 2 Step 6, not a placeholder.

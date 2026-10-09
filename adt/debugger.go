@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,68 +76,279 @@ func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
 	}
 }
 
-// BreakpointResult holds the response from setting a breakpoint.
+// BreakpointScope selects which breakpoint set a request addresses.
+type BreakpointScope string
+
+const (
+	// BreakpointScopeExternal addresses the external breakpoints of the
+	// logged-on user, requestUser and ideId: set before a run, matched when a
+	// listener is waiting. Other DebugSessions with the same user and IDE ID
+	// see the same set.
+	BreakpointScopeExternal BreakpointScope = "external"
+	// BreakpointScopeDebugger addresses the breakpoints of the debugger this
+	// DebugSession is attached to. Requests in this scope carry
+	// X-sap-adt-sessiontype: stateful, like Attach and Step, and fail with
+	// ErrNoSessionAttached when no debugger is attached.
+	BreakpointScopeDebugger BreakpointScope = "debugger"
+)
+
+// maxBreakpointsPerRequest is the limit the breakpoint resource enforces.
+const maxBreakpointsPerRequest = 30
+
+// LineBreakpoint is one line breakpoint to set with SetBreakpoints.
+type LineBreakpoint struct {
+	// ObjectURI is the source URI, e.g. /sap/bc/adt/programs/programs/ZREPORT/source/main.
+	ObjectURI string
+	Line      int
+	// ObjectType and ObjectName (adtcore:type, adtcore:name, e.g. "PROG/P",
+	// "ZREPORT") are optional and omitted from the request when empty: the
+	// resource derives program, include and line from ObjectURI alone.
+	ObjectType string
+	ObjectName string
+}
+
+// BreakpointResult holds the response for one requested breakpoint.
+//
+// A breakpoint is set only when ID is non-empty and ErrorKind and
+// ErrorMessage are both empty — see IsSet. SAP can return an ID together
+// with an error.
 type BreakpointResult struct {
-	ID           string
+	ID string
+	// ErrorKind is SAP's errorKind attribute, e.g. "existing",
+	// "tooManyBreakpoints", "invalidPosition", "conditionError",
+	// "nonAbapFlavour", "error". Empty when SAP sent none.
+	ErrorKind    string
 	ErrorMessage string
 }
 
-// SetBreakpoint sets an external line breakpoint on the given object.
-// Uses syncMode=full to persist the breakpoint in SAP shared memory,
-// which is required for the listener to detect debug events.
-func (d *DebugSession) SetBreakpoint(ctx context.Context, objectURI string, line int, objectType, objectName string) (*BreakpointResult, error) {
-	uri := fmt.Sprintf("%s#start=%d,0", objectURI, line)
+// IsSet reports whether SAP set the breakpoint.
+func (r BreakpointResult) IsSet() bool {
+	return r.ID != "" && r.ErrorKind == "" && r.ErrorMessage == ""
+}
+
+// errNoBreakpointResult is the ErrorMessage of a requested breakpoint that
+// the response carried no entry for.
+const errNoBreakpointResult = "not set: SAP returned no result for this breakpoint"
+
+// ErrNoSessionAttached is returned, wrapping the *ADTError, when a
+// BreakpointScopeDebugger request reaches SAP while this DebugSession has no
+// attached debugger.
+var ErrNoSessionAttached = errors.New("no debugger attached")
+
+// CL_TPDA_ADT_RES_BREAKPOINTS raises ExceptionInvalidData (400) with subtype
+// noSessionAttached (CX_TPDA_ADT_FAILURE=>C_SUBTYPE-NO_SESSION_ATTACHED) when
+// scope=debugger finds no attached debugger. The ADT framework transmits an
+// exception's subtype as the property adtExceptionSubtypeKey
+// (CX_ADT_REST=>CO_EXC_SUB_TYPE_).
+const (
+	subtypeNoSessionAttached = "noSessionAttached"
+	adtExceptionSubtypeKey   = "com.sap.adt.communicationFramework.subType"
+)
+
+// SetBreakpoints sets all given line breakpoints in ONE request and returns
+// one result per requested breakpoint, in the order of bps.
+//
+// For BreakpointScopeExternal, SAP's handling of breakpoints that were
+// already set differs by release (adtler#200): SAP_BASIS 816 replaces them
+// with the requested list, SAP_BASIS 750 adds to them. Callers that need a
+// known set should remove the old breakpoints with RemoveBreakpoint first.
+// One request carrying the complete list behaves the same on both.
+// Breakpoints are keyed by the logged-on user, requestUser and ideId: other
+// DebugSessions with the same user and IDE ID see the same set.
+//
+// BreakpointScopeDebugger adds breakpoints to the attached debugger and is
+// the scope to use while the debuggee is halted: an external-scope request
+// sent then detaches the debugger on SAP_BASIS 750 (adtler#200).
+//
+// Results are matched to the request by clientId, not by position: the
+// resource re-sorts the list and reports breakpoints rejected during
+// validation first. A breakpoint the response carries no entry for is
+// reported as not set.
+func (d *DebugSession) SetBreakpoints(ctx context.Context, scope BreakpointScope, bps []LineBreakpoint) ([]BreakpointResult, error) {
+	if len(bps) == 0 {
+		return nil, errors.New("SetBreakpoints: no breakpoints given")
+	}
+	if len(bps) > maxBreakpointsPerRequest {
+		return nil, fmt.Errorf("SetBreakpoints: %d breakpoints given, SAP accepts at most %d", len(bps), maxBreakpointsPerRequest)
+	}
+	if err := checkBreakpointScope(scope); err != nil {
+		return nil, fmt.Errorf("SetBreakpoints: %w", err)
+	}
+	for i, bp := range bps {
+		if bp.Line <= 0 {
+			return nil, fmt.Errorf("SetBreakpoints: breakpoint %d: line %d is not a source line", i, bp.Line)
+		}
+	}
+	// No sync mode is sent. The request transformation reads it only from a
+	// <syncScope mode="…"> element; the syncMode attribute adtler sent until
+	// adtler#200 was ignored on both SAP_BASIS 750 and 816, so leaving it out
+	// changes nothing on the wire that SAP reads.
 	reqBody := adtxml.BreakpointsRequest{
 		NSDebug:       "http://www.sap.com/adt/debugger",
 		NSCore:        nsADTCore,
-		Scope:         "external",
+		Scope:         string(scope),
 		DebuggingMode: "user",
 		RequestUser:   d.user,
 		TerminalID:    d.terminalID,
 		IdeID:         d.ideID,
-		SyncMode:      "full",
-		Breakpoints: []adtxml.BreakpointRequest{{
-			Kind: "line",
-			URI:  uri,
-			Type: objectType,
-			Name: objectName,
-		}},
+	}
+	for i, bp := range bps {
+		reqBody.Breakpoints = append(reqBody.Breakpoints, adtxml.BreakpointRequest{
+			Kind:     "line",
+			ClientID: strconv.Itoa(i),
+			URI:      fmt.Sprintf("%s#start=%d,0", bp.ObjectURI, bp.Line),
+			Type:     bp.ObjectType,
+			Name:     bp.ObjectName,
+		})
 	}
 	bodyXML, err := xml.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("SetBreakpoint marshal: %w", err)
+		return nil, fmt.Errorf("SetBreakpoints marshal: %w", err)
 	}
 
 	resp, err := d.client.doMutate(ctx, http.MethodPost,
 		"/sap/bc/adt/debugger/breakpoints",
 		strings.NewReader(xml.Header+string(bodyXML)),
-		map[string]string{
+		breakpointHeaders(scope, map[string]string{
 			"Content-Type": contentTypeXML,
 			"Accept":       "application/xml",
-		},
+		}),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("SetBreakpoint: %w", err)
+		return nil, fmt.Errorf("SetBreakpoints: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := checkResponse(resp); err != nil {
-		return nil, err
+		return nil, wrapNoSessionAttached(err)
 	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("SetBreakpoints read: %w", err)
+	}
 	var bpResp adtxml.BreakpointsResponse
 	if err := xml.Unmarshal(data, &bpResp); err != nil {
-		return nil, fmt.Errorf("SetBreakpoint unmarshal: %w", err)
+		return nil, fmt.Errorf("SetBreakpoints unmarshal: %w", err)
 	}
+	return matchBreakpointResults(len(bps), bpResp.Breakpoints), nil
+}
 
-	if len(bpResp.Breakpoints) == 0 {
-		return nil, fmt.Errorf("SetBreakpoint: no breakpoint in response")
+// matchBreakpointResults maps response entries back to the n requested
+// breakpoints by clientId (the request index). Entries with an unknown or
+// duplicate clientId are ignored; a requested breakpoint without an entry is
+// reported as not set. The match is strict on purpose: the response
+// transformation echoes clientId whenever the request carried one (verified
+// on SAP_BASIS 750 and 816), and guessing an entry's owner by position is
+// exactly what the resource's re-sorting makes wrong.
+func matchBreakpointResults(n int, entries []adtxml.BreakpointResponse) []BreakpointResult {
+	results := make([]BreakpointResult, n)
+	matched := make([]bool, n)
+	for _, e := range entries {
+		i, err := strconv.Atoi(e.ClientID)
+		if err != nil || i < 0 || i >= n || matched[i] {
+			continue
+		}
+		matched[i] = true
+		results[i] = BreakpointResult{ID: e.ID, ErrorKind: e.ErrorKind, ErrorMessage: e.ErrorMessage}
 	}
-	bp := bpResp.Breakpoints[0]
-	if bp.ErrorMessage != "" {
-		return &BreakpointResult{ErrorMessage: bp.ErrorMessage}, nil
+	for i := range results {
+		if !matched[i] {
+			results[i].ErrorMessage = errNoBreakpointResult
+		}
 	}
-	return &BreakpointResult{ID: bp.ID}, nil
+	return results
+}
+
+// RemoveBreakpoint deletes one breakpoint by the ID SAP returned when it was
+// set. scope must be the scope the breakpoint was set in.
+//
+// StopListener does not remove breakpoints, and external breakpoints outlive
+// the DebugSession that set them, so a caller that wants a clean slate
+// removes every ID it set.
+func (d *DebugSession) RemoveBreakpoint(ctx context.Context, scope BreakpointScope, id string) error {
+	if id == "" {
+		return errors.New("RemoveBreakpoint: empty breakpoint ID")
+	}
+	if err := checkBreakpointScope(scope); err != nil {
+		return fmt.Errorf("RemoveBreakpoint: %w", err)
+	}
+	q := url.Values{}
+	q.Set("debuggingMode", "user")
+	q.Set("requestUser", d.user)
+	q.Set("terminalId", d.terminalID)
+	q.Set("ideId", d.ideID)
+	q.Set("scope", string(scope))
+	// The resource does not unescape the ID a second time, so it is escaped
+	// exactly once here. Verified live only for IDs without "/": IDs of
+	// programs in a registered namespace contain "/", sent as %2F, and that
+	// ICF passes %2F through unchanged is so far proven by unit tests only.
+	path := "/sap/bc/adt/debugger/breakpoints/" + url.PathEscape(id) + "?" + q.Encode()
+
+	resp, err := d.client.doMutate(ctx, http.MethodDelete, path, nil, breakpointHeaders(scope, nil))
+	if err != nil {
+		return fmt.Errorf("RemoveBreakpoint: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return wrapNoSessionAttached(checkResponse(resp))
+}
+
+// SetBreakpoint sets one external line breakpoint on the given object. It is
+// SetBreakpoints with a single breakpoint.
+//
+// Calling it once per breakpoint keeps only the last breakpoint on
+// SAP_BASIS 816 and keeps all of them on SAP_BASIS 750 (adtler#200). To set
+// several breakpoints, pass the complete list to SetBreakpoints instead.
+//
+// Check the result with IsSet, not ID != "": since adtler#200 a result can
+// carry SAP's ID together with an error (e.g. ErrorKind "existing"), and a
+// response without an entry for the breakpoint comes back as a nil error
+// with ErrorMessage set instead of as an error.
+func (d *DebugSession) SetBreakpoint(ctx context.Context, objectURI string, line int, objectType, objectName string) (*BreakpointResult, error) {
+	results, err := d.SetBreakpoints(ctx, BreakpointScopeExternal, []LineBreakpoint{{
+		ObjectURI:  objectURI,
+		Line:       line,
+		ObjectType: objectType,
+		ObjectName: objectName,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return &results[0], nil
+}
+
+// breakpointHeaders adds X-sap-adt-sessiontype: stateful for
+// BreakpointScopeDebugger, so the request reaches the attached debugger's
+// session the way Attach and Step do.
+func breakpointHeaders(scope BreakpointScope, headers map[string]string) map[string]string {
+	if scope != BreakpointScopeDebugger {
+		return headers
+	}
+	h := map[string]string{"X-sap-adt-sessiontype": "stateful"}
+	for k, v := range headers {
+		h[k] = v
+	}
+	return h
+}
+
+// checkBreakpointScope rejects a scope SAP would refuse anyway, before any
+// request is sent.
+func checkBreakpointScope(scope BreakpointScope) error {
+	switch scope {
+	case BreakpointScopeExternal, BreakpointScopeDebugger:
+		return nil
+	default:
+		return fmt.Errorf("unknown breakpoint scope %q", scope)
+	}
+}
+
+// wrapNoSessionAttached wraps err with ErrNoSessionAttached when it is SAP's
+// no-session-attached response, and returns it unchanged otherwise.
+func wrapNoSessionAttached(err error) error {
+	var adtErr *ADTError
+	if errors.As(err, &adtErr) && adtErr.Properties[adtExceptionSubtypeKey] == subtypeNoSessionAttached {
+		return fmt.Errorf("%w: %w", ErrNoSessionAttached, err)
+	}
+	return err
 }
 
 // ListenerResult holds the result of a debug listener call.
@@ -209,6 +421,16 @@ func (d *DebugSession) StopListener(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return checkResponse(resp)
+}
+
+// RunUnitTests runs the ABAP Unit tests of objectURI as a breakpoint trigger for
+// this debug session. It uses a NEW isolated session (freshSession) of the same
+// system and credentials as d — never d's own stateful session, and never the
+// parent client, so it cannot wedge behind a stateful lock session and is not
+// redirected by a later ClientRegistry.Select. timeoutSeconds bounds the whole
+// run, including the time the debuggee is halted at a breakpoint.
+func (d *DebugSession) RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error) {
+	return d.client.freshSession().RunUnitTests(ctx, objectURI, timeoutSeconds)
 }
 
 // GetDebuggeeSessions returns active debuggee sessions.
@@ -453,11 +675,11 @@ func isDebuggeeEndedAdiFailed(err error) bool {
 }
 
 // GetVariable reads a variable value from the debug session.
-// Uses the debugger main endpoint (POST /debugger?method=getVariables) to stay
+// Uses the debugger main endpoint (POST /debugger?method=getVariableValue) to stay
 // in the stateful HTTP session. The separate GET /debugger/variables/ endpoint
 // uses a different ICF handler that doesn't share the stateful work process.
 func (d *DebugSession) GetVariable(ctx context.Context, name string) ([]byte, error) {
-	path := fmt.Sprintf("/sap/bc/adt/debugger?method=getVariableValue&variableName=%s", name)
+	path := "/sap/bc/adt/debugger?method=getVariableValue&variableName=" + url.QueryEscape(name)
 	resp, err := d.client.doMutate(ctx, http.MethodPost, path, nil,
 		map[string]string{
 			"Accept":                "text/plain",
@@ -505,4 +727,69 @@ func (d *DebugSession) SetWatchpoint(ctx context.Context, variableName, conditio
 		return nil, err
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// StackFrame is one parsed debugger stack frame.
+type StackFrame struct {
+	Position      int
+	Program       string
+	Include       string
+	Line          int
+	EventType     string
+	EventName     string
+	SourceURI     string // adtcore:uri without the #start fragment; empty when SAP sends none
+	SourceLine    int    // line from the #start=<line>,<col> fragment; 0 when absent
+	SystemProgram bool
+	Active        bool
+}
+
+// GetStackFrames returns the parsed call stack (see GetStack for the raw XML).
+func (d *DebugSession) GetStackFrames(ctx context.Context) ([]StackFrame, error) {
+	data, err := d.GetStack(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var resp adtxml.StackResponse
+	if err := xml.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("GetStackFrames unmarshal: %w", err)
+	}
+	frames := make([]StackFrame, 0, len(resp.Entries))
+	for _, e := range resp.Entries {
+		uri, srcLine := e.URI, 0
+		if i := strings.IndexByte(uri, '#'); i >= 0 {
+			frag := uri[i+1:]
+			uri = uri[:i]
+			if rest, ok := strings.CutPrefix(frag, "start="); ok {
+				if j := strings.IndexAny(rest, ",;"); j >= 0 {
+					rest = rest[:j]
+				}
+				srcLine, _ = strconv.Atoi(rest)
+			}
+		}
+		frames = append(frames, StackFrame{
+			Position: e.Position, Program: e.Program, Include: e.Include, Line: e.Line,
+			EventType: e.EventType, EventName: e.EventName, SourceURI: uri, SourceLine: srcLine,
+			SystemProgram: e.SystemProgram, Active: e.IsActive,
+		})
+	}
+	return frames, nil
+}
+
+// ActiveFrame returns the frame the debuggee stands in: the one marked active,
+// or — when SAP marks none (SAP_BASIS 750) — the top of the stack, i.e. the
+// highest Position.
+func ActiveFrame(frames []StackFrame) (StackFrame, bool) {
+	if len(frames) == 0 {
+		return StackFrame{}, false
+	}
+	top := frames[0]
+	for _, f := range frames {
+		if f.Active {
+			return f, true
+		}
+		if f.Position > top.Position {
+			top = f
+		}
+	}
+	return top, true
 }

@@ -200,13 +200,13 @@ func TestRenameWithTransport(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newRenameClient(srv.URL).Rename(context.Background(),
-		"/sap/bc/adt/programs/programs/ZTEST_PROG#start=2,6", "NEW_VAR", "DEVK900123")
+		"/sap/bc/adt/programs/programs/ZTEST_PROG#start=2,6", "NEW_VAR", "AAAK900123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(executeBody, "<generic:transport>DEVK900123</generic:transport>") {
-		t.Errorf("execute body should contain transport DEVK900123, got:\n%s", executeBody)
+	if !strings.Contains(executeBody, "<generic:transport>AAAK900123</generic:transport>") {
+		t.Errorf("execute body should contain transport AAAK900123, got:\n%s", executeBody)
 	}
 	if strings.Contains(executeBody, "<generic:transport/>") {
 		t.Errorf("execute body should not contain empty transport placeholder, got:\n%s", executeBody)

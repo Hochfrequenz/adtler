@@ -99,7 +99,7 @@ func TestUnmarshalASXData_TransportCheckResponse(t *testing.T) {
       <REQUESTS>
         <CTS_REQUEST>
           <REQ_HEADER>
-            <TRKORR>S4UK902321</TRKORR>
+            <TRKORR>CCCK902321</TRKORR>
             <TRFUNCTION>K</TRFUNCTION>
             <TRSTATUS>D</TRSTATUS>
             <AS4TEXT>zdm_sql</AS4TEXT>
@@ -123,7 +123,7 @@ func TestUnmarshalASXData_TransportCheckResponse(t *testing.T) {
 	if len(got.Requests) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(got.Requests))
 	}
-	if got.Requests[0].Header.TrKorr != "S4UK902321" {
+	if got.Requests[0].Header.TrKorr != "CCCK902321" {
 		t.Errorf("TrKorr: got %q", got.Requests[0].Header.TrKorr)
 	}
 	if got.Requests[0].Header.Text != "zdm_sql" {

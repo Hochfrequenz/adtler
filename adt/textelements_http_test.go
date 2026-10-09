@@ -83,7 +83,7 @@ func TestSetTextElements_SendsBothEndpointsWithCorrectShape(t *testing.T) {
 	const (
 		programURI = "/sap/bc/adt/programs/programs/ZTEST"
 		lockHandle = "ABCDEF1234567890"
-		transport  = "DEVK900001"
+		transport  = "AAAK900001"
 	)
 
 	if err := client.SetTextElements(context.Background(), programURI, symbols, selections, lockHandle, transport); err != nil {
@@ -110,7 +110,7 @@ func TestSetTextElements_SendsBothEndpointsWithCorrectShape(t *testing.T) {
 	if !strings.Contains(checkSymbols.rawQuery, "lockHandle=ABCDEF1234567890") {
 		t.Errorf("symbols query missing lockHandle: %q", checkSymbols.rawQuery)
 	}
-	if !strings.Contains(checkSymbols.rawQuery, "corrNr=DEVK900001") {
+	if !strings.Contains(checkSymbols.rawQuery, "corrNr=AAAK900001") {
 		t.Errorf("symbols query missing corrNr: %q", checkSymbols.rawQuery)
 	}
 	if !strings.Contains(checkSymbols.body, "001=Hello") {
@@ -133,7 +133,7 @@ func TestSetTextElements_SendsBothEndpointsWithCorrectShape(t *testing.T) {
 	if !strings.Contains(checkSelections.rawQuery, "lockHandle=ABCDEF1234567890") {
 		t.Errorf("selections query missing lockHandle: %q", checkSelections.rawQuery)
 	}
-	if !strings.Contains(checkSelections.rawQuery, "corrNr=DEVK900001") {
+	if !strings.Contains(checkSelections.rawQuery, "corrNr=AAAK900001") {
 		t.Errorf("selections query missing corrNr: %q", checkSelections.rawQuery)
 	}
 	if !strings.Contains(checkSelections.body, "P_TEST") || !strings.Contains(checkSelections.body, "Label") {
@@ -155,9 +155,9 @@ func TestSetTextElements_PercentEncodesURLParameters(t *testing.T) {
 	const (
 		programURI    = "/sap/bc/adt/programs/programs/ZTEST"
 		spicyHandle   = "abc+def/ghi=jkl"
-		spicyCorrNr   = "DEV K900&001"
+		spicyCorrNr   = "AAA K900&001"
 		wantLockEnc   = "abc%2Bdef%2Fghi%3Djkl"
-		wantCorrNrEnc = "DEV+K900%26001"
+		wantCorrNrEnc = "AAA+K900%26001"
 	)
 
 	if err := client.SetTextElements(context.Background(), programURI,

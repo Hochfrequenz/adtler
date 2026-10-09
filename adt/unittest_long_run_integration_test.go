@@ -36,14 +36,6 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 
 			dbg := adt.NewDebugSession(sys.Client, sys.Config.User)
 			attached := false
-			// End the debug session before the report is deleted (cleanups run
-			// LIFO), so a failed run does not leave a suspended debuggee behind.
-			t.Cleanup(func() {
-				if attached {
-					_, _ = dbg.Step(context.Background(), "detachDebugger")
-				}
-				_ = dbg.StopListener(context.Background())
-			})
 
 			bp, err := dbg.SetBreakpoint(ctx, uri+"/source/main", bpLine, "PROG/P", name)
 			if err != nil {
@@ -52,6 +44,22 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 			if bp.ErrorMessage != "" {
 				t.Fatalf("[%s] SetBreakpoint: %s", sys.Name, bp.ErrorMessage)
 			}
+
+			// Registered before the listener cleanup so it runs after it (LIFO).
+			t.Cleanup(func() {
+				if err := dbg.RemoveBreakpoint(context.Background(), adt.BreakpointScopeExternal, bp.ID); err != nil {
+					t.Errorf("[%s] cleanup RemoveBreakpoint %s: %v", sys.Name, bp.ID, err)
+				}
+			})
+
+			// End the debug session before the breakpoint and report are removed
+			// (cleanups run LIFO), so a failed run leaves no suspended debuggee.
+			t.Cleanup(func() {
+				if attached {
+					_, _ = dbg.Step(context.Background(), "detachDebugger")
+				}
+				_ = dbg.StopListener(context.Background())
+			})
 
 			type listenerOut struct {
 				r   *adt.ListenerResult
@@ -109,24 +117,100 @@ func TestRunUnitTests_OutlastsShortClient_MultiSystem_Integration(t *testing.T) 
 	}
 }
 
+// TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration verifies that
+// DebugSession.RunUnitTests, used as the trigger, hits an external breakpoint
+// set through the same debug session, and that the run result is returned once
+// the debuggee is detached.
+func TestDebugSessionRunUnitTests_Catches_MultiSystem_Integration(t *testing.T) {
+	const (
+		listenSecs = 30
+		bpLine     = 14 // lv_val = 'test'. inside test_hello
+		runBudget  = 120
+	)
+	ctx := context.Background()
+	for _, sys := range eachSystem(t) {
+		t.Run(sys.Name, func(t *testing.T) {
+			name := fmt.Sprintf("Z_ADT_204_%d", time.Now().Unix()%100000)
+			uri := "/sap/bc/adt/programs/programs/" + name
+			createReportWithTestClass(t, sys.Client, name, uri)
+
+			dbg := adt.NewDebugSession(sys.Client, sys.Config.User)
+			attached := false
+
+			bp, err := dbg.SetBreakpoint(ctx, uri+"/source/main", bpLine, "PROG/P", name)
+			if err != nil {
+				t.Fatalf("[%s] SetBreakpoint: %v", sys.Name, err)
+			}
+			if bp.ErrorMessage != "" {
+				t.Fatalf("[%s] SetBreakpoint: %s", sys.Name, bp.ErrorMessage)
+			}
+
+			// Registered before the listener cleanup so it runs after it (LIFO).
+			t.Cleanup(func() {
+				if err := dbg.RemoveBreakpoint(context.Background(), adt.BreakpointScopeExternal, bp.ID); err != nil {
+					t.Errorf("[%s] cleanup RemoveBreakpoint %s: %v", sys.Name, bp.ID, err)
+				}
+			})
+
+			// End the debug session before the breakpoint and report are removed
+			// (cleanups run LIFO), so a failed run leaves no suspended debuggee.
+			t.Cleanup(func() {
+				if attached {
+					_, _ = dbg.Step(context.Background(), "detachDebugger")
+				}
+				_ = dbg.StopListener(context.Background())
+			})
+
+			type listenerOut struct {
+				r   *adt.ListenerResult
+				err error
+			}
+			listenerCh := make(chan listenerOut, 1)
+			go func() {
+				r, err := dbg.StartListener(ctx, listenSecs)
+				listenerCh <- listenerOut{r, err}
+			}()
+			time.Sleep(4 * time.Second) // the listener long-poll gives no "registered" signal
+
+			type runOut struct {
+				res *adt.TestResult
+				err error
+			}
+			runCh := make(chan runOut, 1)
+			go func() {
+				res, err := dbg.RunUnitTests(ctx, uri, runBudget)
+				runCh <- runOut{res, err}
+			}()
+
+			lo := <-listenerCh
+			if lo.err != nil || lo.r.Status != "attached" {
+				t.Fatalf("[%s] breakpoint not caught: status=%v err=%v", sys.Name, lo.r, lo.err)
+			}
+			if err := dbg.Attach(ctx, lo.r.DebuggeeID); err != nil {
+				t.Fatalf("[%s] Attach: %v", sys.Name, err)
+			}
+			attached = true
+			if _, err := dbg.Step(ctx, "detachDebugger"); err != nil {
+				t.Fatalf("[%s] detachDebugger: %v", sys.Name, err)
+			}
+			attached = false
+
+			ro := <-runCh
+			if ro.err != nil {
+				t.Fatalf("[%s] RunUnitTests: %v", sys.Name, ro.err)
+			}
+			if ro.res.Passed != 1 {
+				t.Errorf("[%s] Passed: got %d, want 1", sys.Name, ro.res.Passed)
+			}
+		})
+	}
+}
+
 // createReportWithTestClass creates, fills and activates a $TMP report whose
 // local test class has a single passing method, and registers its deletion.
 // Line 14 is the first executable statement of the test method.
 func createReportWithTestClass(t *testing.T, client adt.Client, name, uri string) {
 	t.Helper()
-	ctx := context.Background()
-	if err := client.CreateObject(ctx, "PROG", name, "$TMP", "adtler#186 long unit-test run", ""); err != nil {
-		t.Fatalf("CreateObject: %v", err)
-	}
-	// Delete WITHOUT locking first: DeleteObject ignores the lock handle and
-	// deletes statelessly, so on S/4HANA a preceding LockObject blocks the
-	// delete and leaves an orphaned TRDIR lock (issue #187).
-	t.Cleanup(func() {
-		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
-			t.Errorf("cleanup delete %s: %v — delete the $TMP report by hand", name, err)
-		}
-	})
-
 	source := "REPORT " + name + ".\n" +
 		"DATA: lv_test TYPE string.\n" +
 		"lv_test = 'Hello debugger'.\n" +
@@ -144,6 +228,25 @@ func createReportWithTestClass(t *testing.T, client adt.Client, name, uri string
 		"    cl_abap_unit_assert=>assert_equals( act = lv_val exp = 'test' ).\n" +
 		"  ENDMETHOD.\n" +
 		"ENDCLASS.\n"
+	createReportWithSource(t, client, name, uri, source)
+}
+
+// createReportWithSource creates, fills and activates a $TMP report with the
+// given source and registers its deletion.
+func createReportWithSource(t *testing.T, client adt.Client, name, uri, source string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := client.CreateObject(ctx, "PROG", name, "$TMP", "adtler throwaway debugger test report", ""); err != nil {
+		t.Fatalf("CreateObject: %v", err)
+	}
+	// Delete WITHOUT locking first: DeleteObject ignores the lock handle and
+	// deletes statelessly, so on S/4HANA a preceding LockObject blocks the
+	// delete and leaves an orphaned TRDIR lock (issue #187).
+	t.Cleanup(func() {
+		if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
+			t.Errorf("cleanup delete %s: %v — delete the $TMP report by hand", name, err)
+		}
+	})
 
 	lh, err := client.LockObject(ctx, uri)
 	if err != nil {

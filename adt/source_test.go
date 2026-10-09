@@ -689,8 +689,7 @@ func TestSetSource_NoRetryOnBare403(t *testing.T) {
 // ExceptionParameterNotFound ("Parameter lockHandle could not be found") —
 // not the 423/403 signals the retry gate already recognises — so the write
 // never falls back to query-param delivery and every source write fails.
-// Live-probed on our own R/3 (hfq, hfq_proxy) and S/4 (s4u) systems: none of
-// them reproduce this 400, confirming it's a system/SP-specific ADT handler
+// Live-probed on both systems: neither reproduces this 400, confirming it's a system/SP-specific ADT handler
 // difference outside our landscape, not something our existing fixtures
 // cover. Reproduced here as a synthetic fixture matching the reporter's
 // exact SAP response body.

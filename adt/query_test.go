@@ -2,9 +2,15 @@ package adt
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
 func TestRunQuery_RejectNonSelect(t *testing.T) {
@@ -183,5 +189,90 @@ func TestSanitizeXML(t *testing.T) {
 				t.Errorf("sanitizeXML(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// dataPreviewCaptureServer answers the CSRF preflight and the data preview
+// endpoint, and forwards every data preview request body to the returned
+// channel (buffered, so the handler never blocks).
+func dataPreviewCaptureServer(t *testing.T) (*httptest.Server, <-chan string) {
+	t.Helper()
+	bodies := make(chan string, 10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == discoveryPath {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == dataPreviewPath {
+			b, _ := io.ReadAll(r.Body)
+			bodies <- string(b)
+		}
+		w.Header().Set("Content-Type", "application/vnd.sap.adt.datapreview.table.v1+xml")
+		_, _ = w.Write([]byte(emptyTableData))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, bodies
+}
+
+func newDataPreviewTestClient(host string) Client {
+	return NewClient(sapmcpconfig.SAPSystem{Host: host, User: "U", Password: "P", Client: "100"})
+}
+
+// TestRunQuery_WrapsLongLines is the unit-level regression guard for issue
+// #183: a statement with a line over 255 characters must reach SAP wrapped,
+// with the last literal still intact.
+func TestRunQuery_WrapsLongLines(t *testing.T) {
+	srv, bodies := dataPreviewCaptureServer(t)
+	c := newDataPreviewTestClient(srv.URL)
+
+	sql := "SELECT TABNAME FROM DD02L WHERE TABNAME IN ( " + strings.Repeat("'T000', ", 40) + "'T001' )"
+	if _, err := c.RunQuery(context.Background(), sql, 10); err != nil {
+		t.Fatalf("RunQuery: %v", err)
+	}
+	sent := <-bodies
+	for i, line := range strings.Split(sent, "\n") {
+		if n := utf8.RuneCountInString(line); n > dataPreviewMaxLine {
+			t.Errorf("line %d sent with %d characters", i+1, n)
+		}
+	}
+	if a, b := strings.Join(strings.Fields(sql), " "), strings.Join(strings.Fields(sent), " "); a != b {
+		t.Errorf("tokens changed on the way to SAP:\n in: %s\nout: %s", a, b)
+	}
+}
+
+// TestRunQuery_ShortSQLUnchanged pins that short statements reach SAP exactly
+// as before the fix (after the existing TrimSpace).
+func TestRunQuery_ShortSQLUnchanged(t *testing.T) {
+	srv, bodies := dataPreviewCaptureServer(t)
+	c := newDataPreviewTestClient(srv.URL)
+
+	sql := "SELECT *\r\n  FROM T000"
+	if _, err := c.RunQuery(context.Background(), "  "+sql+"\n", 10); err != nil {
+		t.Fatalf("RunQuery: %v", err)
+	}
+	if sent := <-bodies; sent != sql {
+		t.Errorf("sent %q, want %q", sent, sql)
+	}
+}
+
+// TestRunQuery_RejectsUnwrappableLine pins that a line SAP would silently
+// truncate is refused locally, without any data preview request.
+func TestRunQuery_RejectsUnwrappableLine(t *testing.T) {
+	srv, bodies := dataPreviewCaptureServer(t)
+	c := newDataPreviewTestClient(srv.URL)
+
+	sql := "SELECT A FROM T000 WHERE B = '" + strings.Repeat("x", 300) + "'"
+	_, err := c.RunQuery(context.Background(), sql, 10)
+	if err == nil {
+		t.Fatal("expected an error for an unwrappable line")
+	}
+	if !strings.Contains(err.Error(), "255") {
+		t.Errorf("error does not name the limit: %v", err)
+	}
+	select {
+	case sent := <-bodies:
+		t.Errorf("request was sent despite the error: %q", sent)
+	default:
 	}
 }

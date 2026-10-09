@@ -29,8 +29,8 @@ func classrunClassURI(name string) string {
 // TestRunClass_Integration runs a real classrun class on every whitelisted
 // system (R/3 and S/4 via eachSystem) and asserts the known console string
 // comes back. This also exercises the classrun framework on each system —
-// the endpoint handler CL_OO_ADT_RES_CLASSRUN is present on both HFQ/ECC and
-// S4U (spec open verification point #2, resolved).
+// the endpoint handler CL_OO_ADT_RES_CLASSRUN is present on both the ECC and
+// the S/4 system (spec open verification point #2, resolved).
 //
 // The fixture-existence pre-check uses GetObjectInfo, NOT a 404 from RunClass:
 // the handler returns HTTP 200 with an error string for a missing/invalid
@@ -135,10 +135,10 @@ func setClassrunSourceAndActivate(t *testing.T, client adt.Client, uri, name, ma
 // takes), then RunClass, and asserts the class's REAL output comes back on
 // BOTH systems:
 //
-//   - HFQ (ECC/R3): classrun always worked here because activation regenerates
+//   - ECC system (R/3): classrun always worked here because activation regenerates
 //     a persistent runtime load. This arm is the REGRESSION GUARD — the
 //     fresh-session fix must not break the system that was already fine.
-//   - S4U (S/4): activation does not regenerate the load, so pre-fix RunClass
+//   - S/4 system: activation does not regenerate the load, so pre-fix RunClass
 //     in the reused session soft-failed with "does not implement ...main...".
 //     Post-fix RunClass runs the classrun on an isolated fresh session and
 //     returns the real output. This arm is the FIX.
@@ -179,7 +179,7 @@ func TestRunClass_FreshClass_Integration(t *testing.T) {
 // Pre-fix, S/4 kept serving the first generated version to the reused session
 // (defect 2); the fresh-session fix makes each RunClass compile the current
 // active source, so every version cycle returns its own output on BOTH systems
-// (HFQ regression guard, S4U the fix). Defect 2 is thus resolved by the same
+// (the ECC system is the regression guard, the S/4 system the fix). Defect 2 is thus resolved by the same
 // Option-C change as defect 1.
 func TestRunClass_ReactivatedClass_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {

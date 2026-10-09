@@ -31,7 +31,7 @@ func TestDebugSessionSetBreakpoint(t *testing.T) {
 			gotBody = string(body)
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><dbg:breakpoints xmlns:dbg="http://www.sap.com/adt/debugger"><breakpoint kind="line" id="BP1" adtcore:uri="/sap/bc/adt/programs/programs/ztest/source/main#start=2" adtcore:type="PROG/P" adtcore:name="ZTEST" xmlns:adtcore="http://www.sap.com/adt/core"/></dbg:breakpoints>`))
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><dbg:breakpoints xmlns:dbg="http://www.sap.com/adt/debugger"><breakpoint kind="line" clientId="0" id="BP1" adtcore:uri="/sap/bc/adt/programs/programs/ztest/source/main#start=2" adtcore:type="PROG/P" adtcore:name="ZTEST" xmlns:adtcore="http://www.sap.com/adt/core"/></dbg:breakpoints>`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -221,7 +221,7 @@ func TestDebugSessionGetVariable(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == "/sap/bc/adt/debugger" && r.URL.Query().Get("method") == "getVariableValue" && r.Method == http.MethodPost {
+		if r.URL.Path == testDebuggerPath && r.URL.Query().Get("method") == "getVariableValue" && r.Method == http.MethodPost {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`hello`))
@@ -250,7 +250,7 @@ func TestDebugSessionGetStack(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.URL.Path == "/sap/bc/adt/debugger" && r.URL.Query().Get("method") == "getStack" && r.Method == http.MethodPost {
+		if r.URL.Path == testDebuggerPath && r.URL.Query().Get("method") == "getStack" && r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<stack><frame level="1" name="MAIN"/></stack>`))
 			return
@@ -268,5 +268,37 @@ func TestDebugSessionGetStack(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "stack") {
 		t.Errorf("unexpected response: %s", data)
+	}
+}
+
+func TestDebugSessionGetVariableEscapesName(t *testing.T) {
+	var gotName string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == testDebuggerPath && r.URL.Query().Get("method") == "getVariableValue" {
+			gotName = r.URL.Query().Get("variableName")
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte(`x`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	dbg := adt.NewDebugSession(adt.NewClient(cfg), "U")
+
+	for _, name := range []string{"LO_ITEM->MT_TAGS[2]", "A&B#C D"} {
+		gotName = ""
+		if _, err := dbg.GetVariable(context.Background(), name); err != nil {
+			t.Fatalf("GetVariable(%q): %v", name, err)
+		}
+		if gotName != name {
+			t.Errorf("variableName: got %q, want %q", gotName, name)
+		}
 	}
 }

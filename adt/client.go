@@ -11,13 +11,17 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
 // SourceClient reads and writes ABAP source code.
+//
+// Methods taking an objectURI accept either the bare object URI
+// ("/sap/bc/adt/programs/programs/ztest") or its main-source URI as ADT hands
+// it out (".../source/main", optionally with a "#start=L,C" fragment); both
+// address the same object. A query string on objectURI is ignored.
 type SourceClient interface {
 	GetSource(ctx context.Context, objectURI string) (*SourceResult, error)
 	GetClassDefinition(ctx context.Context, objectURI string) (*SourceResult, error)
@@ -115,6 +119,11 @@ type QualityClient interface {
 }
 
 // VersionClient provides version history and comparison.
+//
+// GetVersionHistory and DiffActiveInactive accept either the bare object URI
+// or its ".../source/main" URI, like the SourceClient methods.
+// GetVersionSource is different: it takes a version content URI from
+// VersionInfo and uses it as given.
 type VersionClient interface {
 	GetVersionHistory(ctx context.Context, objectURI string) ([]VersionInfo, error)
 	GetVersionSource(ctx context.Context, contentURI string) (string, error)
@@ -141,6 +150,13 @@ type TransportClient interface {
 // ExportClient handles package exports.
 type ExportClient interface {
 	ExportPackage(ctx context.Context, packageName string) ([]byte, error)
+}
+
+// AbapGitSyncClient calls the abapGit sync companion endpoints.
+type AbapGitSyncClient interface {
+	ListAbapGitRepos(ctx context.Context) (*AbapGitRepoList, error)
+	PullAbapGitRepo(ctx context.Context, req AbapGitPullRequest) (*AbapGitPullResult, error)
+	PushAbapGitRepo(ctx context.Context, req AbapGitPushRequest) (*AbapGitPushResult, error)
 }
 
 // QueryClient runs data queries.
@@ -181,6 +197,7 @@ type Client interface {
 	VersionClient
 	TransportClient
 	ExportClient
+	AbapGitSyncClient
 	QueryClient
 	EnhancementClient
 	DumpClient
@@ -196,12 +213,11 @@ type httpClient struct {
 	jar                 *resettableJar // the cookie jar of http and httpLong; emptied by Logout, never replaced
 	mu                  sync.Mutex
 	csrfToken           string
-	hasSecureCookies    bool                         // true if SAP sets Secure cookies on an HTTP connection
-	discovery           map[string][]string          // endpoint → accepted content types from discovery
-	removeObjectSupport RemoveObjectSupport          // cached tri-state; see cacheRemoveObjectSupport
-	accessToken         atomic.Pointer[string]       // OAuth2 access token (nil or empty = Basic Auth); read via token()
-	onTokenRefresh      func(string) (string, error) // callback to refresh token, returns new access token
-	pollInterval        time.Duration                // polling interval for background runs (default: 10s)
+	hasSecureCookies    bool                // true if SAP sets Secure cookies on an HTTP connection
+	discovery           map[string][]string // endpoint → accepted content types from discovery
+	removeObjectSupport RemoveObjectSupport // cached tri-state; see cacheRemoveObjectSupport
+	tokens              *tokenSource        // OAuth2 token, shared with freshSession clones; nil = Basic Auth
+	pollInterval        time.Duration       // polling interval for background runs (default: 10s)
 }
 
 // NewClient creates a new ADT HTTP client configured from cfg.
@@ -239,8 +255,9 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // contract and leaves the caller's session and any locks untouched.
 //
 // The returned client is not registered anywhere and holds no locks; discard it
-// after use. An OAuth token refreshed inside this single-use session is not
-// propagated back to the parent client — acceptable for a one-shot run.
+// after use. It shares the parent's OAuth token source, so a token refreshed in
+// either one is the token both send next, and the two never refresh at the same
+// time (issue #197).
 //
 // It reuses the parent's *http.Transport (preserving any caller-supplied
 // RoundTripper from NewClientWithTransport and the existing connection pool)
@@ -248,16 +265,14 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // clean session, independent of the TCP connection reuse.
 func (c *httpClient) freshSession() *httpClient {
 	jar := newResettableJar()
-	fresh := &httpClient{
-		cfg:            c.cfg,
-		http:           newShortClient(c.http.Transport, jar, c.http.Timeout),
-		httpLong:       newLongClient(c.httpLong.Transport, jar),
-		jar:            jar,
-		onTokenRefresh: c.onTokenRefresh,
-		pollInterval:   c.pollInterval,
+	return &httpClient{
+		cfg:          c.cfg,
+		http:         newShortClient(c.http.Transport, jar, c.http.Timeout),
+		httpLong:     newLongClient(c.httpLong.Transport, jar),
+		jar:          jar,
+		tokens:       c.tokens,
+		pollInterval: c.pollInterval,
 	}
-	fresh.setToken(c.token())
-	return fresh
 }
 
 // NewClientWithToken creates a Client using Bearer token auth.
@@ -269,15 +284,13 @@ func NewClientWithToken(cfg sapmcpconfig.SAPSystem, accessToken string, onRefres
 			InsecureSkipVerify: cfg.TLSSkipVerify, //nolint:gosec
 		},
 	}
-	c := &httpClient{
-		cfg:            cfg,
-		http:           newShortClient(transport, jar, 30*time.Second),
-		httpLong:       newLongClient(transport, jar),
-		jar:            jar,
-		onTokenRefresh: onRefresh,
+	return &httpClient{
+		cfg:      cfg,
+		http:     newShortClient(transport, jar, 30*time.Second),
+		httpLong: newLongClient(transport, jar),
+		jar:      jar,
+		tokens:   newTokenSource(accessToken, onRefresh),
 	}
-	c.setToken(accessToken)
-	return c
 }
 
 // NewClientWithTransport creates a Client using a caller-supplied http.RoundTripper.
@@ -427,24 +440,15 @@ func hasSecureCookieOnHTTP(host string, header http.Header) bool {
 }
 
 // token returns the current OAuth2 access token, or "" for Basic Auth.
-//
-// The token is atomic rather than guarded by c.mu because setAuth reads it for
-// every request, including fetchCSRFToken's, which already runs under c.mu.
-// The refresh paths still call onTokenRefresh under c.mu, one at a time
-// (issue #191).
 func (c *httpClient) token() string {
-	if t := c.accessToken.Load(); t != nil {
-		return *t
-	}
-	return ""
+	return c.tokens.current()
 }
 
-func (c *httpClient) setToken(token string) {
-	c.accessToken.Store(&token)
-}
-
-func (c *httpClient) setAuth(req *http.Request) {
-	if token := c.token(); token != "" {
+// setAuth adds the credentials to req and returns the OAuth token it sent, or
+// "" for Basic Auth, so a 401 can be matched to the token it rejected.
+func (c *httpClient) setAuth(req *http.Request) string {
+	token := c.token()
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
 		req.SetBasicAuth(c.cfg.User, c.cfg.Password)
@@ -452,6 +456,7 @@ func (c *httpClient) setAuth(req *http.Request) {
 	if c.cfg.Client != "" {
 		req.Header.Set("sap-client", c.cfg.Client)
 	}
+	return token
 }
 
 // doRead performs a GET request with the default HTTP client (30-second timeout).
@@ -472,12 +477,13 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 		return nil, err
 	}
 
+	var sent string
 	makeReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+path, nil)
 		if err != nil {
 			return nil, err
 		}
-		c.setAuth(req)
+		sent = c.setAuth(req)
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
@@ -495,15 +501,12 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		c.mu.Lock()
-		if c.onTokenRefresh != nil {
-			newToken, err := c.onTokenRefresh(c.token())
-			if err != nil {
-				c.mu.Unlock()
-				return nil, fmt.Errorf("token refresh failed: %w", err)
-			}
-			c.setToken(newToken)
+		// Refresh outside c.mu: concurrent 401s on this session must reach
+		// refreshAfter401 together to share one refresh and its outcome.
+		if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
+			return nil, err
 		}
+		c.mu.Lock()
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err
@@ -580,22 +583,20 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 	token := c.csrfToken
 	c.mu.Unlock()
 
-	resp, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
+	resp, sent, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
 	if err != nil {
 		return nil, err
 	}
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		c.mu.Lock()
-		if resp.StatusCode == http.StatusUnauthorized && c.onTokenRefresh != nil {
-			newToken, err := c.onTokenRefresh(c.token())
-			if err != nil {
-				c.mu.Unlock()
-				return nil, fmt.Errorf("token refresh failed: %w", err)
+		if resp.StatusCode == http.StatusUnauthorized {
+			// Outside c.mu, as in doReadWith.
+			if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
+				return nil, err
 			}
-			c.setToken(newToken)
 		}
+		c.mu.Lock()
 		if err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err
@@ -604,7 +605,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		secureCookies := c.hasSecureCookies
 		c.mu.Unlock()
 
-		retryResp, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
+		retryResp, _, err := c.execMutateWith(ctx, hc, method, path, newBody(), headers, token)
 		if err != nil {
 			return nil, err
 		}
@@ -622,17 +623,19 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 
 // execMutateWith builds and executes a mutating request using the given *http.Client.
 // This allows callers to choose between the default (30s timeout) and long-timeout client.
-func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader, headers map[string]string, csrfToken string) (*http.Response, error) {
+// It also returns the OAuth token the request carried (see setAuth).
+func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader, headers map[string]string, csrfToken string) (resp *http.Response, sentToken string, err error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.Host+path, body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	c.setAuth(req)
+	sentToken = c.setAuth(req)
 	req.Header.Set("X-CSRF-Token", csrfToken)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	return hc.Do(req)
+	resp, err = hc.Do(req)
+	return resp, sentToken, err
 }
 
 // htmlErrorTextHeaderRe matches the SAP "Application Server Error" page's
@@ -785,9 +788,9 @@ func parseHTMLErrorBody(data []byte) string {
 
 // encodeNamespacePath detects SAP namespace objects in ADT paths and
 // percent-encodes the namespace slashes. When a user passes an object URI
-// like /sap/bc/adt/programs/programs//HFQ/REPORT, the double slash indicates
+// like /sap/bc/adt/programs/programs//ABC/REPORT, the double slash indicates
 // a namespace object. This function converts it to the ADT-required format:
-// /sap/bc/adt/programs/programs/%2fhfq%2freport
+// /sap/bc/adt/programs/programs/%2fabc%2freport
 func encodeNamespacePath(path string) string {
 	// Split the query off BEFORE searching for "//": a query value (a
 	// base64-shaped lock handle, say) can easily contain "//" with no

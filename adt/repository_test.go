@@ -178,62 +178,62 @@ func TestGetObjectInfoVIT(t *testing.T) {
 	}{
 		{
 			name:     "UIAC (UI annotation component)",
-			uri:      "/sap/bc/adt/vit/wb/object_type/uiac/object_name/%2fHFQ%2fTC_EXT",
+			uri:      "/sap/bc/adt/vit/wb/object_type/uiac/object_name/%2fABC%2fEX_EXT",
 			wantType: "UIAC",
 			objectXML: `<?xml version="1.0" encoding="utf-8"?>
-<wb:objectProperties adtcore:name="/HFQ/TC_EXT" adtcore:type="UIAC"
-  adtcore:description="HFQ UI Annotation Component"
+<wb:objectProperties adtcore:name="/ABC/EX_EXT" adtcore:type="UIAC"
+  adtcore:description="Example UI Annotation Component"
   xmlns:wb="http://www.sap.com/adt/vit/wb"
   xmlns:adtcore="http://www.sap.com/adt/core">
-  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+  <adtcore:packageRef adtcore:name="/ABC/MAIN"/>
 </wb:objectProperties>`,
 		},
 		{
 			name:     "UIAD (UI annotation definition)",
-			uri:      "/sap/bc/adt/vit/wb/object_type/uiad/object_name/%2fHFQ%2f95A365FBC361529D",
+			uri:      "/sap/bc/adt/vit/wb/object_type/uiad/object_name/%2fABC%2f1A2B3C4D5E6F7A8B",
 			wantType: "UIAD",
 			objectXML: `<?xml version="1.0" encoding="utf-8"?>
-<wb:objectProperties adtcore:name="/HFQ/95A365FBC361529D" adtcore:type="UIAD"
-  adtcore:description="HFQ UI Annotation Definition"
+<wb:objectProperties adtcore:name="/ABC/1A2B3C4D5E6F7A8B" adtcore:type="UIAD"
+  adtcore:description="Example UI Annotation Definition"
   xmlns:wb="http://www.sap.com/adt/vit/wb"
   xmlns:adtcore="http://www.sap.com/adt/core">
-  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+  <adtcore:packageRef adtcore:name="/ABC/MAIN"/>
 </wb:objectProperties>`,
 		},
 		{
 			name:     "ADVC (advclrp URI subtype)",
-			uri:      "/sap/bc/adt/vit/wb/object_type/advclrp/object_name/%2fHFQ%2fIWGBLTCDZFMCAZLC5IN3LHTJZY",
+			uri:      "/sap/bc/adt/vit/wb/object_type/advclrp/object_name/%2fABC%2fEXAMPLEADVCOBJECT000000001",
 			wantType: "ADVC",
 			objectXML: `<?xml version="1.0" encoding="utf-8"?>
-<wb:objectProperties adtcore:name="/HFQ/IWGBLTCDZFMCAZLC5IN3LHTJZY" adtcore:type="ADVC"
-  adtcore:description="HFQ ADVC Object"
+<wb:objectProperties adtcore:name="/ABC/EXAMPLEADVCOBJECT000000001" adtcore:type="ADVC"
+  adtcore:description="Example ADVC Object"
   xmlns:wb="http://www.sap.com/adt/vit/wb"
   xmlns:adtcore="http://www.sap.com/adt/core">
-  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+  <adtcore:packageRef adtcore:name="/ABC/MAIN"/>
 </wb:objectProperties>`,
 		},
 		{
 			name:     "LRCC (lrcclrp URI subtype)",
-			uri:      "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/%2fHFQ%2fW6SSBNYY2TNVIZKIDDTANNQPGY",
+			uri:      "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/%2fABC%2fEXAMPLELRCCOBJECT000000001",
 			wantType: "LRCC",
 			objectXML: `<?xml version="1.0" encoding="utf-8"?>
-<wb:objectProperties adtcore:name="/HFQ/W6SSBNYY2TNVIZKIDDTANNQPGY" adtcore:type="LRCC"
-  adtcore:description="HFQ LRCC Object"
+<wb:objectProperties adtcore:name="/ABC/EXAMPLELRCCOBJECT000000001" adtcore:type="LRCC"
+  adtcore:description="Example LRCC Object"
   xmlns:wb="http://www.sap.com/adt/vit/wb"
   xmlns:adtcore="http://www.sap.com/adt/core">
-  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+  <adtcore:packageRef adtcore:name="/ABC/MAIN"/>
 </wb:objectProperties>`,
 		},
 		{
 			name:     "WDCC (web Dynpro component configuration)",
-			uri:      "/sap/bc/adt/vit/wb/object_type/wdcc/object_name/%2fHFQ%2fBB7F8A229259B8B8C03A1EEC4C307",
+			uri:      "/sap/bc/adt/vit/wb/object_type/wdcc/object_name/%2fABC%2fEXAMPLEWDCC0123456789ABCDEF01",
 			wantType: "WDCC",
 			objectXML: `<?xml version="1.0" encoding="utf-8"?>
-<wb:objectProperties adtcore:name="/HFQ/BB7F8A229259B8B8C03A1EEC4C307" adtcore:type="WDCC"
-  adtcore:description="HFQ Web Dynpro Component Configuration"
+<wb:objectProperties adtcore:name="/ABC/EXAMPLEWDCC0123456789ABCDEF01" adtcore:type="WDCC"
+  adtcore:description="Example Web Dynpro Component Configuration"
   xmlns:wb="http://www.sap.com/adt/vit/wb"
   xmlns:adtcore="http://www.sap.com/adt/core">
-  <adtcore:packageRef adtcore:name="/HFQ/MAIN"/>
+  <adtcore:packageRef adtcore:name="/ABC/MAIN"/>
 </wb:objectProperties>`,
 		},
 	}

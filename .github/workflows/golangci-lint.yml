@@ -9,7 +9,10 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.27.x"
+          # Pinned: golangci-lint v2.13.2 cannot read the export data of Go 1.27.2
+          # ("export data version 5 is greater than maximum supported version 4").
+          # Return to "1.27.x" once golangci-lint supports it.
+          go-version: "1.27.1"
       - uses: actions/checkout@v7
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9

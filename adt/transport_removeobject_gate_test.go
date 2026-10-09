@@ -29,7 +29,7 @@ func TestRemoveFromTransport_ECCUnsupported_NeverSendsPUT(t *testing.T) {
 		case r.URL.Path == csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/DEVK900178":
+		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/AAAK900178":
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(eccWorklistXML))
@@ -51,7 +51,7 @@ func TestRemoveFromTransport_ECCUnsupported_NeverSendsPUT(t *testing.T) {
 	client := adt.NewClient(cfg)
 
 	err := client.RemoveFromTransport(context.Background(),
-		"DEVK900635", "DEVK900178", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
+		"AAAK900635", "AAAK900178", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -81,7 +81,7 @@ func TestRemoveFromTransport_S4Supported_StillIssuesPUT(t *testing.T) {
 		case r.URL.Path == csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/S4DK904438":
+		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/BBBK904438":
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(s4SingleRequestXML))
@@ -101,14 +101,14 @@ func TestRemoveFromTransport_S4Supported_StillIssuesPUT(t *testing.T) {
 	client := adt.NewClient(cfg)
 
 	err := client.RemoveFromTransport(context.Background(),
-		"S4DK904439", "S4DK904438", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
+		"BBBK904439", "BBBK904438", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotMethod != http.MethodPut {
 		t.Errorf("method: got %q, want PUT", gotMethod)
 	}
-	if gotPath != "/sap/bc/adt/cts/transportrequests/S4DK904439" {
+	if gotPath != "/sap/bc/adt/cts/transportrequests/BBBK904439" {
 		t.Errorf("path: got %q, want task number in path", gotPath)
 	}
 	if !strings.Contains(gotBody, `tm:useraction="removeobject"`) {
@@ -129,7 +129,7 @@ func TestRemoveFromTransport_CapabilityReadFails_StillIssuesPUT(t *testing.T) {
 		case r.URL.Path == csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/DEVK900123":
+		case r.Method == http.MethodGet && r.URL.Path == "/sap/bc/adt/cts/transportrequests/AAAK900123":
 			w.WriteHeader(http.StatusInternalServerError)
 		case r.Method == http.MethodPut:
 			putSeen = true
@@ -144,7 +144,7 @@ func TestRemoveFromTransport_CapabilityReadFails_StillIssuesPUT(t *testing.T) {
 	client := adt.NewClient(cfg)
 
 	err := client.RemoveFromTransport(context.Background(),
-		"DEVK900124", "DEVK900123", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
+		"AAAK900124", "AAAK900123", "R3TR", "PROG", "ZTEST", "PROG/P", "000001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

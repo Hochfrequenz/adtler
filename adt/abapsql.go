@@ -7,7 +7,7 @@ import (
 )
 
 // identifierRe matches valid ABAP table/column names.
-// Allows alphanumerics, forward slash (namespaces like /HFQ/TABLE),
+// Allows alphanumerics, forward slash (namespaces like /ABC/TABLE),
 // underscore, and hash (e.g. #MIN).
 var identifierRe = regexp.MustCompile(`^[A-Za-z0-9/_#]+$`)
 
@@ -52,6 +52,27 @@ func EscapeValue(v string) string {
 //
 // Returns an empty string if keys is empty or if keys and lastValues have different lengths.
 func buildPaginationWhere(keys, lastValues []string) string {
+	return buildPaginationWhereTyped(keys, lastValues, nil)
+}
+
+// ddicTypeTims is the DDIC data type of time fields (ABAP type T).
+const ddicTypeTims = "TIMS"
+
+// keyOperand renders a key field as the left side of a pagination comparison.
+// The data preview rejects the literal '240000' for a TIMS field ("not a valid
+// value for T(6,0)") although the database stores that value, so TIMS keys are
+// compared as text. The text sorts like the time, and ORDER BY keeps using the
+// plain field.
+func keyOperand(key string, keyTypes map[string]string) string {
+	if strings.EqualFold(keyTypes[key], ddicTypeTims) {
+		return "CAST( " + key + " AS CHAR( 6 ) )"
+	}
+	return key
+}
+
+// buildPaginationWhereTyped is buildPaginationWhere with the DDIC data type of
+// each key field (key name to type such as "TIMS").
+func buildPaginationWhereTyped(keys, lastValues []string, keyTypes map[string]string) string {
 	if len(keys) == 0 || len(keys) != len(lastValues) {
 		return ""
 	}
@@ -61,10 +82,10 @@ func buildPaginationWhere(keys, lastValues []string) string {
 		var parts []string
 		// All preceding keys are equal.
 		for j := 0; j < i; j++ {
-			parts = append(parts, fmt.Sprintf("%s = '%s'", keys[j], EscapeValue(lastValues[j])))
+			parts = append(parts, fmt.Sprintf("%s = '%s'", keyOperand(keys[j], keyTypes), EscapeValue(lastValues[j])))
 		}
 		// The i-th key is strictly greater.
-		parts = append(parts, fmt.Sprintf("%s > '%s'", keys[i], EscapeValue(lastValues[i])))
+		parts = append(parts, fmt.Sprintf("%s > '%s'", keyOperand(keys[i], keyTypes), EscapeValue(lastValues[i])))
 
 		if len(parts) == 1 {
 			terms = append(terms, parts[0])
@@ -78,14 +99,22 @@ func buildPaginationWhere(keys, lastValues []string) string {
 // BuildExportSQL generates the SELECT statement for exporting a customizing table.
 //
 // allKeys: all key fields including MANDT (used for ORDER BY).
-// paginateKeys: non-MANDT keys used for pagination WHERE clause (may be truncated
-//
-//	to maxKeysForPaginate by the caller). Must NOT include MANDT.
+// paginateKeys: non-MANDT keys used for pagination WHERE clause. Must NOT include MANDT.
 //
 // lastValues: values from the last row for pagination. Must match paginateKeys length.
 //
 //	Pass nil for the first page.
 func BuildExportSQL(table string, allKeys []string, paginateKeys []string, lastValues []string) (string, error) {
+	return BuildExportSQLTyped(table, allKeys, paginateKeys, lastValues, nil)
+}
+
+// BuildExportSQLTyped is BuildExportSQL with the DDIC data type of the key
+// fields (key name to type such as "TIMS"). keyTypes may be nil, and the type
+// match is case-insensitive. Only keys of type TIMS are treated specially: in
+// the pagination WHERE clause they are compared as CAST( f AS CHAR( 6 ) )
+// because the data preview rejects the stored value 240000 as a time literal.
+// The ORDER BY clause is unchanged.
+func BuildExportSQLTyped(table string, allKeys []string, paginateKeys []string, lastValues []string, keyTypes map[string]string) (string, error) {
 	if err := validateIdentifier(table); err != nil {
 		return "", fmt.Errorf("invalid table name: %w", err)
 	}
@@ -105,7 +134,7 @@ func BuildExportSQL(table string, allKeys []string, paginateKeys []string, lastV
 	sb.WriteString(table)
 
 	if len(lastValues) > 0 && len(paginateKeys) > 0 {
-		where := buildPaginationWhere(paginateKeys, lastValues)
+		where := buildPaginationWhereTyped(paginateKeys, lastValues, keyTypes)
 		if where != "" {
 			sb.WriteString(" WHERE ")
 			sb.WriteString(where)

@@ -10,15 +10,15 @@ import (
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
-// Live-probing s4u turned up a real bug: fetchCSRFToken's discovery GET
-// (/sap/bc/adt/discovery) sent no Accept header at all. hfq tolerates that;
-// s4u does not — it 400s with "Accept header missing"
+// Live-probing an S/4 system turned up a real bug: fetchCSRFToken's discovery GET
+// (/sap/bc/adt/discovery) sent no Accept header at all. The ECC system tolerates that;
+// the S/4 system does not — it 400s with "Accept header missing"
 // (ExceptionResourceBadRequest), and the error was silently swallowed
 // (fetchCSRFToken only checked the response body length, never the status
 // code), leaving the discovery cache permanently empty for the client's
 // whole lifetime. NegotiateContentType's default-fallback design hid this
 // in production: callers kept working off hardcoded content types with no
-// error, so discovery-driven content negotiation was silently dead on s4u
+// error, so discovery-driven content negotiation was silently dead on the S/4 system
 // and nobody noticed. This reproduces the server behavior and asserts
 // discovery still populates.
 func TestDiscovery_ServerRequiresAcceptHeader_StillPopulatesCache(t *testing.T) {

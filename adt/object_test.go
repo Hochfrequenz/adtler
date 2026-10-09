@@ -34,7 +34,7 @@ func TestCreateObjectProgram(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.CreateObject(context.Background(), "PROG", "ZTEST_NEW", "ZPACKAGE", "Test program", "DEVK900001")
+	err := client.CreateObject(context.Background(), "PROG", "ZTEST_NEW", "ZPACKAGE", "Test program", "AAAK900001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestCreatePackage(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.CreatePackage(context.Background(), "Z_MY_PKG", "My Package", "TESTUSER", "HOME", "ZS4U", "DEVK900001")
+	err := client.CreatePackage(context.Background(), "Z_MY_PKG", "My Package", "TESTUSER", "HOME", "ZLAY", "AAAK900001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestCreatePackage(t *testing.T) {
 	if !strings.Contains(gotBody, `pak:name="HOME"`) {
 		t.Errorf("body missing softwareComponent: %s", gotBody)
 	}
-	if !strings.Contains(gotBody, `pak:name="ZS4U"`) {
+	if !strings.Contains(gotBody, `pak:name="ZLAY"`) {
 		t.Errorf("body missing transportLayer: %s", gotBody)
 	}
 }
@@ -240,7 +240,7 @@ func TestDeleteObject(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.DeleteObject(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", "", "DEVK900001")
+	err := client.DeleteObject(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", "", "AAAK900001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,8 +253,8 @@ func TestDeleteObject(t *testing.T) {
 	if gotIfMatch != "etag-12345" {
 		t.Errorf("If-Match: got %q, want %q", gotIfMatch, "etag-12345")
 	}
-	if gotCorrNr != "DEVK900001" {
-		t.Errorf("corrNr: got %q, want %q", gotCorrNr, "DEVK900001")
+	if gotCorrNr != "AAAK900001" {
+		t.Errorf("corrNr: got %q, want %q", gotCorrNr, "AAAK900001")
 	}
 }
 

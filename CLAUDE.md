@@ -178,18 +178,26 @@ the `SAP_INTEGRATION_SYSTEMS` default set where it is documented or defined, and
 branches that key off one system's real behaviour. The prose, comments and commit messages
 *around* that value are not covered — write "the ECC system", not the alias.
 
-Unit-test fixture strings are not covered either; use `sysA` / `sysB` for system keys and generic
-placeholders for object names. This section is bound by the same rule: where an example is needed,
-write `<alias>`.
+Unit-test fixture strings are not covered either; use `sysA` / `sysB` for system keys, generic
+placeholders for object names, `AAA`/`BBB`/`CCC` as the system ID of transport and task numbers,
+`USERA`… for logon IDs, and `/ABC/` / `/XYZ/` as namespaces. This section is bound by the same
+rule: where an example is needed, write `<alias>`.
 
 `.mcp.json` is **not** an exception. It is git-ignored and may hold credentials; it must never be
 committed at all.
 
 ### Before pushing
 
-Grep the diff for the shapes that matter — an internal domain suffix, a `<SID>K9…` transport
-number, a `/XXX/` namespace prefix — rather than for the alias names, so the guard itself does not
-leak them.
+CI runs `tools/datacheck` over every tracked file. It fails on a transport or task number whose
+system ID is not a placeholder (`AAA`, `BBB`, `CCC`, and SAP's public demo system ID), and on a
+`/X/`-prefixed name, raw or URL-encoded, whose prefix is not allowlisted in
+`tools/datacheck/main.go`. Run it before pushing:
+`git ls-files -z | xargs -0 go run ./tools/datacheck`. It prints file and line, never the value.
+It cannot see host names, logon IDs, system aliases (also inside identifiers), lower-case namespace
+forms, or customer object names outside a namespace. Grep the diff for those yourself, by shape
+rather than by value, so the guard does not leak them: for logon IDs that means the values of
+user and owner attributes and fields in captured XML or JSON (`owner`, `responsible`, `changedBy`,
+`createdBy`, `AS4USER`) and the user argument of a test call.
 
 When you find internal data already published, redact it in place (edit the issue body, or open a
 PR) rather than only noting it. For a host name, credential or logon ID, assume the value is
@@ -216,6 +224,8 @@ R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always
 - **ETag charset**: SAP embeds the source Content-Type into the ETag, so `GetSource` and the validating PUT must agree on the Accept / Content-Type form. `sourceContentType` (discovery-driven, from #35) prefers `text/plain; charset=utf-8` when discovery advertises it; both sides therefore land on the same ETag form. The earlier 412 retry workaround was removed in #42 once the discovery path covered every supported system.
 - **DDIC endpoints**: DTEL/DOMA/TABL creation via `/sap/bc/adt/ddic/` requires S/4. R/3 returns 404 or 415.
 - **Runtime-load generation vs. session reuse (S/4)**: on S/4, an ADT session that just ran the create → set source → activate lifecycle **cannot generate a class's runtime load** when it then executes the class in that *same* session — classrun's `CREATE OBJECT` soft-fails as `Error: Class does not implement if_oo_adt_classrun~main method!` (issue #106 defect 1), and a changed + re-activated class serves the *stale* previously-generated load (defect 2). A **fresh** session generates the load from the current active source. `RunClass` works around this by running the classrun POST on an isolated single-use session (`freshSession` — own cookie jar + CSRF preflight), never the caller's worn session. R/3 (ECC) regenerates a persistent load on activation, so it is unaffected. **Generalises:** any operation that depends on SAP generating fresh state (a runtime load, etc.) right after a mutating lifecycle may hit this — reach for a fresh session rather than reusing the lifecycle session. Fixed in #106 / v0.3.13.
+- **Data preview comment lines**: both releases cut each SQL line of `POST /sap/bc/adt/datapreview/freestyle` after 255 characters (#183). S/4 additionally treats a line whose first *non-blank* character is `*` as a comment, while R/3 only checks column 1. `wrapLongSQLLines` (adt/query_wrap.go) therefore never starts a continuation line with `*`.
+- **ABAP Unit runs without executed tests**: `POST /sap/bc/adt/abapunit/testruns` answers 200 for every run that executes no test method, and the reason is only partly in the response. For an object without active test classes R/3 (SAP_BASIS 750) adds a run-level alert of kind `noTestClasses` and S/4 (SAP_BASIS 816) returns an empty `<aunit:runResult/>`; neither distinguishes "no test classes" from "test-classes include still inactive". A class URI naming no existing object gets no alert on either release. A risk-level skip shows up as a test-class alert of kind `warning` on both; an uncatchable runtime error as a test-class alert of kind `runtimeAbortion` on R/3 and as a method-level alert on S/4. `RunUnitTests` returns these alerts in `TestResult.Alerts` and lists related inactive parts in `TestResult.InactiveURIs` when nothing ran (#212).
 
 ### A 406 is never a missing path
 

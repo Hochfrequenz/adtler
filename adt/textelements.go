@@ -141,11 +141,13 @@ func (c *httpClient) writeTextElementSource(ctx context.Context, path, contentTy
 // the enqueue lock for text elements to this resource rather than to the object
 // itself, so callers that lock before SetTextElements must acquire the lock on
 // this URI. The objectURI must be a program, class, or function group URI.
+// A ".../source/main" URI is accepted and reduced to the object URI.
 func TextElementLockURI(objectURI string) (string, error) {
 	return resolveTextElementPath(objectURI)
 }
 
 func resolveTextElementPath(objectURI string) (string, error) {
+	objectURI = bareObjectURI(objectURI)
 	upper := strings.ToUpper(objectURI)
 	for prefix, tePath := range textElementEndpoints {
 		upperPrefix := strings.ToUpper(prefix)

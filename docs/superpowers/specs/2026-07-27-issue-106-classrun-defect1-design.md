@@ -5,16 +5,16 @@
 - **Issue:** [Hochfrequenz/adtler#106](https://github.com/Hochfrequenz/adtler/issues/106)
 - **Consumer:** [Hochfrequenz/aibap.mcp#460](https://github.com/Hochfrequenz/aibap.mcp/issues/460) (`blocked-by-adtler`; removes its interim workaround note after the bump)
 - **Builds on:** `docs/superpowers/specs/2026-07-22-classrun-endpoint-design.md` (the original `RunClass` client)
-- **Status:** Implemented — **root cause identified and fix verified live on S4U + HFQ** (2026-07-27). Option C resolves **both** defect 1 and defect 2; shipped in PR #107.
+- **Status:** Implemented — **root cause identified and fix verified live on the S/4 and ECC systems** (2026-07-27). Option C resolves **both** defect 1 and defect 2; shipped in PR #107.
 
 ## TL;DR — what changed in this revision
 
-The earlier revision assumed defect 1 was "the runtime load is never generated over ADT REST, so `RunClass` needs to mutate the class (add a test include + re-activate) to force generation." **Live re-verification on S4U disproved the premise.** The load *is* generated over pure HTTP — but only in a **fresh SAP session**. The real trigger is **HTTP session reuse**: the ADT session that performed `create → set source → activate` cannot then generate the runtime load when it runs the classrun in that *same* session; a brand-new session generates it cleanly and returns real output.
+The earlier revision assumed defect 1 was "the runtime load is never generated over ADT REST, so `RunClass` needs to mutate the class (add a test include + re-activate) to force generation." **Live re-verification on the S/4 system disproved the premise.** The load *is* generated over pure HTTP — but only in a **fresh SAP session**. The real trigger is **HTTP session reuse**: the ADT session that performed `create → set source → activate` cannot then generate the runtime load when it runs the classrun in that *same* session; a brand-new session generates it cleanly and returns real output.
 
 Consequences:
 
 - **Defect 1 has a trivial, non-mutating fix (Option C):** run the classrun POST on an **isolated fresh HTTP session**. No test include, no transport, no lock, no object mutation.
-- **Defect 2 (stale output after re-activation) is resolved by the same fix.** Because each `RunClass` now runs on its own fresh session, it always compiles the currently-active source — a re-activated class returns its new output, never a stale one. Verified live on S4U + HFQ; it was **not** a separate `blocked:eclipse-capture` problem.
+- **Defect 2 (stale output after re-activation) is resolved by the same fix.** Because each `RunClass` now runs on its own fresh session, it always compiles the currently-active source — a re-activated class returns its new output, never a stale one. Verified live on the S/4 and ECC systems; it was **not** a separate `blocked:eclipse-capture` problem.
 - **Option B (test-include-activate mutation) is superseded** by Option C and dropped from the recommendation.
 - **Option A (classify the soft-fail as a typed error) still stands** as an independent robustness improvement (separate follow-up PR).
 
@@ -41,7 +41,7 @@ change (Option C).** The spec is defect-1-centric for historical reasons, but th
 fresh-session fix resolves defect 2 as well — see "Defect 2 is also resolved by
 Option C" below.
 
-### Root cause: HTTP session reuse (verified live 2026-07-27, S4U)
+### Root cause: HTTP session reuse (verified live 2026-07-27, S/4 system)
 
 The classrun handler runs `CREATE OBJECT` for the target class. In a **fresh**
 SAP session that never touched the class, `CREATE OBJECT` triggers implicit
@@ -51,7 +51,7 @@ and `CREATE OBJECT` raises `cx_sy_create_object_error`, which the handler masks
 as the "does not implement …main…" soft-fail.
 
 This was proven with a 2×2 experiment run through the **real adtler Go client**
-against S4U on freshly created + activated `$TMP` classrun classes:
+against the S/4 system on freshly created + activated `$TMP` classrun classes:
 
 | Scenario | HTTP session | classrun result |
 |---|---|---|
@@ -71,22 +71,22 @@ freshness, nothing else** — see "Ruled out" below.
 Running the identical create → set source → activate → run lifecycle **in a
 single reused session** on both connected systems:
 
-| Step (pure ADT REST, reused session) | HFQ (ECC/R3) | S4U (S/4, SAP_BASIS 758) |
+| Step (pure ADT REST, reused session) | ECC system (R/3) | S/4 system (SAP_BASIS 758) |
 |---|---|---|
 | Fresh class → `RunClass` | ✅ real output (`V1`) | ❌ soft-fail (defect 1) |
 | Change source → activate → `RunClass` | ✅ new output | ⚠️ stale previous output (defect 2) |
 
-On **HFQ/ECC the activation (re)generates a persistent runtime load**, so
+On **the ECC system the activation (re)generates a persistent runtime load**, so
 classrun runs correctly regardless of session freshness — neither defect
-appears. On **S4U/S/4 the activation does not**, so a reused session hits the
-missing-load path. The fix (fresh session, Option C) is a no-op on HFQ (the load
-is already persistent) and repairs S4U — so the `eachSystem` test can assert
-**real output on both systems**, with HFQ acting as the regression guard.
+appears. On **the S/4 system the activation does not**, so a reused session hits the
+missing-load path. The fix (fresh session, Option C) is a no-op on the ECC system (the load
+is already persistent) and repairs the S/4 system — so the `eachSystem` test can assert
+**real output on both systems**, with the ECC system acting as the regression guard.
 
 ### Ruled out as the trigger (each verified live)
 
 - **The debugger breakpoint-sync request** (`POST /sap/bc/adt/debugger/breakpoints`
-  that Eclipse fires on F9). Reproduced independently on S4U: a fresh session
+  that Eclipse fires on F9). Reproduced independently on the S/4 system: a fresh session
   with **no breakpoint-sync at all** returns `V1`, and a session where the
   breakpoint-sync itself failed (HTTP 400/403) still returns `V1`. It is
   debugger housekeeping, not a load generator.
@@ -100,18 +100,18 @@ is already persistent) and repairs S4U — so the `eachSystem` test can assert
 
 ## Investigation summary (what constrains the design)
 
-Verified live on S4U (SAP_BASIS 758) 2026-07-24 / 2026-07-27 and on HFQ
+Verified live on the S/4 system (SAP_BASIS 758) 2026-07-24 / 2026-07-27 and on the ECC system
 (ECC/R3) 2026-07-27 (issue #106 comments). Relevant facts:
 
 - **Root cause is session reuse, not "REST cannot generate the load"** (2×2
-  above). A fresh session generates the load and returns real output on S4U over
+  above). A fresh session generates the load and returns real output on the S/4 system over
   pure HTTP.
 - Defect 1 is purely runtime-load-generation state — a trivial pure-`out->write`
   class with no DB/EML access reproduces it identically. It is **not** a DB/RAP
   problem.
 - The `text/plain` soft-fail body is produced by the handler at HTTP 200; there
   is no structured error channel and no ST22 dump.
-- **The soft-fail string is cause-ambiguous** (verified 2026-07-27, S4U): a class
+- **The soft-fail string is cause-ambiguous** (verified 2026-07-27, S/4 system): a class
   that does *not* implement `IF_OO_ADT_CLASSRUN` but *does* have a generated load
   returns the **identical** `Error: Class does not implement …main…`. So the same
   body means load-not-generated *or* genuine non-implementer *or* not-instantiable.
@@ -121,7 +121,7 @@ Verified live on S4U (SAP_BASIS 758) 2026-07-24 / 2026-07-27 and on HFQ
   Because Option C runs **every** `RunClass` on its own fresh session, each
   execution compiles the currently-active version — which resolves **both**
   defect 1 (a fresh class runs) **and** defect 2 (a re-activated class returns its
-  new output, never a stale one). Verified live on S4U + HFQ (see Testing).
+  new output, never a stale one). Verified live on the S/4 and ECC systems (see Testing).
   Option C does not create a *persistent* load, but the RunClass path never needs
   one because it never reuses a session that could hold a stale one.
 - **The MCP consumer reuses one long-lived adtler client** across the whole
@@ -250,7 +250,7 @@ Once every `RunClass` runs on its own fresh session, defect 2 disappears with
 defect 1. A fresh session holds no prior load, so its `CREATE OBJECT` compiles
 the **currently active** source — never a stale previously-generated version.
 
-**Verified live 2026-07-27 on S4U and HFQ:** over one reused client, cycling
+**Verified live 2026-07-27 on the S/4 and ECC systems:** over one reused client, cycling
 `set source (V1) → activate → run → set source (V2) → activate → run → (V3)…`
 returns `V1`, then `V2`, then `V3` on **both** systems. Pre-fix, S/4 kept serving
 the first version to the reused session (the reported defect 2); post-fix each
@@ -301,23 +301,23 @@ one long-lived client** (reproducing the worn-session lifecycle), then
 `RunClass` on that same client. With Option C, assert **real output on both
 systems**:
 
-- **HFQ (ECC) — regression guard.** classrun already worked here (activation
+- **ECC system — regression guard.** classrun already worked here (activation
   regenerates a persistent load); the fresh-session fix must not break it.
   Assert real output.
-- **S4U (S/4) — the fix.** Pre-fix this soft-fails in the reused session;
+- **S/4 system — the fix.** Pre-fix this soft-fails in the reused session;
   post-fix Option C runs the classrun on a fresh session and returns real
   output. Assert real output.
 
-Asserting identical correct behaviour on both systems is the point: HFQ proves
-no regression, S4U proves the fix. (A pre-fix run of the same test would fail
-only on S4U, which is the bug this closes.)
+Asserting identical correct behaviour on both systems is the point: the ECC system proves
+no regression, the S/4 system proves the fix. (A pre-fix run of the same test would fail
+only on the S/4 system, which is the bug this closes.)
 
 **Defect 2 —** `TestRunClass_ReactivatedClass_Integration`: over one reused
 client, `set source → activate → RunClass` is cycled through three markers
 (`…ONE/…TWO/…THREE`) and each run must return the just-activated version. Pre-fix
 S/4 returns the stale first version on the 2nd/3rd cycle; post-fix both systems
 return the current version every time. Both regression tests verified live on
-HFQ + S4U 2026-07-27.
+the ECC and S/4 systems 2026-07-27.
 
 `$TMP` scratch classes are created fresh per run and cleaned up.
 
