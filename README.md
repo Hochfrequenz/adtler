@@ -174,16 +174,32 @@ Push has no automated integration test and is verified manually.
 
 Some behaviour has no repeatable automated test, because nothing here can undo
 the operation that would prove it. `CreatePackage` is the worked example, and the
-reasoning generalises.
+reasoning generalises. It was true of packages until
+[#150](https://github.com/Hochfrequenz/adtler/issues/150) made them deletable
+(below), and it stays true of `TestCreatePackage_Integration`, which does not
+use that yet.
 
-**This client cannot currently delete a package.** `DeleteObject` reads an ETag
-belonging to a different representation than the one SAP compares, so the delete
-comes back `412` ([#150](https://github.com/Hochfrequenz/adtler/issues/150)) —
-an open bug in this library, not a limit of the ADT protocol. Nothing measured
-says a correctly formed delete would fail, and removal through SE80 or SE21 on
-the system works today. Until #150 is fixed, though, a test that created a
-package per run would strand one on every system, on every run, with nothing in
-this client able to clean up after it.
+**Deleting a package works since #150.** `DeleteObject` used to send the ETag it
+had just read as `If-Match`, and SAP S/4HANA refused it with `412` for a package:
+the ETag a `GET` returns and the one the server compares a `DELETE` against
+differ in their version digits (a trailing `001` against `000`), whatever media
+type the `GET` asks for
+([#150](https://github.com/Hochfrequenz/adtler/issues/150)) — a bug in this
+library, not a limit of the ADT protocol. Measured on SAP S/4HANA, on-premise
+(SAP_BASIS 816, S4CORE 109) on 2026-10-09: a `DELETE` with the ETag, with `*`
+or with the quoted ETag answers `412`, and a `DELETE` without `If-Match`
+succeeds. `DeleteObject` reads the ETag itself a moment before it deletes, so
+the header covers only the short gap between that read and the `DELETE` inside
+one call, never a change since the caller last looked. For a package that
+protection cannot work, because no ETag ever matches. `DeleteObject` therefore
+still sends the ETag first, for every object type, and only for a package whose
+ETag SAP refuses as a mismatch (`412`, or an ETag exception) does it retry once
+without a precondition. For every other object type a `412` is returned as
+before, because the mismatch was measured for packages only and elsewhere it may
+report a real concurrent change.
+`TestDeletePackage_MultiSystem_Integration` creates a local package and deletes
+it again. `TestCreatePackage_Integration` still leaves its own package behind,
+because it was written before packages could be deleted.
 
 **SAP checks the `Accept` header last.** Measured on SAP S/4HANA on-premise
 (SAP_BASIS 816, S4CORE 109) on 2026-09-21, by issuing the same call with and
@@ -200,7 +216,8 @@ check. Anything SAP rejects earlier answers identically either way.
 
 Those two facts combine into a trap worth knowing before writing a test here:
 **the only live request that can detect a missing `Accept` header is one that
-creates a package, and this client cannot remove what it creates.** A live guard is
+creates a package, and `TestCreatePackage_Integration` does not remove
+its package, although `DeleteObject` could do that now.** A live guard is
 therefore single-use per system — it works once, on a system where the package
 does not exist yet, and every run after that can only smoke-test. That is
 precisely how [#149](https://github.com/Hochfrequenz/adtler/issues/149) shipped:

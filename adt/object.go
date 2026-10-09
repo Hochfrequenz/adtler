@@ -337,11 +337,42 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	// The pessimistic path (lockHandle query param) fails on some systems because
 	// CL_ADT_ENQUEUE=>READ doesn't find the REST-session lock.
 	// Fetch the ETag from the object URI itself (not /source/main).
-	accept := c.acceptHeaderForURI(objectURI)
-	etagResp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": accept})
+	etag, err := c.fetchDeleteETag(ctx, objectURI)
 	if err != nil {
-		return fmt.Errorf("DeleteObject fetch ETag: %w", err)
+		return err
 	}
+	err = c.sendDelete(ctx, path, etag)
+	if ClassifyError(err) != ErrorEtagMismatch || !isPackageURI(objectURI) {
+		return err
+	}
+	// On S/4HANA a package never matches: the ETag a GET returns and the one the
+	// DELETE is compared against differ in the version digits (a trailing 001
+	// against 000), whatever media type the GET asks for (adtler#150). Reading
+	// the ETag again cannot help, and parsing the expected one out of the 412
+	// text would depend on a translatable message.
+	//
+	// So for a package, and only for a package, delete without a precondition,
+	// once, after SAP refused the ETag as a mismatch. The mismatch was measured
+	// for packages only; for every other object type a 412 may be a real
+	// concurrent change between the read and the DELETE, and it is returned as
+	// it was before. A second refusal is returned as it is; the first 412 is
+	// then not part of the error, because the second answer is the one that
+	// says why the package stays.
+	return c.sendDelete(ctx, path, "")
+}
+
+// isPackageURI reports whether objectURI addresses a package.
+func isPackageURI(objectURI string) bool {
+	return strings.HasPrefix(strings.ToLower(objectURI), "/sap/bc/adt/packages/")
+}
+
+// fetchDeleteETag reads the object's ETag for a DELETE's If-Match header.
+func (c *httpClient) fetchDeleteETag(ctx context.Context, objectURI string) (string, error) {
+	etagResp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": c.acceptHeaderForURI(objectURI)})
+	if err != nil {
+		return "", fmt.Errorf("DeleteObject fetch ETag: %w", err)
+	}
+	defer func() { _ = etagResp.Body.Close() }()
 	// Check the HTTP status before reading the ETag header. doRead only
 	// surfaces transport-level errors; an HTTP 4xx response (e.g. S/4 returning
 	// 400 ExceptionResourceWrongData for a CLAS bare-URI GET) flows through as
@@ -349,16 +380,21 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	// the misleading "no ETag returned" instead of the real SAP error.
 	// See adtler#19 / mcp-server-abap#299.
 	if err := checkResponse(etagResp); err != nil {
-		_ = etagResp.Body.Close()
-		return fmt.Errorf("DeleteObject fetch ETag: %w", err)
+		return "", fmt.Errorf("DeleteObject fetch ETag: %w", err)
 	}
 	etag := etagResp.Header.Get("ETag")
-	_ = etagResp.Body.Close()
 	if etag == "" {
-		return fmt.Errorf("DeleteObject: no ETag returned for %s", objectURI)
+		return "", fmt.Errorf("DeleteObject: no ETag returned for %s", objectURI)
 	}
-	headers := map[string]string{
-		"If-Match": etag,
+	return etag, nil
+}
+
+// sendDelete sends the DELETE with the given ETag as If-Match, or without any
+// precondition when etag is empty.
+func (c *httpClient) sendDelete(ctx context.Context, path, etag string) error {
+	var headers map[string]string
+	if etag != "" {
+		headers = map[string]string{"If-Match": etag}
 	}
 	resp, err := c.doMutate(ctx, http.MethodDelete, path, nil, headers)
 	if err != nil {
