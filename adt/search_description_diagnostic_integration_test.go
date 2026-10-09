@@ -145,7 +145,7 @@ func TestSearchObjects_DescriptionBySpelling_Diagnostic_Integration(t *testing.T
 					return 0
 				}
 				if err != nil {
-					t.Fatalf("SearchObjects with objectType %s: %v", objectType, err)
+					t.Fatalf("SearchObjects with objectType %s: %s", objectType, redact(err.Error(), sys.Config.Host, ""))
 				}
 				parsedNonEmpty := 0
 				for _, r := range results {

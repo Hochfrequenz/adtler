@@ -25,12 +25,12 @@ const browseCrossCheckLimit = 5
 // findBrowsablePackage asks the system for packages and returns the first one
 // whose BrowsePackage result is not empty, together with that result. It
 // returns an empty name when the system offers none.
-func findBrowsablePackage(ctx context.Context, t *testing.T, client adt.Client) (string, []adt.ObjectInfo) {
+func findBrowsablePackage(ctx context.Context, t *testing.T, client adt.Client, host string) (string, []adt.ObjectInfo) {
 	t.Helper()
 	for _, query := range browseCandidateQueries {
 		pkgs, err := client.SearchPackages(ctx, query, browseCandidateLimit)
 		if err != nil {
-			t.Fatalf("SearchPackages: %v", err)
+			t.Fatalf("SearchPackages: %s", redact(err.Error(), host, ""))
 		}
 		for _, p := range pkgs {
 			objects, err := client.BrowsePackage(ctx, p.Name)
@@ -53,7 +53,7 @@ func findBrowsablePackage(ctx context.Context, t *testing.T, client adt.Client) 
 // with what GetObjectInfo reports for the same URI.
 //
 // The test finds a package that has content through the system's own search,
-// so it depends on no object existing anywhere, and it skips on a system
+// so it does not depend on a particular fixture object, and it skips on a system
 // without one. It logs counts only, never object or package names.
 //
 // What to look for in the -v output, per system: "objects without package"
@@ -67,7 +67,7 @@ func TestBrowsePackage_PackageName_MultiSystem_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
-			pkg, objects := findBrowsablePackage(ctx, t, sys.Client)
+			pkg, objects := findBrowsablePackage(ctx, t, sys.Client, sys.Config.Host)
 			if pkg == "" {
 				t.Skip("no package with content found on this system")
 			}
