@@ -69,6 +69,16 @@ Credentials live in JSON files matching the schema defined by
 [`sap-mcp-config`](https://github.com/Hochfrequenz/sap-mcp-config). The
 default token store path is `~/.config/sap-adt/tokens.json`.
 
+`systems.json` may reference a secret as `${env:VAR}`. `sapmcpconfig.Load`
+resolves these; a caller that reads the file some other way must resolve them
+before creating a client. A client whose Basic-auth `User` or `Password` is
+still exactly one `${env:VAR}` placeholder refuses every request with an error
+matching `adt.ErrUnresolvedPlaceholder`, **before** anything is sent. Sending it
+would make SAP count a failed logon, and a few of those lock the user. A value
+that merely contains `${env:...}` among other characters is sent unchanged, so
+a real password that is exactly one placeholder is refused too. Clients that
+authenticate with an OAuth2 token are not affected.
+
 ## Testing
 
 ### Unit tests

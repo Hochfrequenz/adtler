@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -336,7 +337,9 @@ func (c *httpClient) Logout(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("Logout: %w", err)
 	}
-	c.setAuth(req)
+	if _, err := c.setAuth(req); err != nil {
+		return fmt.Errorf("Logout: %w", err)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("Logout: %w", err)
@@ -366,7 +369,9 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.setAuth(req)
+	if _, err := c.setAuth(req); err != nil {
+		return err
+	}
 	req.Header.Set("X-CSRF-Token", "Fetch")
 	// Some systems (observed on S/4) reject this GET with 400
 	// ExceptionResourceBadRequest ("Accept header missing") when no Accept
@@ -439,24 +444,55 @@ func hasSecureCookieOnHTTP(host string, header http.Header) bool {
 	return false
 }
 
+// ErrUnresolvedPlaceholder is matched by errors.Is when a request is refused
+// because the Basic-auth user or password is still an unresolved ${env:VAR}
+// placeholder.
+var ErrUnresolvedPlaceholder = errors.New("adt: credential is an unresolved ${env:VAR} placeholder")
+
+// envPlaceholderRe matches a value that is exactly one ${env:VAR} placeholder,
+// using the variable-name grammar of sap-mcp-config. Only a whole-value match
+// counts: a real secret may legitimately contain ${env:...} among other
+// characters.
+var envPlaceholderRe = regexp.MustCompile(`^\$\{env:[A-Za-z_][A-Za-z0-9_]*\}$`)
+
+// checkResolved refuses a Basic-auth credential that is still an unresolved
+// ${env:VAR} placeholder. SAP would reject it with 401 and count a failed
+// logon, and a few of those lock the user. The error holds the field name and
+// the placeholder, which is the whole value and so reveals no secret.
+func checkResolved(field, value string) error {
+	if envPlaceholderRe.MatchString(value) {
+		return fmt.Errorf("adt: %s is an unresolved %s placeholder; load the config with sapmcpconfig.Load or resolve it before creating the client: %w",
+			field, value, ErrUnresolvedPlaceholder)
+	}
+	return nil
+}
+
 // token returns the current OAuth2 access token, or "" for Basic Auth.
 func (c *httpClient) token() string {
 	return c.tokens.current()
 }
 
 // setAuth adds the credentials to req and returns the OAuth token it sent, or
-// "" for Basic Auth, so a 401 can be matched to the token it rejected.
-func (c *httpClient) setAuth(req *http.Request) string {
+// "" for Basic Auth, so a 401 can be matched to the token it rejected. It
+// refuses, before anything is sent, a Basic-auth user or password that is an
+// unresolved ${env:VAR} placeholder (see ErrUnresolvedPlaceholder).
+func (c *httpClient) setAuth(req *http.Request) (string, error) {
 	token := c.token()
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
+		if err := checkResolved("user", c.cfg.User); err != nil {
+			return "", err
+		}
+		if err := checkResolved("password", c.cfg.Password); err != nil {
+			return "", err
+		}
 		req.SetBasicAuth(c.cfg.User, c.cfg.Password)
 	}
 	if c.cfg.Client != "" {
 		req.Header.Set("sap-client", c.cfg.Client)
 	}
-	return token
+	return token, nil
 }
 
 // doRead performs a GET request with the default HTTP client (30-second timeout).
@@ -483,7 +519,10 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 		if err != nil {
 			return nil, err
 		}
-		sent = c.setAuth(req)
+		sent, err = c.setAuth(req)
+		if err != nil {
+			return nil, err
+		}
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
@@ -629,7 +668,10 @@ func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method
 	if err != nil {
 		return nil, "", err
 	}
-	sentToken = c.setAuth(req)
+	sentToken, err = c.setAuth(req)
+	if err != nil {
+		return nil, "", err
+	}
 	req.Header.Set("X-CSRF-Token", csrfToken)
 	for k, v := range headers {
 		req.Header.Set(k, v)
