@@ -48,7 +48,9 @@ func TestUnresolvedPlaceholder_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
 		t.Run(sys.Name, func(t *testing.T) {
-			if _, err := sys.Client.GetObjectInfo(ctx, "/sap/bc/adt/programs/programs/RSPARAM"); err != nil {
+			// A search needs no named object, so the read succeeds on any
+			// system whose credentials are accepted, whatever it contains.
+			if _, err := sys.Client.SearchObjects(ctx, "Z*", "", 1); err != nil {
 				t.Fatalf("a read with the configured credentials failed: %v", err)
 			}
 
@@ -57,7 +59,7 @@ func TestUnresolvedPlaceholder_Integration(t *testing.T) {
 			rt := &refusingTransport{}
 			client := adt.NewClientWithTransport(cfg, rt)
 
-			_, err := client.GetObjectInfo(ctx, "/sap/bc/adt/programs/programs/RSPARAM")
+			_, err := client.SearchObjects(ctx, "Z*", "", 1)
 
 			if !errors.Is(err, adt.ErrUnresolvedPlaceholder) {
 				t.Fatalf("error = %v, want one matching ErrUnresolvedPlaceholder", err)
