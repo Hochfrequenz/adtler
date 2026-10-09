@@ -59,6 +59,9 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 			for _, tt := range tests {
 				tt := tt
 				t.Run(tt.tadir, func(t *testing.T) {
+					// Namespaced objects only: the test covers the %2f-encoded
+					// object name in the VIT URI, which a name without a
+					// namespace would not exercise.
 					sql := "SELECT obj_name FROM tadir WHERE pgmid = 'R3TR' AND object = '" +
 						tt.tadir + "' AND delflag = ' ' AND obj_name LIKE '/%' ORDER BY obj_name"
 					res, err := sys.Client.RunQuery(ctx, sql, 1)

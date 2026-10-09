@@ -116,7 +116,7 @@ disk **outside the repo**. Run it with the env triple from the Global Constraint
 **small** request — the S/4 bodies measured so far reached 10.3 MB and `c.http` has a
 30-second timeout (`adt/client.go:222`); choose one
 by enumerating `GetTransportRequests(user, "D")` and taking a request with a short object
-list. (`/ABC/TESTOBJ001` is known to work but is the 10.3 MB one; prefer smaller.)
+list. (The request measured while writing this plan returned 10.3 MB; prefer smaller.)
 
 Reduce each body by hand to a small fixture preserving the structural features later tasks
 depend on, and add them as Go string constants in a new file `adt/transport_ecc_test.go`

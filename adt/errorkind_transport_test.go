@@ -7,11 +7,13 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-// The two messages below are captured verbatim from a live S/4 system
-// on mcp-server-abap#442 — a CTS "object is registered in another open
-// request" conflict (LIMU/CINC sub-include and R3TR/DDLS), distinct from the
-// runtime ENQUEUE. Both arrive as HTTP 409 / ExceptionResourceLockConflict and
-// name the blocking request; retargeting the write at that request succeeds.
+// The two messages below were captured from a live S/4 system on
+// mcp-server-abap#442 and redacted: object names, request numbers and users
+// are synthetic placeholders; the message wording is verbatim. Both report a
+// CTS "object is registered in another open request" conflict (LIMU/CINC
+// sub-include and R3TR/DDLS), distinct from the runtime ENQUEUE. Both arrive
+// as HTTP 409 / ExceptionResourceLockConflict and name the blocking request;
+// retargeting the write at that request succeeds.
 const (
 	lockedInTransportDDLS = "Object R3TR DDLS /ABC/DD_ADRESSE is already locked in request CCCK901974 of user USERA"
 	lockedInTransportCINC = "Object LIMU CINC /ABC/BP_DD_ADRESSE============CCIMP is already locked in request CCCK901974 of user USERA"
