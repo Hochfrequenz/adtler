@@ -12,10 +12,17 @@ import (
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
 )
 
+// BrowsePackage lists the objects of one package, sub-packages included. Every
+// returned ObjectInfo carries the browsed package (upper case) in PackageName.
 func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]ObjectInfo, error) {
 	params := url.Values{}
 	params.Set("parent_type", ObjectTypePackage)
 	params.Set("parent_name", packageName)
+	// Without this parameter the response carries no description at all
+	// (measured on SAP S/4HANA, on-premise: none of 92 objects, against 67 with
+	// it; the 25 others have none to give). SAP ERP 6.0 sends none either way and
+	// accepts the parameter. See adtler#152.
+	params.Set("withShortDescriptions", "true")
 	path := "/sap/bc/adt/repository/nodestructure?" + params.Encode()
 
 	resp, err := c.doMutate(ctx, http.MethodPost, path, nil,
@@ -37,6 +44,12 @@ func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]O
 	if err != nil {
 		return nil, fmt.Errorf("BrowsePackage parsing: %w", err)
 	}
+	// The response names no package per object, but every node is, by
+	// definition, an object of the package that was browsed (a sub-package is
+	// listed in its parent). ADT writes package names in upper case, which is
+	// also what GetObjectInfo returns, so the caller's spelling is normalised.
+	// See adtler#152.
+	browsed := strings.ToUpper(packageName)
 	result := make([]ObjectInfo, 0, len(tc.Nodes))
 	for _, n := range tc.Nodes {
 		if n.ObjectName == "" {
@@ -47,6 +60,7 @@ func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]O
 			Type:        n.ObjectType,
 			Name:        n.ObjectName,
 			Description: n.Description,
+			PackageName: browsed,
 		})
 	}
 	return result, nil
