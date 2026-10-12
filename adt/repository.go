@@ -89,6 +89,11 @@ const fugrIncludeContentType = "application/vnd.sap.adt.functions.fincludes.v2+x
 // produces. The version is the one that 406 response names; a system that does
 // not know it answers 406 as well and the */* retry in readWithAcceptFallback
 // covers that case. See adtler#169.
+//
+// The version is fixed here, as it is for the includes, and does not come from
+// discovery. A release that publishes only another version answers 406:
+// GetObjectInfo and FetchETag recover through the */* retry, DeleteObject has
+// no retry. CreateFunctionModule sends the v2 type on create.
 const fugrModuleContentType = "application/vnd.sap.adt.functions.fmodules.v3+xml"
 
 // vitObjectPropertiesContentType is the vendor MIME type required by SAP for
