@@ -235,3 +235,33 @@ func TestDeleteObject_AcceptedFirstTimeCostsOneReadAndOneDelete(t *testing.T) {
 		t.Errorf("requests: got %d reads and %d deletes, want 1 and 1", gets, deletes)
 	}
 }
+
+// Every spelling of a package URI that a caller can pass is recognised, so the
+// retry is not skipped for an upper-case or a namespaced package, and a URI that
+// only starts like a package URI is not retried.
+func TestDeleteObject_RetryRecognisesPackageURIForms(t *testing.T) {
+	for _, tc := range []struct {
+		name, uri string
+		retried   bool
+	}{
+		{"local package, encoded dollar sign", "/sap/bc/adt/packages/%24zexample", true},
+		{"upper case", "/sap/bc/adt/packages/%24ZEXAMPLE", true},
+		{"namespaced package, encoded slashes", "/sap/bc/adt/packages/%2fabc%2fexample", true},
+		{"the collection without a name", "/sap/bc/adt/packages/", false},
+		{"a path leading out of the collection", "/sap/bc/adt/packages/../programs/programs/zexample", false},
+		{"another collection", "/sap/bc/adt/programs/programs/zexample", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newDeleteMock()
+			defer srv.Close()
+
+			err := srv.client().DeleteObject(context.Background(), tc.uri, "", "")
+			if tc.retried && (err != nil || len(srv.deletes) != 2) {
+				t.Errorf("want a retry without a precondition and success, got %d DELETEs, err=%v", len(srv.deletes), err)
+			}
+			if !tc.retried && len(srv.deletes) > 1 {
+				t.Errorf("must not be retried, got %d DELETEs", len(srv.deletes))
+			}
+		})
+	}
+}

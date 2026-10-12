@@ -361,9 +361,20 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	return c.sendDelete(ctx, path, "")
 }
 
-// isPackageURI reports whether objectURI addresses a package.
+// isPackageURI reports whether objectURI addresses one package: a URI under
+// /sap/bc/adt/packages/ with a name and without a ".." segment that could lead
+// out of it.
 func isPackageURI(objectURI string) bool {
-	return strings.HasPrefix(strings.ToLower(objectURI), "/sap/bc/adt/packages/")
+	const prefix = "/sap/bc/adt/packages/"
+	lower := strings.ToLower(objectURI)
+	if !strings.HasPrefix(lower, prefix) {
+		return false
+	}
+	name := strings.TrimPrefix(lower, prefix)
+	if i := strings.IndexByte(name, '?'); i >= 0 {
+		name = name[:i]
+	}
+	return strings.Trim(name, "/") != "" && !strings.Contains(name, "..")
 }
 
 // fetchDeleteETag reads the object's ETag for a DELETE's If-Match header.

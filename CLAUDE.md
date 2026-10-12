@@ -137,7 +137,7 @@ if that errors, carry on with the one already there"* — passes forever once th
 Where the object cannot be deleted again it always exists after the first run, so the fallback
 becomes permanent. That is how #149 shipped: `CreatePackage` could not work on S/4 at all, and
 `TestCreatePackage_Integration` reported success anyway, because this client could not
-delete a package (#150, an ETag bug here, not an ADT limitation, fixed since) and so the fixture
+delete a package (#150, an ETag mismatch the library now works around, not an ADT limitation) and so the fixture
 from an earlier run was always there to fall back on.
 
 A fallback is legitimate for failures that say *this object is already in the way* — a duplicate,

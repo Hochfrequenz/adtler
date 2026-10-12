@@ -49,7 +49,7 @@ func TestDeletePackage_MultiSystem_Integration(t *testing.T) {
 				t.Skipf("[%s] /sap/bc/adt/packages is not available on this release", sys.Name)
 			}
 			if err != nil {
-				t.Fatalf("[%s] CreatePackage: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
+				t.Fatalf("[%s] CreatePackage: %s", sys.Name, redact(err.Error(), sys.Config.Host, sys.Config.User))
 			}
 			t.Cleanup(func() {
 				if _, err := sys.Client.GetObjectInfo(context.Background(), uri); err != nil {
@@ -60,15 +60,15 @@ func TestDeletePackage_MultiSystem_Integration(t *testing.T) {
 					// try to remove it, so a leftover is reported.
 				}
 				if err := sys.Client.DeleteObject(context.Background(), uri, "", ""); err != nil {
-					t.Errorf("[%s] the test package %s is left behind and cannot be deleted, remove it by hand: %s", sys.Name, name, redact(err.Error(), sys.Config.Host, ""))
+					t.Errorf("[%s] the test package %s is left behind and cannot be deleted, remove it by hand: %s", sys.Name, name, redact(err.Error(), sys.Config.Host, sys.Config.User))
 				}
 			})
 			if _, err := sys.Client.GetObjectInfo(ctx, uri); err != nil {
-				t.Fatalf("[%s] the package just created cannot be read back: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
+				t.Fatalf("[%s] the package just created cannot be read back: %s", sys.Name, redact(err.Error(), sys.Config.Host, sys.Config.User))
 			}
 
 			if err := sys.Client.DeleteObject(ctx, uri, "", ""); err != nil {
-				t.Fatalf("[%s] DeleteObject of package %s: %s", sys.Name, name, redact(err.Error(), sys.Config.Host, ""))
+				t.Fatalf("[%s] DeleteObject of package %s: %s", sys.Name, name, redact(err.Error(), sys.Config.Host, sys.Config.User))
 			}
 
 			_, err = sys.Client.GetObjectInfo(ctx, uri)
@@ -76,7 +76,7 @@ func TestDeletePackage_MultiSystem_Integration(t *testing.T) {
 				t.Fatalf("[%s] package %s is still there after DeleteObject", sys.Name, name)
 			}
 			if kind := adt.ClassifyError(err); kind != adt.ErrorNotFound {
-				t.Fatalf("[%s] reading the deleted package should answer not found, got kind %s: %s", sys.Name, kind, redact(err.Error(), sys.Config.Host, ""))
+				t.Fatalf("[%s] reading the deleted package should answer not found, got kind %s: %s", sys.Name, kind, redact(err.Error(), sys.Config.Host, sys.Config.User))
 			}
 			t.Logf("[%s] created and deleted a local package", sys.Name)
 		})

@@ -180,18 +180,18 @@ reasoning generalises. It was true of packages until
 use that yet.
 
 **Deleting a package works since #150.** `DeleteObject` used to send the ETag it
-had just read as `If-Match`, and SAP S/4HANA refused it with `412` for a package:
-the ETag a `GET` returns and the one the server compares a `DELETE` against
-differ in their version digits (a trailing `001` against `000`), whatever media
-type the `GET` asks for
-([#150](https://github.com/Hochfrequenz/adtler/issues/150)) — a bug in this
-library, not a limit of the ADT protocol. Measured on SAP S/4HANA, on-premise
-(SAP_BASIS 816, S4CORE 109) on 2026-10-09: a `DELETE` with the ETag, with `*`
-or with the quoted ETag answers `412`, and a `DELETE` without `If-Match`
-succeeds. `DeleteObject` reads the ETag itself a moment before it deletes, so
+had just read as `If-Match`, and SAP S/4HANA refused it with `412` for a package
+([#150](https://github.com/Hochfrequenz/adtler/issues/150)) — a quirk of the
+server that this library now works around, not a limit of the ADT protocol.
+Measured on SAP S/4HANA, on-premise (SAP_BASIS 816, S4CORE 109) on 2026-10-09:
+a `DELETE` with the ETag that a `GET` returned, with `*` or with the quoted ETag
+answers `412`, whichever media type the `GET` asked for, and a `DELETE` without
+`If-Match` succeeds. In the `412` message the two ETags differ in their version
+digits (a trailing `001` against `000`); the cause on the SAP side is not
+established. `DeleteObject` reads the ETag itself a moment before it deletes, so
 the header covers only the short gap between that read and the `DELETE` inside
-one call, never a change since the caller last looked. For a package that
-protection cannot work, because no ETag ever matches. `DeleteObject` therefore
+one call, never a change since the caller last looked. On the measured system no
+ETag from a `GET` was ever accepted for a package. `DeleteObject` therefore
 still sends the ETag first, for every object type, and only for a package whose
 ETag SAP refuses as a mismatch (`412`, or an ETag exception) does it retry once
 without a precondition. For every other object type a `412` is returned as
