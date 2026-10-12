@@ -313,6 +313,14 @@ group includes and function modules share the function group's URI prefix but
 not its media type, so each has its own first offer (`fincludes.v2+xml` and
 `fmodules.v3+xml`) and a lookup does not cost a 406 on S/4HANA.
 
+**A function module's package comes from its function group.** The function module's own
+object document names no package on SAP ERP 6.0 or SAP S/4HANA, so `GetObjectInfo` reads
+the function group's document when the first one has none and reports that package. A
+function module whose document does name a package costs no extra request; if the group
+cannot be read, the function module is still returned, with an empty `PackageName`. A
+function group that SAP generated for its own use is in no package at all (it has no
+`TADIR` entry), so its function modules report none either; that is correct, not a gap.
+
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.
 

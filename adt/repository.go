@@ -213,7 +213,51 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 	}
 
 	data, _ := io.ReadAll(resp.Body)
-	return parseGenericObjectInfo(data, objectURI)
+	info, err := parseGenericObjectInfo(data, objectURI)
+	if err != nil {
+		return nil, err
+	}
+	if info.PackageName == "" {
+		if groupURI, ok := functionGroupURIOfModule(objectURI); ok {
+			pkg, err := c.packageOfFunctionGroup(ctx, groupURI)
+			if err != nil {
+				return nil, err
+			}
+			info.PackageName = pkg
+		}
+	}
+	return info, nil
+}
+
+// functionGroupURIOfModule returns the URI of the function group a function
+// module URI (.../functions/groups/<fg>/fmodules/<fm>) belongs to.
+func functionGroupURIOfModule(objectURI string) (string, bool) {
+	if !strings.HasPrefix(objectURI, "/sap/bc/adt/functions/groups/") {
+		return "", false
+	}
+	i := strings.Index(objectURI, "/fmodules/")
+	if i < 0 {
+		return "", false
+	}
+	return objectURI[:i], true
+}
+
+// packageOfFunctionGroup reads the package from a function group's object
+// document. A function module has no package of its own: it lives in the
+// package of its function group, and its own document names none on SAP ERP 6.0
+// or SAP S/4HANA (adtler#169).
+//
+// The lookup is best effort and returns "" when the group cannot be read. The
+// function module itself was read successfully, and one denied or failed second
+// request is no reason to withhold it from the caller. A cancelled or expired
+// context is the exception: the caller gave up, so it gets that error instead
+// of a success with a package that was never looked up.
+func (c *httpClient) packageOfFunctionGroup(ctx context.Context, groupURI string) (string, error) {
+	group, err := c.GetObjectInfo(ctx, groupURI)
+	if err != nil {
+		return "", ctx.Err()
+	}
+	return group.PackageName, nil
 }
 
 // parseGenericObjectInfo extracts ObjectInfo from any ADT object XML response.

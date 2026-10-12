@@ -17,9 +17,13 @@ import (
 // modules.
 const fmoduleSearchType = "FUGR/FF"
 
-// fmoduleSearchLimit bounds the discovery search. One hit is enough; a few
-// more let the test skip an entry whose URI is not a function module URI.
+// fmoduleSearchLimit bounds each discovery search. A few hits per query let
+// the test skip entries whose group names no package.
 const fmoduleSearchLimit = 10
+
+// fmoduleSearchQueries are common name prefixes of function modules in ordinary
+// (not generated) function groups, tried in order.
+var fmoduleSearchQueries = []string{"Z*", "RFC*", "STFC*", "BAPI*", "SY*"}
 
 // fmoduleRequestRecorder remembers the Accept header of every GET that asked
 // for one particular URI, in the order the requests left the client.
@@ -65,14 +69,15 @@ func (r *fmoduleRequestRecorder) acceptHeaders() []string {
 //
 // The test reads only: it finds a function module through the system's own
 // search, so it does not depend on a particular fixture object, and it skips
-// on a system without any function module. It logs counts and booleans, never object names.
+// on a system without a suitable function module. It logs counts and booleans, never object names.
 //
 // What to look for in the -v output, per system: "first request carried the
 // fmodules media type" must be true. "requests for the object" is 1 on a
 // system that knows fmodules.v3 and 2 where the 406 retry still has to rescue
 // the call (an older release, expected and not a failure). "package present"
-// being false is the open question from the issue (does the function module
-// document carry a package reference at all); it is reported, not asserted.
+// is the other half of the issue: the function module document names no package
+// on either release, so GetObjectInfo takes it from the function group. The test
+// asserts that the package is set and equals the one the function group reports.
 func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
@@ -88,19 +93,36 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 				return base.RoundTrip(req)
 			}))
 
-			hits, err := client.SearchObjects(ctx, "*", fmoduleSearchType, fmoduleSearchLimit)
-			if err != nil {
-				t.Fatalf("SearchObjects for function modules: %s", redact(err.Error(), sys.Config.Host, ""))
-			}
-			var uri string
-			for _, h := range hits {
-				if strings.Contains(h.URI, "/functions/groups/") && strings.Contains(h.URI, "/fmodules/") {
-					uri = h.URI
+			// An unfiltered search returns the generated function groups of a
+			// release first, and a generated group is in no package at all (no
+			// TADIR entry; measured on SAP ERP 6.0), so an empty PackageName is
+			// the right answer for them. Search by common name prefixes instead
+			// and take the first function module whose group names a package.
+			var uri, groupPackage string
+			candidates := 0
+			for _, query := range fmoduleSearchQueries {
+				hits, err := client.SearchObjects(ctx, query, fmoduleSearchType, fmoduleSearchLimit)
+				if err != nil {
+					t.Fatalf("SearchObjects for function modules: %s", redact(err.Error(), sys.Config.Host, ""))
+				}
+				for _, h := range hits {
+					i := strings.Index(h.URI, "/fmodules/")
+					if !strings.Contains(h.URI, "/functions/groups/") || i < 0 {
+						continue
+					}
+					candidates++
+					group, err := client.GetObjectInfo(ctx, h.URI[:i])
+					if err == nil && group.PackageName != "" {
+						uri, groupPackage = h.URI, group.PackageName
+						break
+					}
+				}
+				if uri != "" {
 					break
 				}
 			}
 			if uri == "" {
-				t.Skipf("no function module found on this system (%d search hits)", len(hits))
+				t.Skipf("no function module in a function group with a package found (%d candidates)", candidates)
 			}
 
 			rec.watch(uri)
@@ -125,6 +147,15 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 			}
 			if info.Name == "" {
 				t.Error("ObjectInfo.Name is empty")
+			}
+
+			// The function group chosen above names a package, so an empty one
+			// here is the bug.
+			if info.PackageName == "" {
+				t.Fatal("ObjectInfo.PackageName is empty — the function module's package was not taken from its function group")
+			}
+			if info.PackageName != groupPackage {
+				t.Error("function module package differs from its function group's")
 			}
 		})
 	}
