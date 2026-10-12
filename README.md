@@ -317,7 +317,9 @@ not its media type, so each has its own first offer (`fincludes.v2+xml` and
 object document names no package on SAP ERP 6.0 or SAP S/4HANA, so `GetObjectInfo` reads
 the function group's document when the first one has none and reports that package. A
 function module whose document does name a package costs no extra request; if the group
-cannot be read, the function module is still returned, with an empty `PackageName`.
+cannot be read, the function module is still returned, with an empty `PackageName`. A
+function group that SAP generated for its own use is in no package at all (it has no
+`TADIR` entry), so its function modules report none either; that is correct, not a gap.
 
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.
