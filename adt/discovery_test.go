@@ -147,6 +147,25 @@ func TestAcceptHeaderForURI_FUGRBare(t *testing.T) {
 	}
 }
 
+// TestAcceptHeaderForURI_FUGRFunctionModule regression-tests adtler#169: a
+// function module URI (.../functions/groups/<fg>/fmodules/<fm>) used to match
+// the function group prefix and get functions.groups.v3+xml, which SAP S/4HANA
+// answers with 406 and the single type it produces for function modules.
+func TestAcceptHeaderForURI_FUGRFunctionModule(t *testing.T) {
+	c := &httpClient{}
+	want := "application/vnd.sap.adt.functions.fmodules.v3+xml, application/xml"
+
+	for _, uri := range []string{
+		"/sap/bc/adt/functions/groups/zmy_fg/fmodules/zmy_fm",
+		"/sap/bc/adt/functions/groups/ZMY_FG/fmodules/ZMY_FM",
+		"/sap/bc/adt/functions/groups/%2fabc%2ffg/fmodules/%2fabc%2ffm",
+	} {
+		if got := c.acceptHeaderForURI(uri); got != want {
+			t.Errorf("function module %q: got %q, want %q", uri, got, want)
+		}
+	}
+}
+
 // TestAcceptHeaderForURI_RAPTypes covers the three object kinds adtler#65
 // added. The Accept header is the whole story for a service binding: asking
 // its URI for "application/xml" — which is what the fallback below returns

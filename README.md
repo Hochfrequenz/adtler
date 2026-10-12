@@ -264,6 +264,25 @@ SAP_INTEGRATION_SYSTEMS=hfq,s4u go test -tags=integration -v ./adt/...
 Where `hfq` and `s4u` are the keys of your R/3 and S/4 entries in
 `systems.json`.
 
+## Descriptions in search and browse results
+
+Measured on 2026-10-09 on SAP ERP 6.0 (SAP_BASIS 750) and SAP S/4HANA, on-premise
+(SAP_BASIS 816), with `TestSearchObjects_DescriptionBySpelling_Diagnostic_Integration`:
+`SearchObjects` returns an empty `Description` when the object type filter is
+given in its fully qualified form. The raw response then has no `description`
+attribute at all, so this is not a parsing gap in the client. It was measured
+for `CLAS/OC` and `PROG/P` on both releases and for `BDEF/BDO` on S/4HANA only
+(ERP 6.0 has no behavior definitions). The test logs how many descriptions the
+short spellings (`CLAS`, `BDEF`, `PROG`) returned; it does not assert it. Other
+qualified types were not measured. `GetObjectInfo` of a single object returned
+the description in the issue's observation on S/4HANA (adtler#152).
+
+`BrowsePackage` sends `withShortDescriptions=true`. Measured once by hand, not
+covered by a test that could still show it, because the client always sends the
+parameter now: without it S/4HANA left every description out of the response
+(none of 92 objects of one package, 67 with the parameter); ERP 6.0 sends none
+either way and accepts the parameter.
+
 ## Reading RAP objects, and what a 406 means
 
 A behavior definition (`BDEF`), a service definition (`SRVD`) and a service
@@ -289,7 +308,10 @@ a dead end for this reason; the same URI answers `200` when asked with `*/*`.
 `GetObjectInfo` and `FetchETag` therefore make their specific offer first and,
 on a 406 only, ask once more with `*/*`. That keeps object kinds this client
 has no catalogue entry for readable — enhancement implementations, for one,
-which behave the same way.
+which behave the same way. The retry is a safety net, not the plan: function
+group includes and function modules share the function group's URI prefix but
+not its media type, so each has its own first offer (`fincludes.v2+xml` and
+`fmodules.v3+xml`) and a lookup does not cost a 406 on S/4HANA.
 
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.
