@@ -45,6 +45,9 @@ const verifyCleanupTimeout = 30 * time.Second
 // If the temporary program cannot be removed again, the returned error is a
 // *VerifyCleanupError that names it, so the leftover can be deleted by hand.
 // In that case valid and messages still carry the result of the syntax check.
+//
+// The removal runs on its own context, so a call can outlive the caller's
+// deadline or cancellation by up to verifyCleanupTimeout (30 seconds).
 func (c *httpClient) VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error) {
 	name := fmt.Sprintf("Z_ADTLER_VERIFY_%06d", rand.Intn(1000000)) //nolint:gosec // throwaway temp object name, not security-sensitive
 	objectURI, err := ObjectURI("PROG", name)

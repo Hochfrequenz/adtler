@@ -121,7 +121,8 @@ type QualityClient interface {
 	// valid and messages still hold the result and err is a
 	// *VerifyCleanupError (find it with errors.As) that names the leftover.
 	// Use the result when errors.As finds one; without it, err means the
-	// check itself failed.
+	// check itself failed. The removal of the program runs on its own context,
+	// so the call can outlive the caller's deadline by up to 30 seconds.
 	VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error)
 	RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error)
 	RunATCCheck(ctx context.Context, objectURIs []string, checkVariant string) (*ATCResult, error)
