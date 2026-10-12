@@ -314,3 +314,51 @@ func TestGetObjectInfo_FunctionModule_CancelledDuringGroupLookup(t *testing.T) {
 		t.Fatalf("GetObjectInfo: got info %v, error %v, want context.Canceled", info, err)
 	}
 }
+
+// TestGetObjectInfo_FunctionModule_NamespacedNames covers function modules in a
+// registered namespace, whose URIs carry the namespace slashes percent-encoded.
+// The group URI has to keep that encoding: cutting at /fmodules/ must not
+// decode or lose it, or the group request would address a different path.
+func TestGetObjectInfo_FunctionModule_NamespacedNames(t *testing.T) {
+	const (
+		nsFmoduleURI = "/sap/bc/adt/functions/groups/%2fabc%2ffg/fmodules/%2fabc%2ffm"
+		nsGroupURI   = "/sap/bc/adt/functions/groups/%2fabc%2ffg"
+	)
+	var (
+		mu      sync.Mutex
+		gotPath []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escaped := strings.ToLower(r.URL.EscapedPath())
+		if r.URL.Path != csrfEndpoint {
+			mu.Lock()
+			gotPath = append(gotPath, escaped)
+			mu.Unlock()
+		}
+		switch escaped {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case nsFmoduleURI:
+			_, _ = w.Write([]byte(fmoduleXMLWithoutPackage))
+		case nsGroupURI:
+			_, _ = w.Write([]byte(fmoduleGroupXML))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), nsFmoduleURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != "ZGROUPPACK" {
+		t.Errorf("package: got %q, want the function group's package %q (requests seen: %v)", info.PackageName, "ZGROUPPACK", gotPath)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotPath) != 2 || gotPath[0] != nsFmoduleURI || gotPath[1] != nsGroupURI {
+		t.Errorf("requests: got %v, want the function module then its group, namespace slashes still encoded", gotPath)
+	}
+}
