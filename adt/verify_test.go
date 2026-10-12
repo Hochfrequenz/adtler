@@ -195,7 +195,7 @@ func TestVerifySource_ReportsFailedCleanup(t *testing.T) {
 		t.Errorf("the message should name the program left behind, got: %v", err)
 	}
 	var adtErr *adt.ADTError
-	if !errors.As(err, &adtErr) || adtErr.Type != "ExceptionPreconditionFailed" {
+	if !errors.As(err, &adtErr) || adtErr.Type != adt.ExceptionTypePreconditionFailed {
 		t.Errorf("the delete's ADTError should stay reachable with errors.As, got: %v", err)
 	}
 	if valid || len(msgs) != 1 {
