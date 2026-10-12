@@ -38,17 +38,12 @@ func TestCreateObject_ThenLockAndWrite_MultiSystem_Integration(t *testing.T) {
 			}
 			t.Logf("[%s] created %s", sys.Name, name)
 
-			// Register cleanup (best-effort).
-			t.Cleanup(func() {
-				lh, lockErr := sys.Client.LockObject(context.Background(), uri)
-				if lockErr != nil {
-					t.Logf("[%s] cleanup lock failed: %v", sys.Name, lockErr)
-					return
-				}
-				if delErr := sys.Client.DeleteObject(context.Background(), uri, lh, ""); delErr != nil {
-					t.Logf("[%s] cleanup delete failed: %v", sys.Name, delErr)
-				}
-			})
+			// Register cleanup. It deletes without taking a lock first, because
+			// on S/4 the caller's own lock blocks the delete and the old
+			// lock-then-delete cleanup silently left a program behind in $TMP
+			// on every run (adtler#187). A program that cannot be removed
+			// fails the test instead of leaking.
+			t.Cleanup(func() { removeProgramIfPresent(t, sys.Client, uri) })
 
 			// 2. Lock — THIS IS THE STEP THAT FAILED BEFORE THE FIX.
 			lockHandle, err := sys.Client.LockObject(ctx, uri)

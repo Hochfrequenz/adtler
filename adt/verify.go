@@ -4,7 +4,32 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"time"
 )
+
+// VerifyCleanupError is the error VerifySource returns when the syntax check
+// ran but the temporary program it created in $TMP could not be removed again.
+// Program names the program that stays behind, so it can be deleted by hand.
+//
+// The result of the check is still valid in that case: VerifySource returns
+// valid and messages together with this error. A caller tells "the check
+// failed" from "only the cleanup failed" with errors.As; if the check failed as
+// well, the returned error wraps both, and errors.As finds this one, the
+// check's own error and the ADTError of the delete.
+type VerifyCleanupError struct {
+	Program string
+	Err     error
+}
+
+func (e *VerifyCleanupError) Error() string {
+	return fmt.Sprintf("VerifySource: temporary program %s could not be removed from $TMP: %v", e.Program, e.Err)
+}
+
+func (e *VerifyCleanupError) Unwrap() error { return e.Err }
+
+// verifyCleanupTimeout bounds the removal of VerifySource's temporary program,
+// which runs even when the caller's context is already done.
+const verifyCleanupTimeout = 30 * time.Second
 
 // VerifySource syntax-checks standalone ABAP source without requiring an
 // existing object. It creates a temporary program in the local $TMP package,
@@ -16,6 +41,13 @@ import (
 // S/4 (it ignores the inline body / rejects the action), so this throwaway-$TMP
 // round-trip is the portable way to validate free-standing source. See
 // mcp-server-abap#126.
+//
+// If the temporary program cannot be removed again, the returned error is a
+// *VerifyCleanupError that names it, so the leftover can be deleted by hand.
+// In that case valid and messages still carry the result of the syntax check.
+//
+// The removal runs on its own context, so a call can outlive the caller's
+// deadline or cancellation by up to verifyCleanupTimeout (30 seconds).
 func (c *httpClient) VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error) {
 	name := fmt.Sprintf("Z_ADTLER_VERIFY_%06d", rand.Intn(1000000)) //nolint:gosec // throwaway temp object name, not security-sensitive
 	objectURI, err := ObjectURI("PROG", name)
@@ -27,27 +59,58 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 		return false, nil, fmt.Errorf("VerifySource: create temp object: %w", err)
 	}
 
-	// Ensure the temporary program is removed regardless of outcome.
+	// Ensure the temporary program is removed regardless of outcome. The
+	// delete takes no lock: the DELETE runs in another SAP session than a
+	// LockObject, so on S/4HANA a lock taken here would block it and leave the
+	// program behind (adtler#187). A failure is returned, not dropped, because
+	// a silent failure leaks one program into $TMP per call.
+	//
+	// The cleanup does not use the caller's context: a call that timed out or
+	// was cancelled is exactly when the program would otherwise stay behind.
+	// A lock still held at that point is handed to DeleteObject, which releases
+	// it before it deletes.
+	var held string
 	defer func() {
-		if lh, lockErr := c.LockObject(ctx, objectURI); lockErr == nil {
-			_ = c.DeleteObject(ctx, objectURI, lh, "")
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyCleanupTimeout)
+		defer cancel()
+		delErr := c.DeleteObject(cleanupCtx, objectURI, held, "")
+		if delErr == nil {
+			return
 		}
+		leak := &VerifyCleanupError{Program: name, Err: delErr}
+		if err != nil {
+			// Both stay reachable with errors.As.
+			err = fmt.Errorf("%w; additionally: %w", err, leak)
+			return
+		}
+		// The syntax-check result is still valid, so keep returning it next
+		// to the error.
+		err = leak
 	}()
 
 	lockHandle, err := c.LockObject(ctx, objectURI)
 	if err != nil {
 		return false, nil, fmt.Errorf("VerifySource: lock: %w", err)
 	}
+	held = lockHandle
+	// release lets go of the lock. Only a release that went through clears
+	// held, so the cleanup still releases a lock that could not be released
+	// here, for instance because the caller's context is done.
+	release := func() {
+		if err := c.UnlockObject(ctx, objectURI, lockHandle); err == nil {
+			held = ""
+		}
+	}
 	src, err := c.GetSource(ctx, objectURI)
 	if err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+		release()
 		return false, nil, fmt.Errorf("VerifySource: get source for etag: %w", err)
 	}
 	if _, err := c.SetSource(ctx, objectURI, source, lockHandle, "", src.ETag); err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+		release()
 		return false, nil, fmt.Errorf("VerifySource: set source: %w", err)
 	}
-	_ = c.UnlockObject(ctx, objectURI, lockHandle)
+	release()
 
 	messages, err = c.SyntaxCheck(ctx, objectURI)
 	if err != nil {
