@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -82,6 +83,7 @@ func TestBrowsePackage_SetsPackageName(t *testing.T) {
 // adtler#152: SAP S/4HANA leaves the description out of a nodestructure
 // response unless the request sets withShortDescriptions=true.
 func TestBrowsePackage_AsksForShortDescriptions(t *testing.T) {
+	var mu sync.Mutex
 	var asked string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == csrfEndpoint {
@@ -89,7 +91,9 @@ func TestBrowsePackage_AsksForShortDescriptions(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		mu.Lock()
 		asked = r.URL.Query().Get("withShortDescriptions")
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/vnd.sap.as+xml; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(browsePackageNodesXML))
@@ -101,8 +105,11 @@ func TestBrowsePackage_AsksForShortDescriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BrowsePackage: %v", err)
 	}
-	if asked != "true" {
-		t.Errorf("withShortDescriptions = %q, want %q", asked, "true")
+	mu.Lock()
+	got := asked
+	mu.Unlock()
+	if got != "true" {
+		t.Errorf("withShortDescriptions = %q, want %q", got, "true")
 	}
 	if len(results) != 2 || results[0].Description != "Example program" {
 		t.Errorf("descriptions must reach the caller, got %+v", results)

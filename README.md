@@ -255,14 +255,16 @@ Measured on 2026-10-09 on SAP ERP 6.0 (SAP_BASIS 750) and SAP S/4HANA, on-premis
 given in its fully qualified form. The raw response then has no `description`
 attribute at all, so this is not a parsing gap in the client. It was measured
 for `CLAS/OC` and `PROG/P` on both releases and for `BDEF/BDO` on S/4HANA only
-(ERP 6.0 has no behavior definitions); the short spellings (`CLAS`, `BDEF`,
-`PROG`) returned descriptions for every object. Other qualified types were not
-measured. `GetObjectInfo` of a single object returned the description in the
-issue's observation on S/4HANA (adtler#152).
+(ERP 6.0 has no behavior definitions). The test logs how many descriptions the
+short spellings (`CLAS`, `BDEF`, `PROG`) returned; it does not assert it. Other
+qualified types were not measured. `GetObjectInfo` of a single object returned
+the description in the issue's observation on S/4HANA (adtler#152).
 
-`BrowsePackage` sends `withShortDescriptions=true`. Without it, S/4HANA leaves
-every description out of the response (none of 92 objects of one package, 67
-with the parameter); ERP 6.0 sends none either way and accepts the parameter.
+`BrowsePackage` sends `withShortDescriptions=true`. Measured once by hand, not
+covered by a test that could still show it, because the client always sends the
+parameter now: without it S/4HANA left every description out of the response
+(none of 92 objects of one package, 67 with the parameter); ERP 6.0 sends none
+either way and accepts the parameter.
 
 ## Reading RAP objects, and what a 406 means
 

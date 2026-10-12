@@ -14,6 +14,8 @@ import (
 
 // BrowsePackage lists the objects of one package, sub-packages included. Every
 // returned ObjectInfo carries the browsed package (upper case) in PackageName.
+// For a sub-package that is the package it is listed in, its parent; GetObjectInfo
+// on the same sub-package names the sub-package itself.
 func (c *httpClient) BrowsePackage(ctx context.Context, packageName string) ([]ObjectInfo, error) {
 	params := url.Values{}
 	params.Set("parent_type", ObjectTypePackage)
