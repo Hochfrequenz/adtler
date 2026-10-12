@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -212,5 +213,104 @@ func TestGetObjectInfo_FunctionModule_GroupLookupFailureKeepsTheObject(t *testin
 	}
 	if info.PackageName != "" {
 		t.Errorf("package: got %q, want empty when the group could not be read", info.PackageName)
+	}
+}
+
+// TestGetObjectInfo_FunctionModule_GeneratedGroupHasNoPackage covers a function
+// group SAP generated for its own use: it is in no package, so both documents
+// name none and the answer stays empty after exactly one group lookup.
+func TestGetObjectInfo_FunctionModule_GeneratedGroupHasNoPackage(t *testing.T) {
+	var groupGets int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case fmoduleURI:
+			_, _ = w.Write([]byte(fmoduleXMLWithoutPackage))
+		case fmoduleGroupURI:
+			atomic.AddInt32(&groupGets, 1)
+			_, _ = w.Write([]byte(strings.Replace(fmoduleGroupXML, `<adtcore:packageRef adtcore:name="ZGROUPPACK"/>`, "", 1)))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fmoduleURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != "" {
+		t.Errorf("package: got %q, want empty — a generated group is in no package", info.PackageName)
+	}
+	if got := atomic.LoadInt32(&groupGets); got != 1 {
+		t.Errorf("function group document fetched %d times, want 1", got)
+	}
+}
+
+// TestGetObjectInfo_FunctionGroup_NoSecondLookup keeps the fallback to function
+// modules: a function group without a package is not looked up again, and
+// neither is anything else that is not a function module.
+func TestGetObjectInfo_FunctionGroup_NoSecondLookup(t *testing.T) {
+	var groupGets int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case fmoduleGroupURI:
+			atomic.AddInt32(&groupGets, 1)
+			_, _ = w.Write([]byte(strings.Replace(fmoduleGroupXML, `<adtcore:packageRef adtcore:name="ZGROUPPACK"/>`, "", 1)))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fmoduleGroupURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != "" {
+		t.Errorf("package: got %q, want empty", info.PackageName)
+	}
+	if got := atomic.LoadInt32(&groupGets); got != 1 {
+		t.Errorf("function group document fetched %d times, want 1 — only function modules fall back to their group", got)
+	}
+}
+
+// cancelOnGroupTransport cancels the caller's context when the function group is
+// requested, the way a caller that gives up during the second request would.
+type cancelOnGroupTransport struct {
+	next   http.RoundTripper
+	cancel context.CancelFunc
+}
+
+func (tr cancelOnGroupTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == fmoduleGroupURI {
+		tr.cancel()
+		return nil, req.Context().Err()
+	}
+	return tr.next.RoundTrip(req)
+}
+
+// TestGetObjectInfo_FunctionModule_CancelledDuringGroupLookup pins that a caller
+// who cancels during the group lookup gets the cancellation, not a success that
+// looks like a function module without a package.
+func TestGetObjectInfo_FunctionModule_CancelledDuringGroupLookup(t *testing.T) {
+	var fmoduleGets, groupGets int32
+	srv := packageLookupServer(fmoduleXMLWithoutPackage, http.StatusOK, &fmoduleGets, &groupGets)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := adt.NewClientWithTransport(
+		sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"},
+		cancelOnGroupTransport{next: http.DefaultTransport, cancel: cancel})
+
+	info, err := client.GetObjectInfo(ctx, fmoduleURI)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetObjectInfo: got info %v, error %v, want context.Canceled", info, err)
 	}
 }

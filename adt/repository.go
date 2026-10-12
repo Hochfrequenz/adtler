@@ -219,7 +219,11 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 	}
 	if info.PackageName == "" {
 		if groupURI, ok := functionGroupURIOfModule(objectURI); ok {
-			info.PackageName = c.packageOfFunctionGroup(ctx, groupURI)
+			pkg, err := c.packageOfFunctionGroup(ctx, groupURI)
+			if err != nil {
+				return nil, err
+			}
+			info.PackageName = pkg
 		}
 	}
 	return info, nil
@@ -245,13 +249,15 @@ func functionGroupURIOfModule(objectURI string) (string, bool) {
 //
 // The lookup is best effort and returns "" when the group cannot be read. The
 // function module itself was read successfully, and one denied or failed second
-// request is no reason to withhold it from the caller.
-func (c *httpClient) packageOfFunctionGroup(ctx context.Context, groupURI string) string {
+// request is no reason to withhold it from the caller. A cancelled or expired
+// context is the exception: the caller gave up, so it gets that error instead
+// of a success with a package that was never looked up.
+func (c *httpClient) packageOfFunctionGroup(ctx context.Context, groupURI string) (string, error) {
 	group, err := c.GetObjectInfo(ctx, groupURI)
 	if err != nil {
-		return ""
+		return "", ctx.Err()
 	}
-	return group.PackageName
+	return group.PackageName, nil
 }
 
 // parseGenericObjectInfo extracts ObjectInfo from any ADT object XML response.
