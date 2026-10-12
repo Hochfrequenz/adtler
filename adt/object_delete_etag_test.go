@@ -138,7 +138,7 @@ func TestDeleteObject_ETagMismatchOfOtherTypesIsNotRetried(t *testing.T) {
 
 	err := srv.client().DeleteObject(context.Background(), programsEndpoint+"/ZEXAMPLE", "", "")
 	var adtErr *adt.ADTError
-	if !errors.As(err, &adtErr) || adtErr.Type != "ExceptionPreconditionFailed" {
+	if !errors.As(err, &adtErr) || adtErr.Type != adt.ExceptionTypePreconditionFailed {
 		t.Fatalf("want the original ExceptionPreconditionFailed, got: %v", err)
 	}
 	if srv.removed {
@@ -162,7 +162,7 @@ func TestDeleteObject_Package_SecondRefusalIsReturned(t *testing.T) {
 		t.Fatal("expected an error: the server refuses every DELETE")
 	}
 	var adtErr *adt.ADTError
-	if !errors.As(err, &adtErr) || adtErr.Type != "ExceptionPreconditionFailed" {
+	if !errors.As(err, &adtErr) || adtErr.Type != adt.ExceptionTypePreconditionFailed {
 		t.Errorf("want an ADTError ExceptionPreconditionFailed, got: %v", err)
 	}
 	if len(srv.deletes) != 2 {
