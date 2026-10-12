@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -20,12 +21,15 @@ const (
 	// module. It is also what the 406 response of adtler#169 names.
 	fmoduleAccept = "application/vnd.sap.adt.functions.fmodules.v3+xml"
 
+	// fmoduleName is the name carried by every function module document below.
+	fmoduleName = "ZMY_FM"
+
 	// fmoduleXML is a function module object document, reduced to what
 	// parseGenericObjectInfo reads.
 	fmoduleXML = `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<fmodule:abapFunctionModule xmlns:fmodule="http://www.sap.com/adt/functions/fmodules"` +
 		` xmlns:adtcore="http://www.sap.com/adt/core"` +
-		` adtcore:name="ZMY_FM" adtcore:type="FUGR/FF" adtcore:description="Example function module">` +
+		` adtcore:name="` + fmoduleName + `" adtcore:type="FUGR/FF" adtcore:description="Example function module">` +
 		`<adtcore:packageRef adtcore:name="ZFMPACK"/></fmodule:abapFunctionModule>`
 )
 
@@ -89,13 +93,124 @@ func TestGetObjectInfo_FunctionModule_FirstRequestCarriesFmodulesType(t *testing
 	if !strings.Contains(offers[0], fmoduleAccept) {
 		t.Errorf("first offer was %q, want it to contain %q", offers[0], fmoduleAccept)
 	}
-	if info.Name != "ZMY_FM" {
-		t.Errorf("name: got %q, want %q", info.Name, "ZMY_FM")
+	if info.Name != fmoduleName {
+		t.Errorf("name: got %q, want %q", info.Name, fmoduleName)
 	}
 	if info.PackageName != "ZFMPACK" {
 		t.Errorf("package: got %q, want %q", info.PackageName, "ZFMPACK")
 	}
 	if info.URI != fmoduleURI {
 		t.Errorf("URI: got %q, want %q — GetObjectInfo must report the URI it fetched", info.URI, fmoduleURI)
+	}
+}
+
+const (
+	// fmoduleGroupURI is the function group that contains fmoduleURI.
+	fmoduleGroupURI = "/sap/bc/adt/functions/groups/zmy_fg"
+
+	// fmoduleXMLWithoutPackage is a function module object document the way SAP
+	// ERP 6.0 and SAP S/4HANA serve it: no package reference at all (adtler#169).
+	fmoduleXMLWithoutPackage = `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<fmodule:abapFunctionModule xmlns:fmodule="http://www.sap.com/adt/functions/fmodules"` +
+		` xmlns:adtcore="http://www.sap.com/adt/core"` +
+		` adtcore:name="` + fmoduleName + `" adtcore:type="FUGR/FF" adtcore:description="Example function module"/>`
+
+	// fmoduleGroupXML is the function group document, which does name its package.
+	fmoduleGroupXML = `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<group:abapFunctionGroup xmlns:group="http://www.sap.com/adt/functions/groups"` +
+		` xmlns:adtcore="http://www.sap.com/adt/core"` +
+		` adtcore:name="ZMY_FG" adtcore:type="FUGR/F">` +
+		`<adtcore:packageRef adtcore:name="ZGROUPPACK"/></group:abapFunctionGroup>`
+)
+
+// packageLookupServer serves a function module document (fmoduleBody) and the
+// function group document of its group (groupStatus, fmoduleGroupXML). It
+// counts the GETs each of the two documents received.
+func packageLookupServer(fmoduleBody string, groupStatus int, fmoduleGets, groupGets *int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+		case fmoduleURI:
+			atomic.AddInt32(fmoduleGets, 1)
+			w.Header().Set("Content-Type", fmoduleAccept)
+			_, _ = w.Write([]byte(fmoduleBody))
+		case fmoduleGroupURI:
+			atomic.AddInt32(groupGets, 1)
+			if groupStatus != http.StatusOK {
+				w.WriteHeader(groupStatus)
+				return
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(fmoduleGroupXML))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// TestGetObjectInfo_FunctionModule_PackageComesFromFunctionGroup covers the
+// package half of adtler#169: a function module belongs to the package of its
+// function group, and its own document does not say which.
+func TestGetObjectInfo_FunctionModule_PackageComesFromFunctionGroup(t *testing.T) {
+	var fmoduleGets, groupGets int32
+	srv := packageLookupServer(fmoduleXMLWithoutPackage, http.StatusOK, &fmoduleGets, &groupGets)
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fmoduleURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != "ZGROUPPACK" {
+		t.Errorf("package: got %q, want the function group's package %q", info.PackageName, "ZGROUPPACK")
+	}
+	if info.Name != fmoduleName || info.URI != fmoduleURI {
+		t.Errorf("the result must still describe the function module: got name %q, URI %q", info.Name, info.URI)
+	}
+	if got := atomic.LoadInt32(&groupGets); got != 1 {
+		t.Errorf("function group document fetched %d times, want 1", got)
+	}
+}
+
+// TestGetObjectInfo_FunctionModule_OwnPackageSavesTheGroupLookup keeps the
+// lookup from costing a request when the document already names a package.
+func TestGetObjectInfo_FunctionModule_OwnPackageSavesTheGroupLookup(t *testing.T) {
+	var fmoduleGets, groupGets int32
+	srv := packageLookupServer(fmoduleXML, http.StatusOK, &fmoduleGets, &groupGets)
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fmoduleURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != "ZFMPACK" {
+		t.Errorf("package: got %q, want the document's own package %q", info.PackageName, "ZFMPACK")
+	}
+	if got := atomic.LoadInt32(&groupGets); got != 0 {
+		t.Errorf("function group document fetched %d times, want 0 — the document already named a package", got)
+	}
+}
+
+// TestGetObjectInfo_FunctionModule_GroupLookupFailureKeepsTheObject pins what
+// happens when the group cannot be read: the function module was read fine, so
+// the call still returns it, without a package, rather than failing as a whole.
+func TestGetObjectInfo_FunctionModule_GroupLookupFailureKeepsTheObject(t *testing.T) {
+	var fmoduleGets, groupGets int32
+	srv := packageLookupServer(fmoduleXMLWithoutPackage, http.StatusForbidden, &fmoduleGets, &groupGets)
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fmoduleURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.Name != fmoduleName {
+		t.Errorf("name: got %q, want %q", info.Name, fmoduleName)
+	}
+	if info.PackageName != "" {
+		t.Errorf("package: got %q, want empty when the group could not be read", info.PackageName)
 	}
 }

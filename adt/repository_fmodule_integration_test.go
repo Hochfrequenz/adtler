@@ -71,8 +71,9 @@ func (r *fmoduleRequestRecorder) acceptHeaders() []string {
 // fmodules media type" must be true. "requests for the object" is 1 on a
 // system that knows fmodules.v3 and 2 where the 406 retry still has to rescue
 // the call (an older release, expected and not a failure). "package present"
-// being false is the open question from the issue (does the function module
-// document carry a package reference at all); it is reported, not asserted.
+// is the other half of the issue: the function module document names no package
+// on either release, so GetObjectInfo takes it from the function group. The test
+// asserts that the package is set and equals the one the function group reports.
 func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
@@ -125,6 +126,22 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 			}
 			if info.Name == "" {
 				t.Error("ObjectInfo.Name is empty")
+			}
+
+			// Every object lives in a package, so an empty one is the bug. The
+			// group's own document is the reference: it is where the package
+			// comes from, and it also names it directly on both releases.
+			if info.PackageName == "" {
+				t.Fatal("ObjectInfo.PackageName is empty — the function module's package was not taken from its function group")
+			}
+			groupURI := uri[:strings.Index(uri, "/fmodules/")]
+			group, err := client.GetObjectInfo(ctx, groupURI)
+			if err != nil {
+				t.Fatalf("GetObjectInfo on the function group: %s", redact(err.Error(), sys.Config.Host, ""))
+			}
+			if info.PackageName != group.PackageName {
+				t.Errorf("function module package differs from its function group's (module empty: %t, group empty: %t)",
+					info.PackageName == "", group.PackageName == "")
 			}
 		})
 	}
