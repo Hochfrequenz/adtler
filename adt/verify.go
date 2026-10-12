@@ -7,6 +7,26 @@ import (
 	"time"
 )
 
+// VerifyCleanupError is the error VerifySource returns when the syntax check
+// ran but the temporary program it created in $TMP could not be removed again.
+// Program names the program that stays behind, so it can be deleted by hand.
+//
+// The result of the check is still valid in that case: VerifySource returns
+// valid and messages together with this error. A caller tells "the check
+// failed" from "only the cleanup failed" with errors.As; if the check failed as
+// well, the returned error wraps both, and errors.As finds this one, the
+// check's own error and the ADTError of the delete.
+type VerifyCleanupError struct {
+	Program string
+	Err     error
+}
+
+func (e *VerifyCleanupError) Error() string {
+	return fmt.Sprintf("VerifySource: temporary program %s could not be removed from $TMP: %v", e.Program, e.Err)
+}
+
+func (e *VerifyCleanupError) Unwrap() error { return e.Err }
+
 // verifyCleanupTimeout bounds the removal of VerifySource's temporary program,
 // which runs even when the caller's context is already done.
 const verifyCleanupTimeout = 30 * time.Second
@@ -22,9 +42,9 @@ const verifyCleanupTimeout = 30 * time.Second
 // round-trip is the portable way to validate free-standing source. See
 // mcp-server-abap#126.
 //
-// If the temporary program cannot be removed again, the returned error says
-// so and names it, so the leftover can be deleted by hand. In that case valid
-// and messages still carry the result of the syntax check.
+// If the temporary program cannot be removed again, the returned error is a
+// *VerifyCleanupError that names it, so the leftover can be deleted by hand.
+// In that case valid and messages still carry the result of the syntax check.
 func (c *httpClient) VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error) {
 	name := fmt.Sprintf("Z_ADTLER_VERIFY_%06d", rand.Intn(1000000)) //nolint:gosec // throwaway temp object name, not security-sensitive
 	objectURI, err := ObjectURI("PROG", name)
@@ -54,9 +74,10 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 		if delErr == nil {
 			return
 		}
-		leak := fmt.Errorf("VerifySource: temporary program %s could not be removed from $TMP: %w", name, delErr)
+		leak := &VerifyCleanupError{Program: name, Err: delErr}
 		if err != nil {
-			err = fmt.Errorf("%w; additionally: %v", err, leak)
+			// Both stay reachable with errors.As.
+			err = fmt.Errorf("%w; additionally: %w", err, leak)
 			return
 		}
 		// The syntax-check result is still valid, so keep returning it next

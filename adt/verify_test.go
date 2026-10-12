@@ -36,6 +36,7 @@ type verifyServerState struct {
 	lockRequests int
 	deleted      bool
 	deleteStatus int
+	checkStatus  int // when non-zero, the syntax check fails with this status
 }
 
 func verifySourceServerWithState(withError bool, st *verifyServerState) *httptest.Server {
@@ -46,6 +47,8 @@ func verifySourceServerWithState(withError bool, st *verifyServerState) *httptes
 			w.WriteHeader(http.StatusOK)
 		case r.URL.Path == logoffPath:
 			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == checkrunsPath && r.Method == http.MethodPost && st.checkStatus != 0:
+			w.WriteHeader(st.checkStatus)
 		case r.URL.Path == checkrunsPath && r.Method == http.MethodPost:
 			body, _ := io.ReadAll(r.Body)
 			uri := ""
@@ -181,8 +184,15 @@ func TestVerifySource_ReportsFailedCleanup(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error: the temporary program could not be deleted")
 	}
-	if !strings.Contains(err.Error(), "Z_ADTLER_VERIFY_") {
-		t.Errorf("error should name the program left behind, got: %v", err)
+	var cleanupErr *adt.VerifyCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("want a *VerifyCleanupError reachable with errors.As, got: %v", err)
+	}
+	if !strings.HasPrefix(cleanupErr.Program, "Z_ADTLER_VERIFY_") {
+		t.Errorf("the error should name the program left behind, got %q", cleanupErr.Program)
+	}
+	if !strings.Contains(err.Error(), cleanupErr.Program) {
+		t.Errorf("the message should name the program left behind, got: %v", err)
 	}
 	var adtErr *adt.ADTError
 	if !errors.As(err, &adtErr) || adtErr.Type != "ExceptionPreconditionFailed" {
@@ -227,5 +237,37 @@ func TestVerifySource_CleansUpAfterTheCallersContextEnds(t *testing.T) {
 	}
 	if !st.deleted {
 		t.Error("the temporary program was left behind")
+	}
+}
+
+// When the syntax check fails and the cleanup fails as well, the returned error
+// must keep all three reachable: the cleanup error, the ADTError of the delete
+// and the ADTError of the check, so a consumer can tell that the result is
+// missing (the check failed) and that a program stays in $TMP.
+func TestVerifySource_CheckAndCleanupFailureStayReachable(t *testing.T) {
+	st := &verifyServerState{deleteStatus: http.StatusPreconditionFailed, checkStatus: http.StatusInternalServerError}
+	srv := verifySourceServerWithState(false, st)
+	defer srv.Close()
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+
+	valid, msgs, err := client.VerifySource(context.Background(), "REPORT zx.")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if valid || len(msgs) != 0 {
+		t.Errorf("without a check result: valid=%v, %d messages", valid, len(msgs))
+	}
+	var cleanupErr *adt.VerifyCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the cleanup error must stay reachable, got: %v", err)
+	}
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("an ADTError must stay reachable, got: %v", err)
+	}
+	// errors.As returns the first match in the chain; both statuses must be
+	// somewhere in the message.
+	if !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "412") {
+		t.Errorf("the message should carry both failures, got: %v", err)
 	}
 }

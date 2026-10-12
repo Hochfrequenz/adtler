@@ -155,8 +155,14 @@ func TestDeleteObject_NeverActivatedProgram_MultiSystem_Integration(t *testing.T
 // It counts the programs named like VerifySource's temporary ones before and
 // after two calls, one valid and one broken, and fails if any new one remains.
 // Object names are never logged, only counts. Before the fix this fails on
-// S/4HANA with two new leftovers (and VerifySource itself now also returns an
-// error naming the program when the cleanup fails).
+// S/4HANA with two new leftovers (and VerifySource itself now also returns a
+// *VerifyCleanupError naming the program when the cleanup fails).
+//
+// The test deletes only the program that VerifySource itself names in that
+// error. A new program it merely finds in the search is reported and left
+// alone: the systems are shared, and it may belong to a call of another user
+// that runs at the same time (which can also make this test fail; run it again
+// then).
 //
 // What to look for in the output: both subtests PASS and report "0 new
 // leftovers". The search needs the new objects to be visible to the quick
@@ -187,21 +193,24 @@ func TestVerifySource_LeavesNoProgramBehind_MultiSystem_Integration(t *testing.T
 			for _, src := range []string{"REPORT zdummy.", "REPORT zdummy.\nIF 1 = 1."} {
 				if _, _, err := sys.Client.VerifySource(ctx, src); err != nil {
 					t.Errorf("[%s] VerifySource: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
+					// Remove exactly the program this call left, no other.
+					var cleanupErr *adt.VerifyCleanupError
+					if errors.As(err, &cleanupErr) {
+						if uri, uriErr := adt.ObjectURI("PROG", cleanupErr.Program); uriErr == nil {
+							t.Cleanup(func() { removeProgramIfPresent(t, sys.Client, uri) })
+						}
+					}
 				}
 			}
 
-			var added []string
-			for name, uri := range leftovers(true) {
+			added := 0
+			for name := range leftovers(true) {
 				if _, existed := before[name]; !existed {
-					added = append(added, uri)
+					added++
 				}
 			}
-			for _, uri := range added {
-				uri := uri
-				t.Cleanup(func() { removeProgramIfPresent(t, sys.Client, uri) })
-			}
-			if len(added) > 0 {
-				t.Fatalf("[%s] VerifySource left %d new temporary program(s) in $TMP", sys.Name, len(added))
+			if added > 0 {
+				t.Fatalf("[%s] %d new temporary program(s) in $TMP after VerifySource; they are left in place, remove them by hand if they are ours", sys.Name, added)
 			}
 			t.Logf("[%s] %d existing leftovers before, 0 new leftovers after", sys.Name, len(before))
 		})
