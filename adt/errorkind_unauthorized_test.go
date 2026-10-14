@@ -74,6 +74,16 @@ func assertCredentialsMessage(t *testing.T, adtErr *adt.ADTError) {
 	if !strings.Contains(msg, "lock the user") {
 		t.Errorf("message should warn that repeated logons can lock the user, got %q", msg)
 	}
+	// parseADTError does not know the auth mode, so the text must also fit
+	// an OAuth client whose token was rejected.
+	if !strings.Contains(msg, "OAuth token") {
+		t.Errorf("message should also cover an OAuth token, got %q", msg)
+	}
+	// Error() already prefixes "SAP ADT error 401: "; the message must not
+	// repeat the status code.
+	if strings.Contains(msg, "401") {
+		t.Errorf("message should not repeat the status code, got %q", msg)
+	}
 	if strings.Contains(msg, "HTML error page") {
 		t.Errorf("message should not be the HTML placeholder, got %q", msg)
 	}

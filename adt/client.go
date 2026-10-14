@@ -817,9 +817,11 @@ const htmlNoDetailMessage = "SAP returned an HTML error page (no parseable detai
 // unauthorizedMessage replaces a missing detail text on a 401. SAP answers a
 // wrong user name or password with an HTML page (or an empty body) that holds
 // no parseable text, and the generic placeholder reads like a technical fault
-// rather than a credential problem (adtler#223).
-const unauthorizedMessage = "SAP rejected the user name or password (HTTP 401). Check the credentials. " +
-	"Do not retry repeatedly: failed logons can lock the user."
+// rather than a credential problem (adtler#223). parseADTError does not know
+// whether the client uses Basic auth or an OAuth token, so the wording covers
+// both. It names no status code: ADTError.Error already prefixes it.
+const unauthorizedMessage = "SAP rejected the logon. Check the credentials (user name and password, or the OAuth token). " +
+	"With a user name and password, do not retry repeatedly: failed logons can lock the user."
 
 // noDetailMessage returns the message for an error response whose body gave
 // no parseable detail: unauthorizedMessage for a 401, fallback otherwise. A
