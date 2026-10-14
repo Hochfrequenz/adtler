@@ -233,15 +233,19 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 // module (.../functions/groups/<fg>/fmodules/<fm>) or a function group include
 // (.../functions/groups/<fg>/includes/<inc>) belongs to.
 func functionGroupURIOfPart(objectURI string) (string, bool) {
-	if !strings.HasPrefix(objectURI, "/sap/bc/adt/functions/groups/") {
+	const prefix = "/sap/bc/adt/functions/groups/"
+	rest, ok := strings.CutPrefix(objectURI, prefix)
+	if !ok {
 		return "", false
 	}
-	for _, segment := range []string{"/fmodules/", "/includes/"} {
-		if i := strings.Index(objectURI, segment); i >= 0 {
-			return objectURI[:i], true
-		}
+	group, part, ok := strings.Cut(rest, "/")
+	if !ok || group == "" {
+		return "", false
 	}
-	return "", false
+	if !strings.HasPrefix(part, "fmodules/") && !strings.HasPrefix(part, "includes/") {
+		return "", false
+	}
+	return prefix + group, true
 }
 
 // packageOfFunctionGroup reads the package from a function group's object

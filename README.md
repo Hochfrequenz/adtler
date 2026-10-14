@@ -319,8 +319,8 @@ SAP ERP 6.0 or SAP S/4HANA, so `GetObjectInfo` reads the function group's docume
 first one has none and reports that package. An object whose document does name a package
 costs no extra request; if the group cannot be read, the object is still returned, with an
 empty `PackageName`. A function group that SAP generated for its own use is in no package
-at all (it has no `TADIR` entry), so its function modules report none either; that is
-correct, not a gap.
+at all (it has no `TADIR` entry), so its function modules and includes report none either;
+that is correct, not a gap.
 
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.

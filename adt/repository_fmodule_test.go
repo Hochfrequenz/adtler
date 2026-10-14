@@ -410,6 +410,9 @@ func TestGetObjectInfo_FunctionGroupInclude_PackageComesFromFunctionGroup(t *tes
 	if info.Name != "LZMY_FGTOP" || info.URI != fincludeURI {
 		t.Errorf("the result must still describe the include: got name %q, URI %q", info.Name, info.URI)
 	}
+	if got := atomic.LoadInt32(&includeGets); got != 1 {
+		t.Errorf("include document fetched %d times, want 1", got)
+	}
 	if got := atomic.LoadInt32(&groupGets); got != 1 {
 		t.Errorf("function group document fetched %d times, want 1", got)
 	}
