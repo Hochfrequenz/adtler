@@ -257,14 +257,16 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 // freshSession returns a new *httpClient that shares this client's
 // configuration and credentials but has a brand-new cookie jar and no cached
 // CSRF token, so its first request establishes a clean SAP session. It copies
-// none of the parent's caches either (CSRF token, discovery, removeObjectSupport):
-// the fresh session fills each again from its own first requests, which costs
-// one extra discovery round trip.
+// none of the parent's per-session state either (CSRF token, discovery,
+// hasSecureCookies, removeObjectSupport): the fresh session fills each again
+// from its own requests. Its CSRF preflight therefore downloads and parses the
+// discovery document again (about 400 KB).
 //
 // It has two kinds of callers:
 //
 //   - Short-lived: RunClass, and DebugSession.RunUnitTests as a breakpoint
-//     trigger, each use one fresh session for a single request and then drop it.
+//     trigger, each use one fresh session for a single operation and then drop
+//     it.
 //     RunClass needs it because on S/4 the ADT session that performed
 //     create -> set source -> activate cannot generate the target class's
 //     runtime load when it runs the classrun in that same session (issue #106,
@@ -272,9 +274,12 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 //     classrun is stateless, so running it on an isolated session is consistent
 //     with its contract and leaves the caller's session and any locks untouched.
 //   - Long-lived: NewDebugSession keeps one fresh session for the lifetime of the
-//     DebugSession and sends all of its stateful debugger calls through it. The
-//     reason there is containment: a stuck stateful debug call wedges only its
-//     own cookie jar, not every other request of the parent client.
+//     DebugSession and sends every DebugSession call through it except the
+//     RunUnitTests trigger, stateless ones such as StopListener and the
+//     breakpoint calls included. The reason there is containment: a stuck
+//     stateful debug call wedges only its own cookie jar, not every other
+//     request of the parent client. DebugSession has no Logout or Close of its
+//     own, so its SAP session ends only when SAP times it out (issue #162).
 //
 // The returned client is not registered anywhere and holds no locks. Logout on
 // the parent does not reach it, since it has its own jar. It shares the
