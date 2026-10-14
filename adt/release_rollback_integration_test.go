@@ -24,7 +24,7 @@ func TestReleaseTransportWithTasks_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP ReleaseVerified test", testPackage)
+	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP ReleaseWithTasks test", testPackage)
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestReleaseTransportWithTasks_Integration(t *testing.T) {
 	// Create a throwaway object in the transport so the release has content.
 	const objName = "Z_ADT_MCP_RELVERIFY_TST"
 	objectURI := "/sap/bc/adt/programs/programs/" + objName
-	if err := client.CreateObject(ctx, "PROG", objName, testPackage, "ReleaseVerified test", trNumber); err != nil {
+	if err := client.CreateObject(ctx, "PROG", objName, testPackage, "ReleaseWithTasks test", trNumber); err != nil {
 		if _, infoErr := client.GetObjectInfo(ctx, objectURI); infoErr != nil {
 			t.Fatalf("CreateObject: %v", err)
 		}

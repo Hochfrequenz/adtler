@@ -20,5 +20,4 @@ jobs:
       # must still compile. The 'integration transport' tag set includes every
       # file built with 'integration' alone, so one vet covers both (#230).
       - name: Vet integration tests
-        if: matrix.go-version == '1.27.x'
-        run: go vet -tags='integration transport' ./adt/...
+        run: go vet -tags='integration transport' ./...

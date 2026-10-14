@@ -99,7 +99,13 @@ explicitly requested:
 go test -tags=integration ./adt/...
 ```
 
-They hit a real SAP system and need credentials. The recommended setup is a
+Tests that create and release real transport requests additionally need the
+separate `transport` build tag (`go test -tags='integration transport' ./adt/...`),
+so they never run by accident. CI does not run the integration tests, but it
+compiles them with both tags (`go vet -tags='integration transport' ./...`)
+so they cannot silently stop building.
+
+Integration tests hit a real SAP system and need credentials. The recommended setup is a
 JSON config file matching the
 [`sap-mcp-config`](https://github.com/Hochfrequenz/sap-mcp-config) schema —
 the same file `mcp-server-abap` and the MCP server CLI use:
