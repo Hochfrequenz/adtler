@@ -66,7 +66,13 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 	}
 
 	if err := c.CreateObject(ctx, "PROG", name, "$TMP", "adtler VerifySource temp", ""); err != nil {
-		return false, nil, fmt.Errorf("VerifySource: create temp object: %w", err)
+		err = fmt.Errorf("VerifySource: create temp object: %w", err)
+		// The program exists, but SAP rejected the credential on the logout
+		// that follows the create, so the removal is not attempted either.
+		if errors.Is(err, ErrObjectCreated) {
+			err = fmt.Errorf("%w; additionally: %w", err, &VerifyCleanupError{Program: name, Err: errVerifyCleanupSkipped})
+		}
+		return false, nil, err
 	}
 
 	// Ensure the temporary program is removed regardless of outcome. The

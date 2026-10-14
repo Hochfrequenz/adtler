@@ -399,6 +399,14 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 	}
 	data, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	// A 401 page is no release report, but checkReleaseResponse would accept
+	// it as an empty one, and the verification read after a release would
+	// send the rejected credential again (#222). Other error statuses keep
+	// passing through as before: the release job has finished, and that
+	// verification read is what decides whether the transport was released.
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("ReleaseTransport %s result: %w", transportNumber, parseADTError(resp.StatusCode, bytes.NewReader(data)))
+	}
 	return checkReleaseResponse(transportNumber, data)
 }
 

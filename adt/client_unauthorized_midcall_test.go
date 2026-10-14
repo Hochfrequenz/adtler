@@ -180,6 +180,7 @@ func TestVerifySource_401MidCall_StopsSending(t *testing.T) {
 		name string
 		trip func(*http.Request) bool
 	}{
+		{"logging out after creating the program", func(r *http.Request) bool { return r.URL.Path == logoffPath }},
 		{"locking", func(r *http.Request) bool { return isAction(r, "LOCK") }},
 		{"reading the source for its ETag", func(r *http.Request) bool {
 			return isMethod(r, http.MethodGet, "/source/main")

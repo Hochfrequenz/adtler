@@ -89,11 +89,18 @@ the request once.
 
 Calls that send several requests stop at the first `401` too, including any
 fallback or cleanup they would otherwise send: `DeleteObject`,
-`LockMap.ResolveETag`, `RemoveFromTransport`, `ReleaseTransport` (and its
-polling), `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
+`LockMap.ResolveETag`, `RemoveFromTransport`, `ReleaseTransport` (its polling
+and the read of its result), `CreateObject`, `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
 `401` as their error), `GetObjectDependencies`, `RollbackTransport` (the objects
 not processed are reported as failed) and `VerifySource`. When `VerifySource`
 stops this way, its temporary program stays in `$TMP`, and the error names it.
+
+`Logout` reports a `401` on its logoff request as an `*adt.ADTError` and ignores
+any other status. `CreateObject` logs out after creating the object; if that
+logout is rejected with `401`, it returns an error although the object exists.
+That error matches `adt.ErrObjectCreated`, so a caller can tell it apart from a
+failed create.
+
 One known exception: the customizing export in `adt/custexport` exports its
 tables in parallel and still sends one request per remaining table after a
 `401` in the middle of an export.

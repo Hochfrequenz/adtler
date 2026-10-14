@@ -3,6 +3,7 @@ package adt
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -163,6 +164,12 @@ func creatableObjectTypes() []string {
 	return creatable
 }
 
+// ErrObjectCreated is matched by errors.Is when CreateObject returns an error
+// although SAP did create the object: the logout that follows a create was
+// answered with 401. The object exists; a caller that cleans up after a failed
+// create must delete it, and must not create it again under the same name.
+var ErrObjectCreated = errors.New("adt: the object was created")
+
 func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
 	info, ok := objectTypeMap[strings.ToUpper(objectType)]
 	if !ok {
@@ -257,7 +264,13 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 	// Cost: ~1 extra HTTP round-trip per CreateObject (logoff + re-auth
 	// on next call). CreateObject is called once per new ABAP object, so
 	// the latency impact is negligible.
-	_ = c.Logout(ctx)
+	//
+	// Only a 401 on the logout is reported (#222): the caller must stop
+	// sending the rejected credential, and must learn that the object was
+	// created anyway (ErrObjectCreated). Other logout failures stay ignored.
+	if err := c.Logout(ctx); isUnauthorized(err) {
+		return fmt.Errorf("CreateObject: %s %s: %w, but the logout after it failed: %w", objectType, name, ErrObjectCreated, err)
+	}
 
 	return nil
 }

@@ -209,7 +209,9 @@ func TestBasicAuth_401InEstablishedSession_SendsOneRequest(t *testing.T) {
 }
 
 // TestBasicAuth_Logout401_SendsOneRequest: Logout sends one request and never
-// repeats it, whether or not a session exists.
+// repeats it, whether or not a session exists. It reports the 401, so that a
+// caller such as CreateObject can stop instead of sending the rejected
+// credential again.
 func TestBasicAuth_Logout401_SendsOneRequest(t *testing.T) {
 	for _, established := range []bool{false, true} {
 		name := "before any session"
@@ -227,12 +229,101 @@ func TestBasicAuth_Logout401_SendsOneRequest(t *testing.T) {
 				srv.requests.Store(0)
 			}
 
-			_ = client.Logout(context.Background())
+			err := client.Logout(context.Background())
 
+			assertUnauthorized(t, err)
 			if got := srv.requests.Load(); got != 1 {
 				t.Errorf("server received %d request(s), want 1", got)
 			}
 		})
+	}
+}
+
+// TestLogout_OtherErrorStatusIsIgnored: only a 401 is reported. Any other
+// status of the logoff request is ignored as before #222: the local session
+// state is dropped either way.
+func TestLogout_OtherErrorStatusIsIgnored(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	client := adt.NewClient(newTestConfig(srv.URL))
+
+	if err := client.Logout(context.Background()); err != nil {
+		t.Errorf("Logout after a 500: %v, want nil", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("server received %d request(s), want 1", got)
+	}
+}
+
+// TestBasicAuth_CreateObjectLogout401_ReportsCreatedObject: CreateObject logs
+// out after a successful create (adtler#4). A 401 on that logout must end the
+// call with an error, so the caller sends nothing more, and the error must say
+// that the object exists, so the caller does not treat it as never created.
+func TestBasicAuth_CreateObjectLogout401_ReportsCreatedObject(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case programsEndpoint:
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(unauthorizedBody))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := adt.NewClient(newTestConfig(srv.URL))
+
+	err := client.CreateObject(context.Background(), "PROG", "ZTEST", "$TMP", "test", "")
+
+	assertUnauthorized(t, err)
+	if !errors.Is(err, adt.ErrObjectCreated) {
+		t.Errorf("error = %v, want one matching adt.ErrObjectCreated", err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Errorf("server received %d request(s), want 3 (preflight, create, logout)", got)
+	}
+}
+
+// TestBasicAuth_401OnReleaseResult_StopsBeforeVerification: a background
+// release that finished is read once more through its result link. A 401 there
+// must end the call. Before the fix the HTML page passed as an empty release
+// report, and the verification read that follows sent the rejected credential
+// again.
+func TestBasicAuth_401OnReleaseResult_StopsBeforeVerification(t *testing.T) {
+	const resultPath = unauthorizedPollURI + "/result"
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/xml")
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case unauthorizedPollURI:
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><run><status>finished</status><link rel="result" href="` + resultPath + `"/></run>`))
+		case resultPath:
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(unauthorizedBody))
+		default:
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><run><status>running</status><link rel="self" href="` + unauthorizedPollURI + `"/></run>`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := adt.NewClientWithPollInterval(newTestConfig(srv.URL), time.Millisecond)
+
+	_, err := client.ReleaseTransport(context.Background(), unauthorizedRequest)
+
+	assertUnauthorized(t, err)
+	if got := requests.Load(); got != 4 {
+		t.Errorf("server received %d request(s), want 4 (preflight, release request, poll, result)", got)
 	}
 }
 

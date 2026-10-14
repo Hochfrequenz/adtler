@@ -342,6 +342,10 @@ func (c *httpClient) SystemInfo() (host, client string) {
 
 // Logout invalidates the SAP session. After calling this, the CSRF token
 // and session cookies are no longer valid.
+//
+// It sends exactly one request. A 401 is returned as an *ADTError; any other
+// status of the logoff is ignored. The local session state is dropped either
+// way.
 func (c *httpClient) Logout(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+"/sap/public/bc/icf/logoff", nil)
 	if err != nil {
@@ -355,7 +359,15 @@ func (c *httpClient) Logout(ctx context.Context) error {
 		return fmt.Errorf("Logout: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// A 401 is reported, so that a caller stops instead of sending the
+	// rejected credential again (#222). Any other status is ignored as
+	// before: the local session state is dropped either way.
+	var statusErr error
+	if resp.StatusCode == http.StatusUnauthorized {
+		statusErr = fmt.Errorf("Logout: %w", checkResponse(resp))
+	} else {
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}
 
 	c.mu.Lock()
 	c.csrfToken = ""
@@ -368,7 +380,7 @@ func (c *httpClient) Logout(ctx context.Context) error {
 	// reassigning it races with any request in flight (issue #191).
 	c.jar.Reset()
 	c.mu.Unlock()
-	return nil
+	return statusErr
 }
 
 // fetchCSRFToken performs the CSRF preflight GET and caches the token and session cookies.
