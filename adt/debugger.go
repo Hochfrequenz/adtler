@@ -564,18 +564,17 @@ func retryOnAdiFailed[T any](ctx context.Context, fn func() (T, error)) (T, erro
 }
 
 // isTimeoutErr reports whether err represents an HTTP client timeout —
-// either a context deadline or a *url.Error whose Timeout() is true (the
-// shape net/http wraps http.Client.Timeout expirations in).
+// either a context deadline or an error in the chain whose Timeout() is true.
+// The latter covers *url.Error, the shape net/http wraps
+// http.Client.Timeout expirations in: it has a Timeout() method, so the
+// interface target below matches it and no separate *url.Error check is
+// needed (adtler#160).
 func isTimeoutErr(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	var netErr interface{ Timeout() bool }
-	if errors.As(err, &netErr) {
-		return netErr.Timeout()
-	}
-	var urlErr *url.Error
-	return errors.As(err, &urlErr) && urlErr.Timeout()
+	var timeoutErr interface{ Timeout() bool }
+	return errors.As(err, &timeoutErr) && timeoutErr.Timeout()
 }
 
 // debuggeeSessionsEmpty reports whether GetDebuggeeSessions currently shows
