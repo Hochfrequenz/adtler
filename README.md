@@ -314,9 +314,11 @@ not its media type, so each has its own first offer (`fincludes.v2+xml` and
 `fmodules.v3+xml`) and a lookup does not cost a 406 on S/4HANA.
 
 **A function module's or function group include's package comes from its function group.**
-The object documents of function modules and function group includes name no package on
-SAP ERP 6.0 or SAP S/4HANA, so `GetObjectInfo` reads the function group's document when the
-first one has none and reports that package. An object whose document does name a package
+The object documents of function modules and function group includes have no `packageRef`
+on SAP ERP 6.0 or SAP S/4HANA, so `GetObjectInfo` reads the function group's document when
+the first one has none and reports that package. (An include's `containerRef` does carry the
+group's `packageName`, and a function module's does on S/4HANA, but not on SAP ERP 6.0; the
+group's document is the one source used for all of them.) An object whose document does name a package
 costs no extra request; if the group cannot be read, the object is still returned, with an
 empty `PackageName`. A function group that SAP generated for its own use is in no package
 at all (it has no `TADIR` entry), so its function modules and includes report none either;
