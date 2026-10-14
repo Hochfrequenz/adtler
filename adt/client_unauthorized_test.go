@@ -292,6 +292,32 @@ func TestBasicAuth_CreateObjectLogout401_ReportsCreatedObject(t *testing.T) {
 	}
 }
 
+// TestOAuth_CreateObjectLogout401_IsNotAFailure: an OAuth token that expires
+// between the create and the logout after it gets a 401 on the logout. That is
+// no rejected password: the next request refreshes the token, and no failed
+// logon is counted. CreateObject must report the create as the success it was.
+func TestOAuth_CreateObjectLogout401_IsNotAFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case programsEndpoint:
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(unauthorizedBody))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	refresh := func(string) (string, error) { return "refreshed-token", nil }
+	client := adt.NewClientWithToken(newTestConfig(srv.URL), "token", refresh)
+
+	if err := client.CreateObject(context.Background(), "PROG", "ZTEST", "$TMP", "test", ""); err != nil {
+		t.Fatalf("CreateObject: %v, want nil — the object was created and the token can be refreshed", err)
+	}
+}
+
 // TestBasicAuth_401OnReleaseResult_StopsBeforeVerification: a background
 // release that finished is read once more through its result link. A 401 there
 // must end the call. Before the fix the HTML page passed as an empty release

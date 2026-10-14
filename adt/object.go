@@ -166,7 +166,7 @@ func creatableObjectTypes() []string {
 
 // ErrObjectCreated is matched by errors.Is when CreateObject returns an error
 // although SAP did create the object: the logout that follows a create was
-// answered with 401. The object exists; a caller that cleans up after a failed
+// answered with 401 under Basic Auth (or with a token that cannot be refreshed). The object exists; a caller that cleans up after a failed
 // create must delete it, and must not create it again under the same name.
 var ErrObjectCreated = errors.New("adt: the object was created")
 
@@ -265,10 +265,13 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 	// on next call). CreateObject is called once per new ABAP object, so
 	// the latency impact is negligible.
 	//
-	// Only a 401 on the logout is reported (#222): the caller must stop
-	// sending the rejected credential, and must learn that the object was
-	// created anyway (ErrObjectCreated). Other logout failures stay ignored.
-	if err := c.Logout(ctx); isUnauthorized(err) {
+	// Only a 401 on the logout is reported, and only when the token cannot be
+	// refreshed (#222): the caller must stop sending the rejected credential,
+	// and must learn that the object was created anyway (ErrObjectCreated).
+	// An OAuth token that merely expired after the create is refreshed by the
+	// next request, so that 401 is no failure. Other logout failures stay
+	// ignored.
+	if err := c.Logout(ctx); isUnauthorized(err) && !c.tokens.canRefresh() {
 		return fmt.Errorf("CreateObject: %s %s: %w, but the logout after it failed: %w", objectType, name, ErrObjectCreated, err)
 	}
 

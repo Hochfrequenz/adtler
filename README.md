@@ -97,9 +97,11 @@ stops this way, its temporary program stays in `$TMP`, and the error names it.
 
 `Logout` reports a `401` on its logoff request as an `*adt.ADTError` and ignores
 any other status. `CreateObject` logs out after creating the object; if that
-logout is rejected with `401`, it returns an error although the object exists.
-That error matches `adt.ErrObjectCreated`, so a caller can tell it apart from a
-failed create.
+logout is rejected with `401` under Basic auth, it returns an error although the
+object exists. That error matches `adt.ErrObjectCreated`, so a caller can tell it
+apart from a failed create. With an OAuth token that can be refreshed, such a
+`401` only means the token expired after the create; `CreateObject` then reports
+success, and the next request refreshes the token.
 
 One known exception: the customizing export in `adt/custexport` exports its
 tables in parallel and still sends one request per remaining table after a
