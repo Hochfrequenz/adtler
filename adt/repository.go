@@ -218,7 +218,7 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 		return nil, err
 	}
 	if info.PackageName == "" {
-		if groupURI, ok := functionGroupURIOfModule(objectURI); ok {
+		if groupURI, ok := functionGroupURIOfPart(objectURI); ok {
 			pkg, err := c.packageOfFunctionGroup(ctx, groupURI)
 			if err != nil {
 				return nil, err
@@ -229,27 +229,34 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 	return info, nil
 }
 
-// functionGroupURIOfModule returns the URI of the function group a function
-// module URI (.../functions/groups/<fg>/fmodules/<fm>) belongs to.
-func functionGroupURIOfModule(objectURI string) (string, bool) {
-	if !strings.HasPrefix(objectURI, "/sap/bc/adt/functions/groups/") {
+// functionGroupURIOfPart returns the URI of the function group that a function
+// module (.../functions/groups/<fg>/fmodules/<fm>) or a function group include
+// (.../functions/groups/<fg>/includes/<inc>) belongs to.
+func functionGroupURIOfPart(objectURI string) (string, bool) {
+	const prefix = "/sap/bc/adt/functions/groups/"
+	rest, ok := strings.CutPrefix(objectURI, prefix)
+	if !ok {
 		return "", false
 	}
-	i := strings.Index(objectURI, "/fmodules/")
-	if i < 0 {
+	group, part, ok := strings.Cut(rest, "/")
+	if !ok || group == "" {
 		return "", false
 	}
-	return objectURI[:i], true
+	if !strings.HasPrefix(part, "fmodules/") && !strings.HasPrefix(part, "includes/") {
+		return "", false
+	}
+	return prefix + group, true
 }
 
 // packageOfFunctionGroup reads the package from a function group's object
-// document. A function module has no package of its own: it lives in the
-// package of its function group, and its own document names none on SAP ERP 6.0
-// or SAP S/4HANA (adtler#169).
+// document. Function modules and function group includes have no package of
+// their own: they live in the package of their function group, and their own
+// documents carry no packageRef on SAP ERP 6.0 or SAP S/4HANA (adtler#169,
+// adtler#232).
 //
 // The lookup is best effort and returns "" when the group cannot be read. The
-// function module itself was read successfully, and one denied or failed second
-// request is no reason to withhold it from the caller. A cancelled or expired
+// object itself was read successfully, and one denied or failed second request
+// is no reason to withhold it from the caller. A cancelled or expired
 // context is the exception: the caller gave up, so it gets that error instead
 // of a success with a package that was never looked up.
 func (c *httpClient) packageOfFunctionGroup(ctx context.Context, groupURI string) (string, error) {
