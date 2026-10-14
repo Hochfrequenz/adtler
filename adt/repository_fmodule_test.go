@@ -362,3 +362,55 @@ func TestGetObjectInfo_FunctionModule_NamespacedNames(t *testing.T) {
 		t.Errorf("requests: got %v, want the function module then its group, namespace slashes still encoded", gotPath)
 	}
 }
+
+const (
+	// fincludeURI is a function group include URI as search_objects returns it.
+	fincludeURI = fmoduleGroupURI + "/includes/lzmy_fgtop"
+
+	// fincludeXML is a function group include document the way SAP ERP 6.0 and
+	// SAP S/4HANA serve it (adtler#232): no packageRef, only a containerRef to
+	// the function group, which GetObjectInfo does not read as the package.
+	fincludeXML = `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<finclude:abapFunctionGroupInclude xmlns:finclude="http://www.sap.com/adt/functions/fincludes"` +
+		` xmlns:adtcore="http://www.sap.com/adt/core"` +
+		` adtcore:name="LZMY_FGTOP" adtcore:type="FUGR/I">` +
+		`<adtcore:containerRef adtcore:uri="` + fmoduleGroupURI + `" adtcore:type="FUGR/F" adtcore:name="ZMY_FG" adtcore:packageName="ZGROUPPACK"/>` +
+		`</finclude:abapFunctionGroupInclude>`
+)
+
+// TestGetObjectInfo_FunctionGroupInclude_PackageComesFromFunctionGroup covers
+// adtler#232: a function group include, like a function module, belongs to the
+// package of its function group, and its own document names no package.
+func TestGetObjectInfo_FunctionGroupInclude_PackageComesFromFunctionGroup(t *testing.T) {
+	var includeGets, groupGets int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case fincludeURI:
+			atomic.AddInt32(&includeGets, 1)
+			_, _ = w.Write([]byte(fincludeXML))
+		case fmoduleGroupURI:
+			atomic.AddInt32(&groupGets, 1)
+			_, _ = w.Write([]byte(fmoduleGroupXML))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fincludeURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != "ZGROUPPACK" {
+		t.Errorf("package: got %q, want the function group's package %q", info.PackageName, "ZGROUPPACK")
+	}
+	if info.Name != "LZMY_FGTOP" || info.URI != fincludeURI {
+		t.Errorf("the result must still describe the include: got name %q, URI %q", info.Name, info.URI)
+	}
+	if got := atomic.LoadInt32(&groupGets); got != 1 {
+		t.Errorf("function group document fetched %d times, want 1", got)
+	}
+}
