@@ -568,7 +568,7 @@ func retryOnAdiFailed[T any](ctx context.Context, fn func() (T, error)) (T, erro
 // The latter covers *url.Error, the shape net/http wraps
 // http.Client.Timeout expirations in: it has a Timeout() method, so the
 // interface target below matches it and no separate *url.Error check is
-// needed (adtler#160).
+// needed.
 func isTimeoutErr(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
