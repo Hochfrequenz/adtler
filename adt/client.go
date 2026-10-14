@@ -254,21 +254,36 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 	}
 }
 
-// freshSession returns a single-use *httpClient that shares this client's
+// freshSession returns a new *httpClient that shares this client's
 // configuration and credentials but has a brand-new cookie jar and no cached
-// CSRF token, so its first request establishes a clean SAP session.
+// CSRF token, so its first request establishes a clean SAP session. It copies
+// none of the parent's caches either (CSRF token, discovery, removeObjectSupport):
+// the fresh session fills each again from its own first requests, which costs
+// one extra discovery round trip.
 //
-// It exists for RunClass: on S/4 the ADT session that performed
-// create -> set source -> activate cannot generate the target class's runtime
-// load when it runs the classrun in that same session (issue #106, defect 1),
-// but a fresh session generates it and returns real output. classrun is
-// stateless, so running it on an isolated session is consistent with its
-// contract and leaves the caller's session and any locks untouched.
+// It has two kinds of callers:
 //
-// The returned client is not registered anywhere and holds no locks; discard it
-// after use. It shares the parent's OAuth token source, so a token refreshed in
-// either one is the token both send next, and the two never refresh at the same
-// time (issue #197).
+//   - Short-lived: RunClass, and DebugSession.RunUnitTests as a breakpoint
+//     trigger, each use one fresh session for a single request and then drop it.
+//     RunClass needs it because on S/4 the ADT session that performed
+//     create -> set source -> activate cannot generate the target class's
+//     runtime load when it runs the classrun in that same session (issue #106,
+//     defect 1), but a fresh session generates it and returns real output.
+//     classrun is stateless, so running it on an isolated session is consistent
+//     with its contract and leaves the caller's session and any locks untouched.
+//   - Long-lived: NewDebugSession keeps one fresh session for the lifetime of the
+//     DebugSession and sends all of its stateful debugger calls through it. The
+//     reason there is containment: a stuck stateful debug call wedges only its
+//     own cookie jar, not every other request of the parent client.
+//
+// The returned client is not registered anywhere and holds no locks. Logout on
+// the parent does not reach it, since it has its own jar. It shares the
+// parent's OAuth token source, so a token refreshed in either one is the token
+// both send next, and the two never refresh at the same time (issue #197). That
+// is what makes the long-lived use safe on an OAuth system: a debug session that
+// outlives the access token refreshes it like the parent would, and an identity
+// provider that rotates refresh tokens never sees two refreshes with the same
+// one.
 //
 // It reuses the parent's *http.Transport (preserving any caller-supplied
 // RoundTripper from NewClientWithTransport and the existing connection pool)
