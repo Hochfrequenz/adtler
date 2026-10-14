@@ -22,7 +22,7 @@ Every fix or feature follows this cycle.
 - Branch from `main`: `git checkout -b fix/<N>-short-description`
 - Implement the fix with unit tests (httptest mocks for ADT endpoints)
 - Add a multi-system integration test using `eachSystem(t)` — the test must exercise the bug's exact failure path against both R/3 and S/4
-- Run `go test ./...`, `go build -tags integration ./adt/...`, `go vet -tags integration ./adt/...`
+- Run `go test ./...`, `go build -tags integration ./adt/...`, `go vet -tags integration ./adt/...`, `go vet -tags='integration transport' ./adt/...`
 - Commit, push, open PR linking the adtler issue AND the aibap.mcp consumer issue, add the `needs:integration-test` label
   - Link the adtler issue with a closing keyword (`Closes #N`) when this PR fully resolves it.
   - Link the consumer issue as `Related: Hochfrequenz/aibap.mcp#N` — the owner-qualified form, or it won't autolink at all — and never as `Closes`, `Fixes`, or `Resolves`. A cross-repo closing keyword fires the moment *this* PR merges, not when aibap.mcp actually consumes the fix by bumping its adtler dependency. Closing the consumer issue is aibap.mcp's own responsibility, done in the PR that performs that bump (see aibap.mcp's CLAUDE.md, "Cross-Repo Issue Tracking (adtler)"). Getting this wrong shows a bug as fixed on the consumer's tracker while the shipped binary still has it.
@@ -43,7 +43,7 @@ The reviewer has no memory of the development conversation and reviews purely on
 
 #### 3. CI must be green
 
-All GitHub Actions checks must pass before proceeding: lint (`golangci-lint` with `dupl`, `goconst`, `gocyclo`), unit tests (Go 1.25 + 1.26), coverage, CodeQL. Common lint issues: `goconst` (hoist repeated strings to constants), `gofmt` (godoc code blocks need tab indent after `//`), `staticcheck` (use tagged switch).
+All GitHub Actions checks must pass before proceeding: lint (`golangci-lint` with `dupl`, `goconst`, `gocyclo`), unit tests (Go 1.26 + 1.27), a compile check of the integration tests (`go vet -tags='integration transport' ./adt/...`), coverage, CodeQL. Common lint issues: `goconst` (hoist repeated strings to constants), `gofmt` (godoc code blocks need tab indent after `//`), `staticcheck` (use tagged switch).
 
 #### 4. Local agent with SAP access runs integration tests
 

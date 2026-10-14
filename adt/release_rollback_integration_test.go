@@ -12,13 +12,15 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-// Tests in this file exercise ReleaseTransportVerified and RollbackTransport
-// against a real SAP system. They create their own disposable transports and
+// Tests in this file exercise ReleaseTransportWithTasks (including its
+// post-release status check, which reports ECC's silent release failure as
+// ReleaseResult.Released == false) and RollbackTransport against a real SAP
+// system. They create their own disposable transports and
 // objects and must not touch any pre-existing fixtures.
 //
-// Run with: go test -tags='integration transport' -v -run 'TestReleaseTransportVerified|TestRollbackTransport' ./adt/...
+// Run with: go test -tags='integration transport' -v -run 'TestReleaseTransportWithTasks|TestRollbackTransport' ./adt/...
 
-func TestReleaseTransportVerified_Integration(t *testing.T) {
+func TestReleaseTransportWithTasks_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
@@ -28,10 +30,10 @@ func TestReleaseTransportVerified_Integration(t *testing.T) {
 	}
 	t.Logf("created transport: %s", trNumber)
 
-	// Cleanup: if the test fails before ReleaseTransportVerified, release the
+	// Cleanup: if the test fails before the release below, release the
 	// transport so it doesn't linger on the system as an open request.
 	t.Cleanup(func() {
-		_ = client.ReleaseTransportWithTasks(context.Background(), trNumber)
+		_, _ = client.ReleaseTransportWithTasks(context.Background(), trNumber)
 	})
 
 	// Create a throwaway object in the transport so the release has content.
@@ -47,9 +49,9 @@ func TestReleaseTransportVerified_Integration(t *testing.T) {
 		t.Logf("ActivateObjects: %v (non-fatal — continuing)", err)
 	}
 
-	result, err := client.ReleaseTransportVerified(ctx, trNumber, true)
+	result, err := client.ReleaseTransportWithTasks(ctx, trNumber)
 	if err != nil {
-		t.Fatalf("ReleaseTransportVerified: %v", err)
+		t.Fatalf("ReleaseTransportWithTasks: %v", err)
 	}
 	if result == nil {
 		t.Fatal("expected non-nil ReleaseResult")
@@ -82,8 +84,8 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	}
 	t.Logf("[1] T1=%s", t1)
 	t.Cleanup(func() {
-		if r, releaseErr := client.ReleaseTransportVerified(context.Background(), t1, true); releaseErr != nil {
-			t.Logf("cleanup: ReleaseTransportVerified(%s) failed: %v", t1, releaseErr)
+		if r, releaseErr := client.ReleaseTransportWithTasks(context.Background(), t1); releaseErr != nil {
+			t.Logf("cleanup: ReleaseTransportWithTasks(%s) failed: %v", t1, releaseErr)
 		} else if !r.Released {
 			t.Logf("cleanup: %s still modifiable after release (ECC silent-release-failure) — release via SE09 or the next run will find the fixture locked", t1)
 		}
@@ -121,21 +123,22 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	// *before* the given transport. T1 is the first activation so there is no
 	// version before it — rolling back T1 would error. Rolling back T2 returns v1.
 	//
-	// ReleaseTransportWithTasks reports success whenever the release endpoint
-	// returns 2xx — but ECC has a documented silent-failure mode where the
-	// request stays modifiable despite that 2xx (see transport.go's
-	// ReleaseTransportVerified doc). Use the verified call and fail loudly
-	// instead of racing into Phase 3 against an object still locked in T1.
-	releaseResult, err := client.ReleaseTransportVerified(ctx, t1, true)
+	// The release endpoint reports success whenever it returns 2xx — but ECC
+	// has a documented silent-failure mode where the request stays modifiable
+	// despite that 2xx (see the ReleaseTransport doc in transport.go).
+	// ReleaseTransportWithTasks re-reads the status and reports that case as
+	// Released == false; act on it instead of racing into Phase 3 against an
+	// object still locked in T1.
+	releaseResult, err := client.ReleaseTransportWithTasks(ctx, t1)
 	if err != nil {
-		t.Fatalf("[2] ReleaseTransportVerified T1: %v", err)
+		t.Fatalf("[2] ReleaseTransportWithTasks T1: %v", err)
 	}
 	t1Free := releaseResult.Released
 	if t1Free {
 		t.Logf("[2] T1 released")
 	}
 
-	// ECC's silent-release-failure (documented on ReleaseTransportVerified in
+	// ECC's silent-release-failure (documented on ReleaseTransport in
 	// transport.go): release itself is not impossible on this system, just not
 	// reachable via ADT. Give a manual release (e.g. via SE09) a window to land
 	// before falling back further — matching the poll pattern
@@ -221,8 +224,8 @@ func TestRollbackTransport_Integration(t *testing.T) {
 				}
 			}
 		}
-		if r, releaseErr := client.ReleaseTransportVerified(bgCtx, t2, true); releaseErr != nil {
-			t.Logf("cleanup: ReleaseTransportVerified(%s) failed: %v", t2, releaseErr)
+		if r, releaseErr := client.ReleaseTransportWithTasks(bgCtx, t2); releaseErr != nil {
+			t.Logf("cleanup: ReleaseTransportWithTasks(%s) failed: %v", t2, releaseErr)
 		} else if !r.Released {
 			t.Logf("cleanup: %s still modifiable after release (ECC silent-release-failure) — release via SE09 or the next run will find the fixture locked", t2)
 		} else {
