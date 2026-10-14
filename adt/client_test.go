@@ -120,8 +120,7 @@ func TestCSRFTokenRefreshedOn403(t *testing.T) {
 
 // TestNoReauthOn401WithBasicAuth: under Basic auth a 401 is returned as it
 // is. A retry would send the same credential again and cannot succeed, and
-// SAP counts every attempt as a failed logon (#222). This test used to assert
-// the opposite, a successful retry after the first 401.
+// SAP counts every attempt as a failed logon (#222).
 func TestNoReauthOn401WithBasicAuth(t *testing.T) {
 	var authAttempts atomic.Int32
 

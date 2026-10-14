@@ -14,7 +14,10 @@ import (
 )
 
 func (c *httpClient) SyntaxCheck(ctx context.Context, objectURI string) ([]SyntaxMessage, error) {
-	results := c.batchSyntaxCheckChunkWithVersion(ctx, []string{objectURI}, "inactive")
+	results, reqErr := c.batchSyntaxCheckChunkWithVersion(ctx, []string{objectURI}, "inactive")
+	if reqErr != nil {
+		return nil, fmt.Errorf("SyntaxCheck: %w", reqErr)
+	}
 	if results[0].Error != "" {
 		return nil, fmt.Errorf("SyntaxCheck: %s", results[0].Error)
 	}
@@ -39,7 +42,10 @@ func (c *httpClient) SyntaxCheck(ctx context.Context, objectURI string) ([]Synta
 		if _, err := c.GetObjectInfo(ctx, objectURI); err != nil {
 			return nil, fmt.Errorf("SyntaxCheck: object does not exist: %w", err)
 		}
-		results = c.batchSyntaxCheckChunkWithVersion(ctx, []string{objectURI}, "active")
+		results, reqErr = c.batchSyntaxCheckChunkWithVersion(ctx, []string{objectURI}, "active")
+		if reqErr != nil {
+			return nil, fmt.Errorf("SyntaxCheck: %w", reqErr)
+		}
 		if results[0].Error != "" {
 			return nil, fmt.Errorf("SyntaxCheck: %s", results[0].Error)
 		}
@@ -80,6 +86,10 @@ const batchCheckChunkSize = 10
 // batch capability of /sap/bc/adt/checkruns. Objects are sent in chunks
 // of batchCheckChunkSize to stay within SAP request size limits.
 // Results are correlated back to objects via the report's triggeringUri.
+//
+// After a chunk that SAP answered with 401 no further chunk is sent: the
+// credential was rejected, and every further request would count one more
+// failed logon (#222). The objects of the chunks not sent carry that error.
 func (c *httpClient) BatchSyntaxCheck(ctx context.Context, objectURIs []string) []ObjectSyntaxResult {
 	results := make([]ObjectSyntaxResult, len(objectURIs))
 	for start := 0; start < len(objectURIs); start += batchCheckChunkSize {
@@ -88,21 +98,33 @@ func (c *httpClient) BatchSyntaxCheck(ctx context.Context, objectURIs []string) 
 			end = len(objectURIs)
 		}
 		chunk := objectURIs[start:end]
-		chunkResults := c.batchSyntaxCheckChunk(ctx, chunk)
+		chunkResults, reqErr := c.batchSyntaxCheckChunkWithVersion(ctx, chunk, "inactive")
 		copy(results[start:], chunkResults)
+		if isUnauthorized(reqErr) {
+			copy(results[end:], chunkErrorResults(objectURIs[end:], reqErr))
+			break
+		}
 	}
 	return results
 }
 
-// batchSyntaxCheckChunk runs a single batched syntax check request for a chunk of objects.
-func (c *httpClient) batchSyntaxCheckChunk(ctx context.Context, objectURIs []string) []ObjectSyntaxResult {
-	return c.batchSyntaxCheckChunkWithVersion(ctx, objectURIs, "inactive")
+// chunkErrorResults reports err for every object of a chunk.
+func chunkErrorResults(objectURIs []string, err error) []ObjectSyntaxResult {
+	results := make([]ObjectSyntaxResult, len(objectURIs))
+	for i, uri := range objectURIs {
+		results[i] = ObjectSyntaxResult{ObjectURI: uri, Error: err.Error()}
+	}
+	return results
 }
 
-// batchSyntaxCheckChunkWithVersion is the version-parameterised core of
-// batchSyntaxCheckChunk. SyntaxCheck uses it to retry with version="active"
+// batchSyntaxCheckChunkWithVersion runs a single batched syntax check request
+// for a chunk of objects. SyntaxCheck uses it to retry with version="active"
 // when the inactive check produces a false-positive.
-func (c *httpClient) batchSyntaxCheckChunkWithVersion(ctx context.Context, objectURIs []string, version string) []ObjectSyntaxResult {
+//
+// When the request itself fails, every result carries the failure as text and
+// the failure is returned as well, so a caller can tell a 401 apart (see
+// isUnauthorized). The returned error's text equals the results' Error.
+func (c *httpClient) batchSyntaxCheckChunkWithVersion(ctx context.Context, objectURIs []string, version string) ([]ObjectSyntaxResult, error) {
 	// Build XML with all objects in a single checkObjectList.
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
@@ -123,19 +145,12 @@ func (c *httpClient) batchSyntaxCheckChunkWithVersion(ctx context.Context, objec
 	)
 	if err != nil {
 		// On HTTP-level failure, return the error for all objects.
-		results := make([]ObjectSyntaxResult, len(objectURIs))
-		for i, uri := range objectURIs {
-			results[i] = ObjectSyntaxResult{ObjectURI: uri, Error: fmt.Sprintf("BatchSyntaxCheck: %s", err)}
-		}
-		return results
+		err = fmt.Errorf("BatchSyntaxCheck: %w", err)
+		return chunkErrorResults(objectURIs, err), err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := checkResponse(resp); err != nil {
-		results := make([]ObjectSyntaxResult, len(objectURIs))
-		for i, uri := range objectURIs {
-			results[i] = ObjectSyntaxResult{ObjectURI: uri, Error: err.Error()}
-		}
-		return results
+		return chunkErrorResults(objectURIs, err), err
 	}
 
 	data, _ := io.ReadAll(resp.Body)
@@ -165,7 +180,7 @@ func (c *httpClient) batchSyntaxCheckChunkWithVersion(ctx context.Context, objec
 			})
 		}
 	}
-	return results
+	return results, nil
 }
 
 // parseMessagePosition extracts line and column from a checkMessage URI fragment.

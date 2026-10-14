@@ -3,8 +3,10 @@ package adt_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +58,17 @@ func newUnauthorizedServer(t *testing.T, rejectFromStart bool) *unauthorizedServ
 	return s
 }
 
+// batchCheckObjects is how many objects the BatchSyntaxCheck case checks:
+// enough for three chunks of ten, so a loop that carried on after the first
+// chunk's 401 would send two more requests.
+const batchCheckObjects = 25
+
+// resultText is the error of a path whose result carries the 401 only as
+// text: BatchSyntaxCheck reports per-object error strings, not error values.
+type resultText string
+
+func (e resultText) Error() string { return string(e) }
+
 // unauthorizedOperations are the request paths that must stop after the
 // first 401 under Basic auth. Each names the code path it covers.
 var unauthorizedOperations = []struct {
@@ -99,6 +112,28 @@ var unauthorizedOperations = []struct {
 		_, err := c.ReleaseTransport(ctx, unauthorizedRequest)
 		return err
 	}},
+	{"syntax check", func(ctx context.Context, c adt.Client) error {
+		_, err := c.SyntaxCheck(ctx, probeObjectURI)
+		return err
+	}},
+	{"batch syntax check over several chunks", func(ctx context.Context, c adt.Client) error {
+		uris := make([]string, batchCheckObjects)
+		for i := range uris {
+			uris[i] = fmt.Sprintf("%s%d", probeObjectURI, i)
+		}
+		results := c.BatchSyntaxCheck(ctx, uris)
+		for i, r := range results {
+			if r.Error == "" {
+				return fmt.Errorf("result %d carries no error", i)
+			}
+		}
+		// The last object is in the last chunk, which must not have been sent.
+		return resultText(results[len(results)-1].Error)
+	}},
+	{"DDIC dependency chain", func(ctx context.Context, c adt.Client) error {
+		_, err := c.GetObjectDependencies(ctx, "TABL", "ZTABLE", 0, 2)
+		return err
+	}},
 }
 
 // assertUnauthorized fails unless err carries the 401 as an *adt.ADTError,
@@ -126,11 +161,25 @@ func TestBasicAuth_401BeforeAnySession_SendsOneRequest(t *testing.T) {
 
 			err := op.call(context.Background(), client)
 
-			assertUnauthorized(t, err)
+			assertOperationUnauthorized(t, err)
 			if got := srv.requests.Load(); got != 1 {
 				t.Errorf("server received %d request(s), want 1", got)
 			}
 		})
+	}
+}
+
+// assertOperationUnauthorized is assertUnauthorized, except for a path whose
+// result carries the 401 only as text (see resultText).
+func assertOperationUnauthorized(t *testing.T, err error) {
+	t.Helper()
+	var text resultText
+	if !errors.As(err, &text) {
+		assertUnauthorized(t, err)
+		return
+	}
+	if !strings.Contains(string(text), "401") {
+		t.Fatalf("error = %v, want one naming the 401", err)
 	}
 }
 
@@ -151,7 +200,7 @@ func TestBasicAuth_401InEstablishedSession_SendsOneRequest(t *testing.T) {
 
 			err := op.call(context.Background(), client)
 
-			assertUnauthorized(t, err)
+			assertOperationUnauthorized(t, err)
 			if got := srv.requests.Load(); got != 1 {
 				t.Errorf("server received %d request(s), want 1", got)
 			}
@@ -193,8 +242,9 @@ func TestBasicAuth_Logout401_SendsOneRequest(t *testing.T) {
 // document, read as "still running", and the loop polled on, each poll one
 // more failed logon.
 func TestBasicAuth_401WhilePollingRelease_StopsPolling(t *testing.T) {
-	var polls atomic.Int32
+	var requests, polls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		switch r.URL.Path {
 		case csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
@@ -219,6 +269,76 @@ func TestBasicAuth_401WhilePollingRelease_StopsPolling(t *testing.T) {
 	assertUnauthorized(t, err)
 	if got := polls.Load(); got != 1 {
 		t.Errorf("server received %d poll(s), want 1", got)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Errorf("server received %d request(s), want 3 (preflight, release request, one poll)", got)
+	}
+}
+
+// TestReleasePoll_5xxKeepsPolling: only a 4xx ends the poll loop. A 5xx may be
+// transient while the release itself still finishes, so the loop polls on, as
+// it did before #222.
+func TestReleasePoll_5xxKeepsPolling(t *testing.T) {
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+		case unauthorizedPollURI:
+			if polls.Add(1) == 1 {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`<html><body><p>Internal Server Error</p></body></html>`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><run><status>finished</status></run>`))
+		default:
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><run><status>running</status><link rel="self" href="` + unauthorizedPollURI + `"/></run>`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := adt.NewClientWithPollInterval(newTestConfig(srv.URL), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := client.ReleaseTransport(ctx, unauthorizedRequest); err != nil {
+		t.Fatalf("ReleaseTransport after a transient 500 while polling: %v", err)
+	}
+	if got := polls.Load(); got != 2 {
+		t.Errorf("server received %d poll(s), want 2", got)
+	}
+}
+
+// TestOAuth2_WithoutRefreshCallback_401SendsOneRequest: a token client
+// without a refresh callback cannot change its token, so a 401 is final there
+// too: one request, no retry.
+func TestOAuth2_WithoutRefreshCallback_401SendsOneRequest(t *testing.T) {
+	for _, established := range []bool{false, true} {
+		name := "before any session"
+		if established {
+			name = "in an established session"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv := newUnauthorizedServer(t, !established)
+			client := adt.NewClientWithToken(sapmcpconfig.SAPSystem{Host: srv.URL, Client: "100"}, "token", nil)
+			if established {
+				if _, err := client.SystemFlavor(context.Background()); err != nil {
+					t.Fatalf("establishing the session: %v", err)
+				}
+				srv.reject.Store(true)
+				srv.requests.Store(0)
+			}
+
+			_, err := client.GetSource(context.Background(), probeObjectURI)
+
+			assertUnauthorized(t, err)
+			if got := srv.requests.Load(); got != 1 {
+				t.Errorf("server received %d request(s), want 1", got)
+			}
+		})
 	}
 }
 

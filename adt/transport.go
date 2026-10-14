@@ -275,6 +275,8 @@ func (c *httpClient) releaseTransportDirect(ctx context.Context, transportNumber
 	// A 401 says the credential was rejected, not that /newreleasejobs is
 	// missing. The fallback would send the same credential again (#222).
 	if resp.StatusCode == http.StatusUnauthorized {
+		// parseADTError on the body already read is what checkResponse
+		// would return; checkResponse itself needs the unread body.
 		return fmt.Errorf("ReleaseTransport %s: %w", transportNumber, parseADTError(resp.StatusCode, bytes.NewReader(data)))
 	}
 
@@ -341,10 +343,16 @@ func (c *httpClient) pollBackgroundRelease(ctx context.Context, transportNumber,
 		if err != nil {
 			return fmt.Errorf("ReleaseTransport %s poll: %w", transportNumber, err)
 		}
-		// An error status ends the loop. Its body is no status document, and
-		// one that happens to parse (an HTML page can) carries no status and
-		// would read as "still running": after a 401 the loop then sent the
-		// rejected credential on every poll (#222).
+		// An error status carries no status document, and a body that
+		// happens to parse (an HTML page can) has no status and would read
+		// as "still running". A 4xx ends the loop: after a 401 it sent the
+		// rejected credential on every poll (#222). A 5xx may be transient
+		// while the release still finishes, so the loop polls on.
+		if resp.StatusCode >= http.StatusInternalServerError {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			continue
+		}
 		if err := checkResponse(resp); err != nil {
 			_ = resp.Body.Close()
 			return fmt.Errorf("ReleaseTransport %s poll: %w", transportNumber, err)

@@ -83,10 +83,20 @@ Under Basic auth the client never repeats a request that SAP answered with
 `401`. The user and password cannot change during the client's lifetime, so a
 retry could not succeed and would only count one more failed logon. The call
 returns the `401` as an `*adt.ADTError` after one request, whether SAP rejected
-the initial CSRF request or the request itself, and multi-step calls such as
-`DeleteObject` or `ReleaseTransport` stop at that point as well. A client that
-uses an OAuth2 token with a refresh callback refreshes the token once after a
-`401` and repeats the request once.
+the initial CSRF request or the request itself. A client that uses an OAuth2
+token with a refresh callback refreshes the token once after a `401` and repeats
+the request once.
+
+Calls that send several requests stop at the first `401` too, including any
+fallback or cleanup they would otherwise send: `DeleteObject`,
+`LockMap.ResolveETag`, `RemoveFromTransport`, `ReleaseTransport` (and its
+polling), `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
+`401` as their error), `GetObjectDependencies`, `RollbackTransport` (the objects
+not processed are reported as failed) and `VerifySource`. When `VerifySource`
+stops this way, its temporary program stays in `$TMP`, and the error names it.
+One known exception: the customizing export in `adt/custexport` exports its
+tables in parallel and still sends one request per remaining table after a
+`401` in the middle of an export.
 
 ## Testing
 
