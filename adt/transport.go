@@ -1,6 +1,7 @@
 package adt
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -218,8 +219,10 @@ func (c *httpClient) releaseTransportVerified(ctx context.Context, transportNumb
 
 func (c *httpClient) releaseTransport(ctx context.Context, transportNumber string, releaseTasks bool) error {
 	err := c.releaseTransportDirect(ctx, transportNumber)
-	if err == nil {
-		return nil
+	// After a 401, looking for unreleased tasks would only send the rejected
+	// credential again (#222).
+	if err == nil || isUnauthorized(err) {
+		return err
 	}
 
 	// Check for unreleased tasks.
@@ -268,6 +271,11 @@ func (c *httpClient) releaseTransportDirect(ctx context.Context, transportNumber
 			return c.pollBackgroundRelease(ctx, transportNumber, pollURI)
 		}
 		return checkReleaseResponse(transportNumber, data)
+	}
+	// A 401 says the credential was rejected, not that /newreleasejobs is
+	// missing. The fallback would send the same credential again (#222).
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("ReleaseTransport %s: %w", transportNumber, parseADTError(resp.StatusCode, bytes.NewReader(data)))
 	}
 
 	// Fallback to /releasejobs (works for tasks on ECC and S4).
@@ -331,6 +339,14 @@ func (c *httpClient) pollBackgroundRelease(ctx context.Context, transportNumber,
 			"Accept": "application/vnd.sap.adt.bgrun.v1+xml",
 		})
 		if err != nil {
+			return fmt.Errorf("ReleaseTransport %s poll: %w", transportNumber, err)
+		}
+		// An error status ends the loop. Its body is no status document, and
+		// one that happens to parse (an HTML page can) carries no status and
+		// would read as "still running": after a 401 the loop then sent the
+		// rejected credential on every poll (#222).
+		if err := checkResponse(resp); err != nil {
+			_ = resp.Body.Close()
 			return fmt.Errorf("ReleaseTransport %s poll: %w", transportNumber, err)
 		}
 		data, _ := io.ReadAll(resp.Body)
@@ -856,15 +872,22 @@ func (c *httpClient) cacheRemoveObjectSupport(data []byte) {
 // call: only a confirmed RemoveObjectSupportUnsupported does. Failing closed
 // on a system that simply could not be classified would break setups that
 // work today; this gate exists to stop a known-bad call, not to demand
-// proof of a good one.
+// proof of a good one. The one exception is a read that SAP answered with
+// 401: the credential was rejected, so the PUT would only send it again and
+// count one more failed logon (#222), and the 401 is returned instead.
 func (c *httpClient) ensureRemoveObjectSupported(ctx context.Context, parentTransport string) error {
 	c.mu.Lock()
 	state := c.removeObjectSupport
 	c.mu.Unlock()
 
 	if state == RemoveObjectSupportUnknown {
-		_, _ = c.readTransportXML(ctx, parentTransport,
+		_, err := c.readTransportXML(ctx, parentTransport,
 			"application/vnd.sap.adt.transportorganizer.v1+xml, application/xml")
+		// The one failure that is not discarded: after a 401 the PUT would
+		// send the rejected credential again (#222).
+		if isUnauthorized(err) {
+			return fmt.Errorf("RemoveFromTransport: %w", err)
+		}
 		c.mu.Lock()
 		state = c.removeObjectSupport
 		c.mu.Unlock()

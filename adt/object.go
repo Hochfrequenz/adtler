@@ -344,7 +344,9 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 // is bogus or already released (see UnlockObject), so a caller that unlocks
 // first and then passes the handle along causes no failure. If the UNLOCK
 // request fails for another reason, such as a transport error, that failure
-// alone does not stop the delete. If the delete then fails as well, the
+// alone does not stop the delete. A 401 does: SAP rejected the credential, and
+// the delete would only send it again and count one more failed logon
+// (adtler#222), so the release's error is returned. If the delete fails, the
 // returned error wraps the delete's error and names the failed release,
 // because a lock that is really still held is the likely cause. A successful
 // release is not undone when the delete fails: a caller that wants to keep
@@ -353,6 +355,9 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	var unlockErr error
 	if lockHandle != "" {
 		unlockErr = c.UnlockObject(ctx, objectURI, lockHandle)
+		if isUnauthorized(unlockErr) {
+			return fmt.Errorf("DeleteObject: %w", unlockErr)
+		}
 	}
 	err := c.deleteObject(ctx, objectURI, transport)
 	if err != nil && unlockErr != nil {

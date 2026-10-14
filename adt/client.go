@@ -373,14 +373,23 @@ func (c *httpClient) Logout(ctx context.Context) error {
 
 // fetchCSRFToken performs the CSRF preflight GET and caches the token and session cookies.
 // Caller must hold c.mu.
-func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
+//
+// It returns the OAuth token the preflight carried ("" for Basic Auth, see
+// setAuth). A 401 is returned as the *ADTError that checkResponse makes of it,
+// the same error a 401 on any other request turns into. The preflight is the
+// first request a client sends, so with a wrong password it is the one SAP
+// rejects; ignoring that status sent the rejected credential on to the request
+// itself and counted a second failed logon (#222). Other error statuses are
+// still tolerated, see the comment on the Accept header below.
+func (c *httpClient) fetchCSRFToken(ctx context.Context) (string, error) {
 	url := c.cfg.Host + "/sap/bc/adt/discovery"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, err := c.setAuth(req); err != nil {
-		return err
+	sent, err := c.setAuth(req)
+	if err != nil {
+		return "", err
 	}
 	req.Header.Set("X-CSRF-Token", "Fetch")
 	// Some systems (observed on S/4) reject this GET with 400
@@ -399,9 +408,14 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("CSRF fetch: %w", err)
+		return sent, fmt.Errorf("CSRF fetch: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		c.csrfToken = ""
+		return sent, checkResponse(resp)
+	}
 
 	// Parse discovery XML to cache accepted content types per endpoint. Only
 	// on a successful response: a non-2xx status (the 400 above, or any
@@ -416,7 +430,16 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 
 	c.csrfToken = resp.Header.Get("X-CSRF-Token")
 	c.hasSecureCookies = hasSecureCookieOnHTTP(c.cfg.Host, resp.Header)
-	return nil
+	return sent, nil
+}
+
+// isUnauthorized reports whether err carries SAP's 401: the credential was
+// rejected. Under Basic Auth the credential cannot change for the lifetime of
+// the client, so sending another request after this error, as a retry or a
+// fallback, only counts one more failed logon against the user (#222).
+func isUnauthorized(err error) bool {
+	var adtErr *ADTError
+	return errors.As(err, &adtErr) && adtErr.StatusCode == http.StatusUnauthorized
 }
 
 // ensureCSRF populates the CSRF token (and, as a side effect, the
@@ -429,13 +452,32 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) error {
 // has a chance to run — e.g. callers that compute content-type
 // headers via sourceContentType or acceptHeaderForURI before
 // invoking doRead/doMutate.
+//
+// An OAuth token that the preflight is rejected with is refreshed once, and
+// the preflight is repeated with the new token. Under Basic Auth the 401 is
+// returned at once (see fetchCSRFToken).
 func (c *httpClient) ensureCSRF(ctx context.Context) error {
+	c.mu.Lock()
+	if c.csrfToken != "" {
+		c.mu.Unlock()
+		return nil
+	}
+	sent, err := c.fetchCSRFToken(ctx)
+	c.mu.Unlock()
+	if !isUnauthorized(err) || !c.tokens.canRefresh() {
+		return err
+	}
+	// Refresh outside c.mu, as in doReadWith.
+	if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.csrfToken != "" {
 		return nil
 	}
-	return c.fetchCSRFToken(ctx)
+	_, err = c.fetchCSRFToken(ctx)
+	return err
 }
 
 // hasSecureCookieOnHTTP returns true if the response sets a cookie with the
@@ -548,29 +590,34 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 		return nil, err
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		_ = resp.Body.Close()
-		// Refresh outside c.mu: concurrent 401s on this session must reach
-		// refreshAfter401 together to share one refresh and its outcome.
-		if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
-		c.mu.Unlock()
-		req2, err := makeReq()
-		if err != nil {
-			return nil, err
-		}
-		return hc.Do(req2)
+	// A 401 is retried only when the OAuth token can be refreshed. Under
+	// Basic Auth the retry would carry the same rejected credential, and SAP
+	// would count it as one more failed logon (#222), so the 401 is returned
+	// as it is.
+	if resp.StatusCode != http.StatusUnauthorized || !c.tokens.canRefresh() {
+		return resp, nil
 	}
-	return resp, nil
+	_ = resp.Body.Close()
+	// Refresh outside c.mu: concurrent 401s on this session must reach
+	// refreshAfter401 together to share one refresh and its outcome.
+	if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	_, err = c.fetchCSRFToken(ctx)
+	c.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	req2, err := makeReq()
+	if err != nil {
+		return nil, err
+	}
+	return hc.Do(req2)
 }
 
-// doMutate performs a POST/PUT/DELETE with CSRF token and retry on 403/401.
+// doMutate performs a POST/PUT/DELETE with CSRF token and retry on 403, and
+// on 401 when the OAuth token can be refreshed (see doMutateWith).
 // Uses the default HTTP client (30-second timeout).
 func (c *httpClient) doMutate(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (*http.Response, error) {
 	return c.doMutateWith(ctx, c.http, method, path, body, headers)
@@ -608,6 +655,11 @@ func (c *httpClient) doMutateLong(ctx context.Context, method, path string, body
 
 // doMutateWith performs a POST/PUT/DELETE with CSRF token and retry on 403/401,
 // using the given HTTP client. Body is buffered so it can be replayed on retry.
+//
+// A 403 is retried with a new CSRF token. A 401 is retried only after the
+// OAuth token was refreshed; under Basic Auth it is returned as it is, because
+// the retry would send the same rejected credential and SAP would count one
+// more failed logon (#222).
 func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader, headers map[string]string) (*http.Response, error) {
 	path = encodeNamespacePath(path)
 	var bodyBytes []byte
@@ -637,6 +689,9 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		return nil, err
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized && !c.tokens.canRefresh() {
+		return resp, nil
+	}
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
 		if resp.StatusCode == http.StatusUnauthorized {
@@ -646,7 +701,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 			}
 		}
 		c.mu.Lock()
-		if err := c.fetchCSRFToken(ctx); err != nil {
+		if _, err := c.fetchCSRFToken(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err
 		}

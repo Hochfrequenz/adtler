@@ -36,7 +36,8 @@ func (c *httpClient) SourceContentTypeForTest(endpoint string) string {
 func (c *httpClient) LoadDiscoveryForTest(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.fetchCSRFToken(ctx)
+	_, err := c.fetchCSRFToken(ctx)
+	return err
 }
 
 // RemoveObjectSupportForTest exposes the cached tri-state removeobject

@@ -267,7 +267,11 @@ and reports whatever SAP makes of it — which is what it did before adtler#65 c
 
 ### ETag resolution
 
-`LockMap.ResolveETag` tries `GetSource` first (hardcodes `/source/main`). If that fails (CLAS 400, DTEL 404), it falls back to `FetchETag` which GETs the bare object URI with `acceptHeaderForURI`. The fallback is discovered via interface assertion — no breaking API changes.
+`LockMap.ResolveETag` tries `GetSource` first (hardcodes `/source/main`). If that fails (CLAS 400, DTEL 404), it falls back to `FetchETag` which GETs the bare object URI with `acceptHeaderForURI`. The fallback is discovered via interface assertion — no breaking API changes. It is skipped after a 401 (see below).
+
+### A 401 is final under Basic auth
+
+SAP counts every request with a rejected Basic-auth credential as a failed logon, and a few in a row lock the user. The credential cannot change during a client's lifetime, so nothing may send it again after a 401 (#222): `fetchCSRFToken` returns the preflight's 401 as an `*ADTError` (the same shape `checkResponse` gives any other 401), `doReadWith` and `doMutateWith` return a 401 without a retry unless `tokens.canRefresh()`, and multi-step paths that fall back or carry on after an error (`DeleteObject`'s lock release, `ResolveETag`, the `RemoveFromTransport` capability read, `ReleaseTransport` and its poll loop) check `isUnauthorized(err)` first. Keep that check in any new retry, fallback or best-effort step. OAuth2 keeps its single refresh-and-retry, and the 403 CSRF retry is unaffected. Never test this against a real system: the test itself would cause the failed logons.
 
 ### Stateful sessions
 

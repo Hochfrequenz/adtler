@@ -79,6 +79,15 @@ that merely contains `${env:...}` among other characters is sent unchanged, so
 a real password that is exactly one placeholder is refused too. Clients that
 authenticate with an OAuth2 token are not affected.
 
+Under Basic auth the client never repeats a request that SAP answered with
+`401`. The user and password cannot change during the client's lifetime, so a
+retry could not succeed and would only count one more failed logon. The call
+returns the `401` as an `*adt.ADTError` after one request, whether SAP rejected
+the initial CSRF request or the request itself, and multi-step calls such as
+`DeleteObject` or `ReleaseTransport` stop at that point as well. A client that
+uses an OAuth2 token with a refresh callback refreshes the token once after a
+`401` and repeats the request once.
+
 ## Testing
 
 ### Unit tests

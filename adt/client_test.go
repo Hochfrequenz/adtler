@@ -118,7 +118,11 @@ func TestCSRFTokenRefreshedOn403(t *testing.T) {
 	}
 }
 
-func TestReauthOn401(t *testing.T) {
+// TestNoReauthOn401WithBasicAuth: under Basic auth a 401 is returned as it
+// is. A retry would send the same credential again and cannot succeed, and
+// SAP counts every attempt as a failed logon (#222). This test used to assert
+// the opposite, a successful retry after the first 401.
+func TestNoReauthOn401WithBasicAuth(t *testing.T) {
 	var authAttempts atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,8 +144,11 @@ func TestReauthOn401(t *testing.T) {
 	client := adt.NewClient(cfg)
 
 	_, err := client.SetSource(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", "REPORT ZTEST.", "", "", `"etag123"`)
-	if err != nil {
-		t.Fatalf("unexpected error after re-auth: %v", err)
+	if err == nil {
+		t.Fatal("expected the 401 as an error, got success after a retry")
+	}
+	if got := authAttempts.Load(); got != 1 {
+		t.Errorf("request sent %d times, want 1", got)
 	}
 }
 
