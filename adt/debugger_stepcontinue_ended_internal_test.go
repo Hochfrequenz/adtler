@@ -125,12 +125,16 @@ func TestStep_TimeoutWithRemainingSessions_ReturnsPlainError(t *testing.T) {
 }
 
 // TestStep_NonTimeoutError_ReturnsPlainError guards against over-eager
-// detection: a genuine non-timeout failure (e.g. a 500 from SAP) must not be
-// reinterpreted as a debuggee-ended condition just because it's an error.
-// The server always returns AdiFailed here, so this also exercises Step's
-// AdiFailed retry ceiling (adiFailedMaxRetries retries, ~1s of fixed delay)
-// before giving up — see debugger_adifailed_retry_internal_test.go for the
-// dedicated retry tests.
+// detection: a transport failure that is not a timeout (here the server
+// drops the connection without answering) must not be reinterpreted as a
+// debuggee-ended condition just because it's an error.
+//
+// Only a transport-level error reaches the isTimeoutErr guard in stepOnce.
+// An HTTP error status such as a 500 comes back from doMutate as a response,
+// not as an error, and is handled by checkResponse instead — so a 500 mock
+// cannot exercise the guard (adtler#160). getDebuggeeSessions answers with an
+// empty 200 (no sessions), so the follow-up check would confirm "debuggee
+// ended" if it ran: the test fails if the isTimeoutErr guard is removed.
 func TestStep_NonTimeoutError_ReturnsPlainError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == discoveryPath {
@@ -139,8 +143,21 @@ func TestStep_NonTimeoutError_ReturnsPlainError(t *testing.T) {
 			return
 		}
 		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == stepContinueMethod {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="AdiFailed"/><message>boom</message></exc:exception>`))
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("response writer does not support hijacking")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.Close() // drop the connection without sending a response
+			return
+		}
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == getDebuggeeSessionsMethod {
+			w.WriteHeader(http.StatusOK) // empty body — no sessions
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -156,6 +173,9 @@ func TestStep_NonTimeoutError_ReturnsPlainError(t *testing.T) {
 	}
 	var endedErr *DebuggeeEndedError
 	if errors.As(err, &endedErr) {
-		t.Fatalf("wrongly reported DebuggeeEndedError for a real 500 error: %v", endedErr)
+		t.Fatalf("wrongly reported DebuggeeEndedError for a non-timeout error: %v", endedErr)
+	}
+	if isTimeoutErr(err) {
+		t.Fatalf("test setup: expected a non-timeout error, got a timeout: %v", err)
 	}
 }
