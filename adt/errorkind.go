@@ -55,6 +55,14 @@ const (
 	// anyway would be silently reinterpreted by a legacy handler as an
 	// unrelated, damaging operation, so the call never leaves the library.
 	ErrorNotSupported
+	// ErrorUnauthorized means SAP rejected the logon itself (HTTP 401): the
+	// user name or password is wrong, the user is locked, or the OAuth token
+	// is no longer accepted. It is distinct from ErrorForbidden (403), where
+	// the logon succeeded but the user lacks an authorization. Do not retry a
+	// Basic-auth request repeatedly on this kind: every failed logon counts
+	// towards the user's lock limit. Appended last so that the numeric values
+	// of the earlier kinds stay unchanged.
+	ErrorUnauthorized
 )
 
 // String returns a stable, lowercase identifier for the kind (handy for logs
@@ -93,6 +101,8 @@ func (k ErrorKind) String() string {
 		return "object_locked_in_transport"
 	case ErrorNotSupported:
 		return "not_supported"
+	case ErrorUnauthorized:
+		return "unauthorized"
 	default:
 		return "unknown"
 	}
@@ -186,6 +196,8 @@ func classifyByStatusCode(status int) ErrorKind {
 		return ErrorNotFound
 	case 403:
 		return ErrorForbidden
+	case 401:
+		return ErrorUnauthorized
 	case 400:
 		return ErrorBadRequest
 	case 500:

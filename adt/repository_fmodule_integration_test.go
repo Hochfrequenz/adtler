@@ -160,3 +160,82 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 		})
 	}
 }
+
+// fgroupSearchType is the object type a search filters on to return function
+// groups.
+const fgroupSearchType = "FUGR/F"
+
+// TestGetObjectInfo_FunctionGroupInclude_MultiSystem_Integration covers
+// adtler#232 on every system in the SAP_INTEGRATION_SYSTEMS whitelist: a function
+// group include's document has no packageRef on SAP ERP 6.0 or SAP S/4HANA (only
+// a containerRef to its group), so GetObjectInfo must take the package from the
+// function group.
+//
+// The test reads only. It finds a function group with a package through the
+// system's own search and then its includes by name prefix (L<group>*). The
+// search runs without a type filter: filtering on the include type FUGR/I
+// returns nothing on either release, although the unfiltered hits carry exactly
+// that type (measured 2026-10-14). It logs counts and booleans, never object
+// names.
+func TestGetObjectInfo_FunctionGroupInclude_MultiSystem_Integration(t *testing.T) {
+	ctx := context.Background()
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			client := sys.Client
+			var uri, groupPackage string
+			groups := 0
+			for _, query := range fmoduleSearchQueries {
+				hits, err := client.SearchObjects(ctx, query, fgroupSearchType, fmoduleSearchLimit)
+				if err != nil {
+					t.Fatalf("SearchObjects for function groups: %s", redact(err.Error(), sys.Config.Host, ""))
+				}
+				for _, g := range hits {
+					// A namespaced group's includes do not start with L<group>.
+					if strings.HasPrefix(g.Name, "/") {
+						continue
+					}
+					groups++
+					group, err := client.GetObjectInfo(ctx, g.URI)
+					if err != nil || group.PackageName == "" {
+						continue
+					}
+					parts, err := client.SearchObjects(ctx, "L"+g.Name+"*", "", fmoduleSearchLimit)
+					if err != nil {
+						t.Fatalf("SearchObjects for function group includes: %s", redact(err.Error(), sys.Config.Host, g.Name))
+					}
+					for _, p := range parts {
+						if strings.HasPrefix(p.URI, g.URI+"/includes/") {
+							uri, groupPackage = p.URI, group.PackageName
+							break
+						}
+					}
+					if uri != "" {
+						break
+					}
+				}
+				if uri != "" {
+					break
+				}
+			}
+			if uri == "" {
+				t.Skipf("no include of a function group with a package found (%d groups)", groups)
+			}
+
+			info, err := client.GetObjectInfo(ctx, uri)
+			if err != nil {
+				t.Fatalf("GetObjectInfo on a function group include: %s", redact(err.Error(), sys.Config.Host, ""))
+			}
+			t.Logf("package present: %t", info.PackageName != "")
+			if info.URI != uri || info.Name == "" {
+				t.Errorf("ObjectInfo does not describe the include (URI matches: %t, name empty: %t)", info.URI == uri, info.Name == "")
+			}
+			if info.PackageName == "" {
+				t.Fatal("ObjectInfo.PackageName is empty — the include's package was not taken from its function group")
+			}
+			if info.PackageName != groupPackage {
+				t.Error("include package differs from its function group's")
+			}
+		})
+	}
+}
