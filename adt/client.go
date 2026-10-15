@@ -738,6 +738,11 @@ var htmlDetailTextRe = regexp.MustCompile(`<p class="detailText">([^<]*)</p>`)
 //  4. As-is (trimmed) for anything else, preserving prior behaviour for
 //     non-XML, non-HTML bodies.
 //
+// When layers 3 and 4 find no detail text (an HTML page without the SAP
+// error layout, or an empty body) and the status is 401, the message tells
+// the user to check the credentials instead (adtler#223); see
+// noDetailMessage.
+//
 // Layer 1 falls through to subsequent layers when <message> is empty or
 // missing — even if <namespace> and <type> children were present. This is
 // rare in practice (SAP always sends <message> for non-trivial errors) but
@@ -811,11 +816,42 @@ func parseADTError(statusCode int, body io.Reader) error {
 
 	// Layer 3: SAP HTML "Application Server Error" page.
 	if msg := parseHTMLErrorBody(data); msg != "" {
+		if msg == htmlNoDetailMessage {
+			msg = noDetailMessage(statusCode, msg)
+		}
 		return &ADTError{StatusCode: statusCode, Message: msg}
 	}
 
 	// Layer 4: any other body, trimmed.
-	return &ADTError{StatusCode: statusCode, Message: strings.TrimSpace(string(data))}
+	msg := strings.TrimSpace(string(data))
+	if msg == "" {
+		msg = noDetailMessage(statusCode, msg)
+	}
+	return &ADTError{StatusCode: statusCode, Message: msg}
+}
+
+// htmlNoDetailMessage is the placeholder parseHTMLErrorBody returns for an
+// HTML page it cannot extract any text from.
+const htmlNoDetailMessage = "SAP returned an HTML error page (no parseable detail)"
+
+// unauthorizedMessage replaces a missing detail text on a 401. SAP answers a
+// wrong user name or password with an HTML page (or an empty body) that holds
+// no parseable text, and the generic placeholder reads like a technical fault
+// rather than a credential problem (adtler#223). parseADTError does not know
+// whether the client uses Basic auth or an OAuth token, so the wording covers
+// both. It names no status code: ADTError.Error already prefixes it.
+const unauthorizedMessage = "SAP rejected the logon. Check the credentials (user name and password, or the OAuth token). " +
+	"With a user name and password, do not retry repeatedly: failed logons can lock the user."
+
+// noDetailMessage returns the message for an error response whose body gave
+// no parseable detail: unauthorizedMessage for a 401, fallback otherwise. A
+// detail text SAP does provide never reaches this function, so it is kept
+// unchanged.
+func noDetailMessage(statusCode int, fallback string) string {
+	if statusCode == http.StatusUnauthorized {
+		return unauthorizedMessage
+	}
+	return fallback
 }
 
 // parseHTMLErrorBody returns a short, human-readable summary of an SAP HTML
@@ -853,7 +889,7 @@ func parseHTMLErrorBody(data []byte) string {
 		// It's HTML, but not the expected SAP error layout. Don't dump
 		// the whole page; tell the caller it was an HTML response so they
 		// can investigate further.
-		return "SAP returned an HTML error page (no parseable detail)"
+		return htmlNoDetailMessage
 	}
 	return strings.Join(parts, " — ")
 }
