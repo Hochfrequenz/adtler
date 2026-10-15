@@ -829,8 +829,8 @@ func isLegacyTransportWorklistXML(data []byte) bool {
 //
 // freshSession() builds a new *httpClient and copies no cache, so a fresh
 // session's state starts at RemoveObjectSupportUnknown again. That is
-// intentional, not a gap to "fix" by sharing this field across sessions —
-// see freshSession's own doc comment for why it stays isolated.
+// intentional, not a gap to "fix" by sharing this field across sessions; see
+// freshSession's own doc comment, which lists the caches it does not copy.
 func (c *httpClient) cacheRemoveObjectSupport(data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
