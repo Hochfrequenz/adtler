@@ -2,6 +2,7 @@ package adt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"time"
@@ -27,6 +28,10 @@ func (e *VerifyCleanupError) Error() string {
 
 func (e *VerifyCleanupError) Unwrap() error { return e.Err }
 
+// errVerifyCleanupSkipped is the cause in a *VerifyCleanupError when the
+// removal was not attempted because SAP had rejected the credential.
+var errVerifyCleanupSkipped = errors.New("removal not attempted: SAP rejected the credential (HTTP 401), and another request would count one more failed logon")
+
 // verifyCleanupTimeout bounds the removal of VerifySource's temporary program,
 // which runs even when the caller's context is already done.
 const verifyCleanupTimeout = 30 * time.Second
@@ -48,6 +53,11 @@ const verifyCleanupTimeout = 30 * time.Second
 //
 // The removal runs on its own context, so a call can outlive the caller's
 // deadline or cancellation by up to verifyCleanupTimeout (30 seconds).
+//
+// Once SAP answers a request with 401, nothing more is sent, neither the next
+// step nor the release of the lock nor the removal (#222): each would carry the
+// rejected credential and count one more failed logon. The program then stays
+// behind, and the returned error includes a *VerifyCleanupError naming it.
 func (c *httpClient) VerifySource(ctx context.Context, source string) (valid bool, messages []SyntaxMessage, err error) {
 	name := fmt.Sprintf("Z_ADTLER_VERIFY_%06d", rand.Intn(1000000)) //nolint:gosec // throwaway temp object name, not security-sensitive
 	objectURI, err := ObjectURI("PROG", name)
@@ -56,7 +66,13 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 	}
 
 	if err := c.CreateObject(ctx, "PROG", name, "$TMP", "adtler VerifySource temp", ""); err != nil {
-		return false, nil, fmt.Errorf("VerifySource: create temp object: %w", err)
+		err = fmt.Errorf("VerifySource: create temp object: %w", err)
+		// The program exists, but SAP rejected the credential on the logout
+		// that follows the create, so the removal is not attempted either.
+		if errors.Is(err, ErrObjectCreated) {
+			err = fmt.Errorf("%w; additionally: %w", err, &VerifyCleanupError{Program: name, Err: errVerifyCleanupSkipped})
+		}
+		return false, nil, err
 	}
 
 	// Ensure the temporary program is removed regardless of outcome. The
@@ -71,9 +87,14 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 	// it before it deletes.
 	var held string
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyCleanupTimeout)
-		defer cancel()
-		delErr := c.DeleteObject(cleanupCtx, objectURI, held, "")
+		var delErr error
+		if isUnauthorized(err) {
+			delErr = errVerifyCleanupSkipped
+		} else {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyCleanupTimeout)
+			defer cancel()
+			delErr = c.DeleteObject(cleanupCtx, objectURI, held, "")
+		}
 		if delErr == nil {
 			return
 		}
@@ -96,21 +117,29 @@ func (c *httpClient) VerifySource(ctx context.Context, source string) (valid boo
 	// release lets go of the lock. Only a release that went through clears
 	// held, so the cleanup still releases a lock that could not be released
 	// here, for instance because the caller's context is done.
-	release := func() {
-		if err := c.UnlockObject(ctx, objectURI, lockHandle); err == nil {
+	release := func() error {
+		err := c.UnlockObject(ctx, objectURI, lockHandle)
+		if err == nil {
 			held = ""
 		}
+		return err
 	}
 	src, err := c.GetSource(ctx, objectURI)
 	if err != nil {
-		release()
+		if !isUnauthorized(err) {
+			_ = release()
+		}
 		return false, nil, fmt.Errorf("VerifySource: get source for etag: %w", err)
 	}
 	if _, err := c.SetSource(ctx, objectURI, source, lockHandle, "", src.ETag); err != nil {
-		release()
+		if !isUnauthorized(err) {
+			_ = release()
+		}
 		return false, nil, fmt.Errorf("VerifySource: set source: %w", err)
 	}
-	release()
+	if err := release(); isUnauthorized(err) {
+		return false, nil, fmt.Errorf("VerifySource: unlock: %w", err)
+	}
 
 	messages, err = c.SyntaxCheck(ctx, objectURI)
 	if err != nil {

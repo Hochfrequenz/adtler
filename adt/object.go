@@ -3,6 +3,7 @@ package adt
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -163,6 +164,12 @@ func creatableObjectTypes() []string {
 	return creatable
 }
 
+// ErrObjectCreated is matched by errors.Is when CreateObject returns an error
+// although SAP did create the object: the logout that follows a create was
+// answered with 401 under Basic Auth (or with a token that cannot be refreshed). The object exists; a caller that cleans up after a failed
+// create must delete it, and must not create it again under the same name.
+var ErrObjectCreated = errors.New("adt: the object was created")
+
 func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
 	info, ok := objectTypeMap[strings.ToUpper(objectType)]
 	if !ok {
@@ -257,7 +264,16 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 	// Cost: ~1 extra HTTP round-trip per CreateObject (logoff + re-auth
 	// on next call). CreateObject is called once per new ABAP object, so
 	// the latency impact is negligible.
-	_ = c.Logout(ctx)
+	//
+	// Only a 401 on the logout is reported, and only when the token cannot be
+	// refreshed (#222): the caller must stop sending the rejected credential,
+	// and must learn that the object was created anyway (ErrObjectCreated).
+	// An OAuth token that merely expired after the create is refreshed by the
+	// next request, so that 401 is no failure. Other logout failures stay
+	// ignored.
+	if err := c.Logout(ctx); isUnauthorized(err) && !c.tokens.canRefresh() {
+		return fmt.Errorf("CreateObject: %s %s: %w, but the logout after it failed: %w", objectType, name, ErrObjectCreated, err)
+	}
 
 	return nil
 }
@@ -344,7 +360,9 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 // is bogus or already released (see UnlockObject), so a caller that unlocks
 // first and then passes the handle along causes no failure. If the UNLOCK
 // request fails for another reason, such as a transport error, that failure
-// alone does not stop the delete. If the delete then fails as well, the
+// alone does not stop the delete. A 401 does: SAP rejected the credential, and
+// the delete would only send it again and count one more failed logon
+// (adtler#222), so the release's error is returned. If the delete fails, the
 // returned error wraps the delete's error and names the failed release,
 // because a lock that is really still held is the likely cause. A successful
 // release is not undone when the delete fails: a caller that wants to keep
@@ -353,6 +371,9 @@ func (c *httpClient) DeleteObject(ctx context.Context, objectURI, lockHandle, tr
 	var unlockErr error
 	if lockHandle != "" {
 		unlockErr = c.UnlockObject(ctx, objectURI, lockHandle)
+		if isUnauthorized(unlockErr) {
+			return fmt.Errorf("DeleteObject: %w", unlockErr)
+		}
 	}
 	err := c.deleteObject(ctx, objectURI, transport)
 	if err != nil && unlockErr != nil {

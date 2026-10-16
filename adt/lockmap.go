@@ -85,7 +85,9 @@ func (m *LockMap) ResolveLock(ctx context.Context, locker LockClient, key, objec
 // Accept header, which works for ALL object types. The fallback is
 // discovered via an interface assertion, so callers that pass a plain
 // SourceClient (e.g. test mocks) don't need to implement it — the fallback
-// is simply skipped. See adtler#9, adtler#14.
+// is simply skipped. See adtler#9, adtler#14. It is skipped as well when
+// GetSource failed with 401: the credential was rejected, and the fallback
+// would only send it again and count one more failed logon (adtler#222).
 func (m *LockMap) ResolveETag(ctx context.Context, reader SourceClient, key, objectURI string) (string, error) {
 	if state, ok := m.Get(key); ok && state.ETag != "" {
 		return state.ETag, nil
@@ -101,7 +103,7 @@ func (m *LockMap) ResolveETag(ctx context.Context, reader SourceClient, key, obj
 	type etagFetcher interface {
 		FetchETag(ctx context.Context, objectURI string) (string, error)
 	}
-	if f, ok := reader.(etagFetcher); ok {
+	if f, ok := reader.(etagFetcher); ok && !isUnauthorized(err) {
 		etag, fetchErr := f.FetchETag(ctx, objectURI)
 		if fetchErr == nil && etag != "" {
 			m.UpdateETag(key, etag)

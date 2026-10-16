@@ -168,7 +168,10 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		if maxDepth > dependencyMaxDepthCeiling {
 			maxDepth = dependencyMaxDepthCeiling
 		}
-		deps, warns := c.ddicChainDeps(ctx, objectName, objectType, maxDepth)
+		deps, warns, err := c.ddicChainDeps(ctx, objectName, objectType, maxDepth)
+		if err != nil {
+			return nil, err
+		}
 		if maxResults > 0 && len(deps) > maxResults {
 			warns = append(warns, fmt.Sprintf("output truncated to %d entries (%d total)", maxResults, len(deps)))
 			deps = deps[:maxResults]
@@ -214,7 +217,10 @@ func (c *httpClient) d010tabDeps(ctx context.Context, master string, maxResults 
 		deps = append(deps, ObjectDependency{Name: row[0]})
 	}
 	if len(names) > 0 {
-		classification := c.classifyDDICObjects(ctx, names)
+		classification, err := c.classifyDDICObjects(ctx, names)
+		if err != nil {
+			return nil, err
+		}
 		for i := range deps {
 			deps[i].UseType = classification[deps[i].Name]
 		}
@@ -297,16 +303,22 @@ func (c *httpClient) uiadDeps(ctx context.Context, appID string) ([]ObjectDepend
 // DD02L first (tables/structures/views, including SAP system objects like SYST
 // that are absent from TADIR), then TADIR for the remainder (data elements,
 // domains, table types). Query errors degrade gracefully: affected names stay
-// UNKNOWN rather than failing the call.
-func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) map[string]string {
+// UNKNOWN rather than failing the call. A 401 is the exception: it is returned,
+// and no further query is sent, because it would carry the rejected credential
+// and count one more failed logon (#222).
+func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) (map[string]string, error) {
 	result := make(map[string]string, len(names))
 	for _, n := range names {
 		result[n] = UseTypeUnknown
 	}
 
-	if qr, err := c.RunQuery(ctx,
+	qr, err := c.RunQuery(ctx,
 		fmt.Sprintf("SELECT TABNAME, TABCLASS FROM DD02L WHERE TABNAME IN (%s)", buildSQLInList(names)),
-		len(names)); err == nil && qr != nil {
+		len(names))
+	if isUnauthorized(err) {
+		return nil, err
+	}
+	if err == nil && qr != nil {
 		for _, row := range qr.Rows {
 			if len(row) >= 2 {
 				result[row[0]] = tabclassToUseType(row[1])
@@ -321,9 +333,13 @@ func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) ma
 		}
 	}
 	if len(unknownNames) > 0 {
-		if qr, err := c.RunQuery(ctx,
+		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT OBJECT, OBJ_NAME FROM TADIR WHERE PGMID = 'R3TR' AND OBJ_NAME IN (%s)", buildSQLInList(unknownNames)),
-			len(unknownNames)); err == nil && qr != nil {
+			len(unknownNames))
+		if isUnauthorized(err) {
+			return nil, err
+		}
+		if err == nil && qr != nil {
 			for _, row := range qr.Rows {
 				if len(row) < 2 {
 					continue
@@ -342,7 +358,7 @@ func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) ma
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 // ooDeps returns the OO relationships of a class or interface from SEOMETAREL.
@@ -477,11 +493,14 @@ func chunkNames(names []string, maxBytes int) [][]string {
 }
 
 // ddicQueryTabl queries DD03L for TABL entries: ROLLNAME -> DTEL, CHECKTABLE -> TABL.
-func (c *httpClient) ddicQueryTabl(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) {
+func (c *httpClient) ddicQueryTabl(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) error {
 	for _, chunk := range chunkNames(names, ddicInListMaxBytes) {
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT ROLLNAME, CHECKTABLE FROM DD03L WHERE TABNAME IN (%s)", buildSQLInList(chunk)),
 			ddicMaxFieldRows)
+		if isUnauthorized(err) {
+			return err
+		}
 		if err != nil {
 			*warnings = append(*warnings, "DD03L query failed: "+err.Error())
 			continue
@@ -504,14 +523,18 @@ func (c *httpClient) ddicQueryTabl(ctx context.Context, names []string, addDep f
 			*warnings = append(*warnings, fmt.Sprintf("DD03L result capped at %d rows; some field dependencies may be missing", ddicMaxFieldRows))
 		}
 	}
+	return nil
 }
 
 // ddicQueryDtel queries DD04L for DTEL entries: DOMNAME -> DOMA.
-func (c *httpClient) ddicQueryDtel(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) {
+func (c *httpClient) ddicQueryDtel(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) error {
 	for _, chunk := range chunkNames(names, ddicInListMaxBytes) {
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT DOMNAME FROM DD04L WHERE ROLLNAME IN (%s)", buildSQLInList(chunk)),
 			len(chunk))
+		if isUnauthorized(err) {
+			return err
+		}
 		if err != nil {
 			*warnings = append(*warnings, "DD04L query failed: "+err.Error())
 			continue
@@ -526,14 +549,18 @@ func (c *httpClient) ddicQueryDtel(ctx context.Context, names []string, addDep f
 			addDep(row[0], "DOMA", UseTypeDomain)
 		}
 	}
+	return nil
 }
 
 // ddicQueryDoma queries DD01L for DOMA entries: ENTITYTAB -> TABL.
-func (c *httpClient) ddicQueryDoma(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) {
+func (c *httpClient) ddicQueryDoma(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) error {
 	for _, chunk := range chunkNames(names, ddicInListMaxBytes) {
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT ENTITYTAB FROM DD01L WHERE DOMNAME IN (%s)", buildSQLInList(chunk)),
 			len(chunk))
+		if isUnauthorized(err) {
+			return err
+		}
 		if err != nil {
 			*warnings = append(*warnings, "DD01L query failed: "+err.Error())
 			continue
@@ -548,17 +575,21 @@ func (c *httpClient) ddicQueryDoma(ctx context.Context, names []string, addDep f
 			addDep(row[0], "TABL", UseTypeTable)
 		}
 	}
+	return nil
 }
 
 // ddicQueryTtyp queries DD40L for TTYP entries: ROWKIND='E' -> DTEL,
 // ROWKIND='S' -> TABLE/STRUCTURE (classified via DD02L). ROWKIND=” is a
 // built-in scalar with no further traversal.
-func (c *httpClient) ddicQueryTtyp(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) {
+func (c *httpClient) ddicQueryTtyp(ctx context.Context, names []string, addDep func(string, string, string), warnings *[]string) error {
 	var rowKindS []string
 	for _, chunk := range chunkNames(names, ddicInListMaxBytes) {
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT ROWTYPE, ROWKIND FROM DD40L WHERE TYPENAME IN (%s)", buildSQLInList(chunk)),
 			len(chunk))
+		if isUnauthorized(err) {
+			return err
+		}
 		if err != nil {
 			*warnings = append(*warnings, "DD40L query failed: "+err.Error())
 			continue
@@ -579,18 +610,23 @@ func (c *httpClient) ddicQueryTtyp(ctx context.Context, names []string, addDep f
 		}
 	}
 	for _, clsChunk := range chunkNames(rowKindS, ddicInListMaxBytes) {
-		cls := c.classifyDDICObjects(ctx, clsChunk)
+		cls, err := c.classifyDDICObjects(ctx, clsChunk)
+		if err != nil {
+			return err
+		}
 		for _, n := range clsChunk {
 			addDep(n, "TABL", cls[n])
 		}
 	}
+	return nil
 }
 
 // ddicChainDeps traverses the DDIC type chain from a single object (TABL, DTEL,
 // DOMA, TTYP) by iterative BFS, returning a flat deduplicated dependency list
-// plus any non-fatal query warnings. Iterative BFS (with a visited set) avoids
+// plus any non-fatal query warnings. A 401 ends the walk and is returned: every
+// further query would carry the rejected credential (#222). Iterative BFS (with a visited set) avoids
 // stack overflow on cyclic chains such as DOMA->ENTITYTAB->TABL->ROLLNAME->DTEL->DOMA.
-func (c *httpClient) ddicChainDeps(ctx context.Context, name, objType string, maxDepth int) ([]ObjectDependency, []string) {
+func (c *httpClient) ddicChainDeps(ctx context.Context, name, objType string, maxDepth int) ([]ObjectDependency, []string, error) {
 	type queueEntry struct {
 		name    string
 		objType string
@@ -623,21 +659,27 @@ func (c *httpClient) ddicChainDeps(ctx context.Context, name, objType string, ma
 			typeGroups[e.objType] = append(typeGroups[e.objType], e.name)
 		}
 
-		if tabls := typeGroups["TABL"]; len(tabls) > 0 {
-			c.ddicQueryTabl(ctx, tabls, addDep, &warnings)
+		queries := []struct {
+			objType string
+			query   func(context.Context, []string, func(string, string, string), *[]string) error
+		}{
+			{"TABL", c.ddicQueryTabl},
+			{"DTEL", c.ddicQueryDtel},
+			{"DOMA", c.ddicQueryDoma},
+			{"TTYP", c.ddicQueryTtyp},
 		}
-		if dtels := typeGroups["DTEL"]; len(dtels) > 0 {
-			c.ddicQueryDtel(ctx, dtels, addDep, &warnings)
-		}
-		if domas := typeGroups["DOMA"]; len(domas) > 0 {
-			c.ddicQueryDoma(ctx, domas, addDep, &warnings)
-		}
-		if ttyps := typeGroups["TTYP"]; len(ttyps) > 0 {
-			c.ddicQueryTtyp(ctx, ttyps, addDep, &warnings)
+		for _, q := range queries {
+			names := typeGroups[q.objType]
+			if len(names) == 0 {
+				continue
+			}
+			if err := q.query(ctx, names, addDep, &warnings); err != nil {
+				return nil, nil, err
+			}
 		}
 
 		current = next
 	}
 
-	return deps, warnings
+	return deps, warnings, nil
 }

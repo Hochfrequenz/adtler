@@ -59,6 +59,15 @@ func (s *tokenSource) current() string {
 	return ""
 }
 
+// canRefresh reports whether a 401 can be answered by refreshing the token.
+// It is false for Basic Auth (a nil source) and for a token without a refresh
+// callback. In both cases the next request would carry the same credential
+// as the rejected one, so a retry cannot succeed, and under Basic Auth SAP
+// counts each attempt as a failed logon that can lock the user (#222).
+func (s *tokenSource) canRefresh() bool {
+	return s != nil && s.refresh != nil
+}
+
 // refreshAfter401 refreshes the token after a request that sent token sent came
 // back 401, so the caller can retry with the token current() then returns.
 //

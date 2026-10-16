@@ -51,6 +51,10 @@ var rollbackSourceTypes = map[string]bool{
 // deferred: see https://github.com/Hochfrequenz/adtler/issues/134.
 //
 // This is destructive: it overwrites current source with historical versions.
+//
+// Once SAP answers a request with 401, nothing more is sent (#222): reading the
+// task numbers returns the error, and every object not yet processed is
+// reported as failed with that error, without a request of its own.
 func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*RollbackResult, error) {
 	objects, err := c.GetTransportObjects(ctx, transport)
 	if err != nil {
@@ -61,11 +65,16 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 	// request number. Fetch all task numbers so findPreTransportVersion can match
 	// either the request or any of its tasks.
 	transports := []string{transport}
-	if tasks, taskErr := c.GetTransportTasks(ctx, transport); taskErr == nil {
+	tasks, taskErr := c.GetTransportTasks(ctx, transport)
+	switch {
+	case taskErr == nil:
 		transports = append(transports, tasks...)
+	case isUnauthorized(taskErr):
+		return nil, fmt.Errorf("reading transport tasks: %w", taskErr)
 	}
 
 	result := &RollbackResult{}
+	var rejected error // the 401 that ended processing, if any
 	for _, obj := range objects {
 		if obj.PgmID != "R3TR" {
 			result.Skipped = append(result.Skipped, RollbackEntry{
@@ -86,7 +95,16 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 			})
 			continue
 		}
+		if rejected != nil {
+			result.Failed = append(result.Failed, RollbackEntry{
+				Type: obj.Type, Name: obj.Name, Reason: "not attempted: " + rejected.Error(),
+			})
+			continue
+		}
 		if err := c.rollbackObject(ctx, objectURI, transports); err != nil {
+			if isUnauthorized(err) {
+				rejected = err
+			}
 			result.Failed = append(result.Failed, RollbackEntry{
 				Type: obj.Type, Name: obj.Name, Reason: err.Error(),
 			})
@@ -146,6 +164,9 @@ func findPreTransportVersion(versions []VersionInfo, transports []string) (strin
 // rollbackObject restores a single object's source to its pre-transport version.
 // transports is the request number plus all its task numbers (to handle both R/3
 // and S/4, which record different identifiers in version history).
+//
+// After a 401 it sends nothing more, not even the release of its lock: the
+// release would carry the rejected credential as well (#222).
 func (c *httpClient) rollbackObject(ctx context.Context, objectURI string, transports []string) error {
 	versions, err := c.GetVersionHistory(ctx, objectURI)
 	if err != nil {
@@ -169,19 +190,23 @@ func (c *httpClient) rollbackObject(ctx context.Context, objectURI string, trans
 
 	current, err := c.GetSource(ctx, objectURI)
 	if err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+		c.unlockUnlessUnauthorized(ctx, objectURI, lockHandle, err)
 		return fmt.Errorf("get current source: %w", err)
 	}
 
 	// transports[0] is the request number; pass it as corrNr so both R/3 and S/4
 	// accept the write (S/4 rejects SetSource when corrNr is absent).
 	if _, err := c.SetSource(ctx, objectURI, oldSource, lockHandle, transports[0], current.ETag); err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+		c.unlockUnlessUnauthorized(ctx, objectURI, lockHandle, err)
 		return fmt.Errorf("set source: %w", err)
 	}
 	// Unlock before activation: on S/4, the ESRDIRE session lock left by
-	// SetSource blocks ActivateObjects if not released first.
-	_ = c.UnlockObject(ctx, objectURI, lockHandle)
+	// SetSource blocks ActivateObjects if not released first. Only a 401
+	// stops the rollback here; any other unlock failure is left to show up
+	// in the activation, as before.
+	if err := c.UnlockObject(ctx, objectURI, lockHandle); isUnauthorized(err) {
+		return fmt.Errorf("source written but not activated, unlock: %w", err)
+	}
 
 	actResult, err := c.ActivateObjects(ctx, []string{objectURI})
 	if err != nil {
@@ -195,4 +220,13 @@ func (c *httpClient) rollbackObject(ctx context.Context, objectURI string, trans
 		return fmt.Errorf("activation failed: %s", strings.Join(msgs, "; "))
 	}
 	return nil
+}
+
+// unlockUnlessUnauthorized releases lockHandle after cause made a step fail,
+// as best effort, unless cause is a 401: the release would carry the rejected
+// credential too (#222).
+func (c *httpClient) unlockUnlessUnauthorized(ctx context.Context, objectURI, lockHandle string, cause error) {
+	if !isUnauthorized(cause) {
+		_ = c.UnlockObject(ctx, objectURI, lockHandle)
+	}
 }
