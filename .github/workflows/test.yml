@@ -16,3 +16,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Test
         run: go test -race ./...
+      # Integration tests need a real SAP system and do not run in CI, but they
+      # must still compile. The 'integration transport' tag set includes every
+      # file built with 'integration' alone, so one vet covers both (#230).
+      - name: Vet integration tests
+        run: go vet -tags='integration transport' ./...
