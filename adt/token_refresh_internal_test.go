@@ -129,6 +129,64 @@ func TestTokenRefresh_ParentAndFreshSessionRefreshOnce(t *testing.T) {
 	}
 }
 
+// TestTokenRefresh_DebugSessionSharesParentToken: a DebugSession lives on its
+// own fresh session for as long as the caller keeps it, so it outlives access
+// tokens (issue #163). When a debug-session request finds the token expired,
+// the refreshed token must be the one the parent client sends next, without a
+// second call to the refresh callback. If NewDebugSession gave the debug
+// session its own token source, the parent would still send the expired token
+// and refresh again with the same refresh token, which an identity provider
+// that rotates refresh tokens rejects.
+func TestTokenRefresh_DebugSessionSharesParentToken(t *testing.T) {
+	var lastAuth atomic.Pointer[string]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		auth := r.Header.Get("Authorization")
+		lastAuth.Store(&auth)
+		if auth == "Bearer t0" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == discoveryPath {
+			w.Header().Set("X-CSRF-Token", "token")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	var refreshes atomic.Int64
+	parent := NewClientWithToken(raceTestConfig(srv.URL), "t0", func(string) (string, error) {
+		return fmt.Sprintf("t%d", refreshes.Add(1)), nil
+	}).(*httpClient)
+	dbg := NewDebugSession(parent, "U")
+
+	// The token expires while only the debug session is in use.
+	resp, err := dbg.client.doRead(context.Background(), raceOKPath, nil)
+	if err != nil {
+		t.Fatalf("debug-session request: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("debug-session request: status %d, want 200 after the refresh", resp.StatusCode)
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Fatalf("refresh callback called %d times for the debug session, want 1", got)
+	}
+
+	// The parent must pick up the token the debug session refreshed.
+	resp, err = parent.doRead(context.Background(), raceOKPath, nil)
+	if err != nil {
+		t.Fatalf("parent request: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got := *lastAuth.Load(); got != "Bearer t1" {
+		t.Errorf("parent sent %q, want %q", got, "Bearer t1")
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Errorf("refresh callback called %d times in total, want 1: the parent refreshed again", got)
+	}
+}
+
 // errRefreshDenied is what the failing refresh callback returns.
 var errRefreshDenied = errors.New("refresh denied")
 
