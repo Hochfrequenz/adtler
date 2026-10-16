@@ -50,6 +50,7 @@ func TestClassifyError_ByStatusCode(t *testing.T) {
 		{405, adt.ErrorMethodNotAllowed},
 		{404, adt.ErrorNotFound},
 		{403, adt.ErrorForbidden},
+		{401, adt.ErrorUnauthorized},
 		{400, adt.ErrorBadRequest},
 		{500, adt.ErrorServerError},
 		{418, adt.ErrorUnknown}, // unmapped status
@@ -162,6 +163,8 @@ func TestErrorKind_String(t *testing.T) {
 		adt.ErrorBadRequest:              "bad_request",
 		adt.ErrorServerError:             "server_error",
 		adt.ErrorObjectLockedInTransport: "object_locked_in_transport",
+		adt.ErrorNotSupported:            "not_supported",
+		adt.ErrorUnauthorized:            "unauthorized",
 	}
 	// Guard against an unhandled kind silently returning "unknown": a bogus
 	// value must map to "unknown", but every named kind above must not.

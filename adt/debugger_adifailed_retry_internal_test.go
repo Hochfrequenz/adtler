@@ -138,6 +138,47 @@ func TestStep_AdiFailedThenSuccess_Retries(t *testing.T) {
 	}
 }
 
+// TestStep_PersistentAdiFailed_GivesUpAfterMaxRetries guards the retry
+// ceiling: a 500 AdiFailed that never clears is retried adiFailedMaxRetries
+// times and then returned as a plain error that still wraps the *ADTError —
+// never as *DebuggeeEndedError. Takes ~1s because of the fixed retry delay.
+func TestStep_PersistentAdiFailed_GivesUpAfterMaxRetries(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == discoveryPath {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == stepEndpointPath && r.URL.Query().Get("method") == stepContinueMethod {
+			calls.Add(1)
+			writeAdiFailed(w)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
+	dbg := NewDebugSession(NewClient(cfg), "U")
+
+	_, err := dbg.Step(context.Background(), stepContinueMethod)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if got, want := calls.Load(), int32(1+adiFailedMaxRetries); got != want {
+		t.Errorf("stepContinue requests: got %d, want %d", got, want)
+	}
+	var ended *DebuggeeEndedError
+	if errors.As(err, &ended) {
+		t.Fatalf("wrongly reported DebuggeeEndedError for a persistent AdiFailed: %v", err)
+	}
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) || adtErr.Type != ExceptionTypeAdiFailed {
+		t.Errorf("expected error to wrap an AdiFailed *ADTError, got %T: %v", err, err)
+	}
+}
+
 // TestStep_DebuggeeEndedError_NeverRetried guards the decoupling from
 // adtler#159 (SAP's native fast AdiFailed debuggee-ended signal): whatever
 // that future fix ends up wrapping in *DebuggeeEndedError, retryOnAdiFailed
