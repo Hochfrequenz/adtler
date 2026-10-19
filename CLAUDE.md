@@ -267,7 +267,11 @@ and reports whatever SAP makes of it — which is what it did before adtler#65 c
 
 ### ETag resolution
 
-`LockMap.ResolveETag` tries `GetSource` first (hardcodes `/source/main`). If that fails (CLAS 400, DTEL 404), it falls back to `FetchETag` which GETs the bare object URI with `acceptHeaderForURI`. The fallback is discovered via interface assertion — no breaking API changes.
+`LockMap.ResolveETag` tries `GetSource` first (hardcodes `/source/main`). If that fails (CLAS 400, DTEL 404), it falls back to `FetchETag` which GETs the bare object URI with `acceptHeaderForURI`. The fallback is discovered via interface assertion — no breaking API changes. It is skipped after a 401 (see below).
+
+### A 401 is final under Basic auth
+
+SAP counts every request with a rejected Basic-auth credential as a failed logon, and a few in a row lock the user. The credential cannot change during a client's lifetime, so a call must not send it again after a 401 (#222): `fetchCSRFToken` returns the preflight's 401 as an `*ADTError` (the same shape `checkResponse` gives any other 401), and `doReadWith` and `doMutateWith` return a 401 without a retry unless `tokens.canRefresh()`. Multi-step paths that fall back, loop or clean up after an error check `isUnauthorized(err)` first: `DeleteObject`'s lock release, `ResolveETag`, the `RemoveFromTransport` capability read, `ReleaseTransport` with its poll loop (which stops on any 4xx but keeps polling on 5xx) and its result read, `CreateObject`'s logout (`Logout` returns a 401 as an `*ADTError`, other statuses stay ignored; `CreateObject` then reports the existing object with `ErrObjectCreated`, unless the token can be refreshed), `BatchSyntaxCheck`'s chunks, the DDIC queries of `GetObjectDependencies`, `RollbackTransport` and its unlocks, and `VerifySource`'s unlock and cleanup. Known gap: `custexport` still sends one request per remaining table after a mid-export 401. Keep the check in any new retry, fallback, loop or best-effort step. OAuth2 keeps its single refresh-and-retry, and the 403 CSRF retry is unaffected. Never test this against a real system: the test itself would cause the failed logons.
 
 ### Stateful sessions
 
