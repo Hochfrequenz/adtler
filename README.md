@@ -107,6 +107,16 @@ One known exception: the customizing export in `adt/custexport` exports its
 tables in parallel and still sends one request per remaining table after a
 `401` in the middle of an export.
 
+The system's `language` is sent on every request (`sap-language` and
+`Accept-Language`), so each ADT session logs on in that language: SAP's
+messages and texts come back in it. It decides more than that: a workbench object created through adtler gets it
+as its original language (TADIR `MASTERLANG`), and its description is stored
+only in that language (#247). sap-mcp-config fills an unset `language` with
+`EN`, so a system without one logs on in English, not in the user's SU01
+default — set `language` explicitly if objects should be German-original. A
+hand-built `SAPSystem` with an empty `Language` sends no language and leaves
+the choice to SAP.
+
 ## Testing
 
 ### Unit tests
