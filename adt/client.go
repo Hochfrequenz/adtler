@@ -556,10 +556,23 @@ func (c *httpClient) token() string {
 	return c.tokens.current()
 }
 
-// setAuth adds the credentials to req and returns the OAuth token it sent, or
-// "" for Basic Auth, so a 401 can be matched to the token it rejected. It
-// refuses, before anything is sent, a Basic-auth user or password that is an
-// unresolved ${env:VAR} placeholder (see ErrUnresolvedPlaceholder).
+// setAuth adds the credentials and the logon client and language to req, and
+// returns the OAuth token it sent, or "" for Basic Auth, so a 401 can be
+// matched to the token it rejected. It refuses, before anything is sent, a
+// Basic-auth user or password that is an unresolved ${env:VAR} placeholder
+// (see ErrUnresolvedPlaceholder).
+//
+// Every request goes through here, the CSRF preflight that opens the SAP
+// session included, so the session logs on in cfg.Language rather than the
+// user's SU01 default. That matters beyond message texts: a workbench object
+// created in the session gets the logon language as its original language
+// (TADIR MASTERLANG) and stores its description only in that language (#247).
+//
+// Both headers are sent: in a single observation against an ADT endpoint,
+// sap-language alone did not change SY-LANGU while Accept-Language did. An
+// empty Language (a hand-built SAPSystem) sends neither and leaves SAP's
+// default in place. Note that sap-mcp-config fills an unset language with
+// "EN" while loading, so a loaded config always sends one.
 func (c *httpClient) setAuth(req *http.Request) (string, error) {
 	token := c.token()
 	if token != "" {
@@ -575,6 +588,14 @@ func (c *httpClient) setAuth(req *http.Request) (string, error) {
 	}
 	if c.cfg.Client != "" {
 		req.Header.Set("sap-client", c.cfg.Client)
+	}
+	if lang := strings.TrimSpace(c.cfg.Language); lang != "" {
+		req.Header.Set("sap-language", strings.ToUpper(lang))
+		// Accept-Language takes a language tag, so only the two-letter ISO
+		// form; a one-letter SAP code ("D") goes in sap-language alone.
+		if len(lang) == 2 {
+			req.Header.Set("Accept-Language", strings.ToLower(lang))
+		}
 	}
 	return token, nil
 }
