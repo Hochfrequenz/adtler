@@ -28,14 +28,16 @@ const uriMappingErrorType = "uriMappingError"
 // there is none. Most of these types only exist on S/4, so on ECC most
 // sub-tests skip, for one of two reasons: the system has no object of the
 // type, or it has no handler for the URI (exception ID uriMappingError).
-// A 404 on the discovered object is a skip, and so is a uriMappingError on a
-// system without S4CORE. On S/4 a uriMappingError fails the sub-test: every
-// type here is served there, so a missing handler means a wrong URI (#217).
-// Every other error, notably the 406 this test guards against, fails too.
+// Without S4CORE a 404 on the discovered object or a uriMappingError is a
+// skip. On S/4 both fail the sub-test: every type here is served there and
+// the object comes from TADIR, so either one means a wrong URI, a wrong
+// segment or a wrongly encoded name (#217). Every other error, notably the
+// 406 this test guards against, fails on every system.
 //
 // The 406 guard for adtler#72 fires only when both layers break together: the
 // VIT Accept mapping (adt/repository.go, vitObjectPropertiesContentType) and
-// readWithAcceptFallback's */* retry each mask a failure of the other.
+// readWithAcceptFallback's */* retry each mask a failure of the other. The
+// same holds for UIAD and its fiori/uiad entry in objectTypeAcceptHeaders.
 func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 	const vitPrefix = "/sap/bc/adt/vit/wb/object_type/"
 
@@ -65,7 +67,7 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 			ctx := context.Background()
 			res, err := sys.Client.RunQuery(ctx, "SELECT component FROM cvers WHERE component = 'S4CORE'", 1)
 			if err != nil {
-				t.Fatalf("release query failed: %v", err)
+				t.Fatalf("CVERS query for S4CORE failed: %v", err)
 			}
 			isS4 := len(res.Rows) > 0
 			for _, tt := range tests {
@@ -86,7 +88,7 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 					// The TADIR name is used whole. A WDCC name is the
 					// configuration ID padded to 32 characters followed by the
 					// two-character configuration type, so it can carry inner
-					// blanks; PathEscape encodes them along with the slashes.
+					// blanks, which PathEscape encodes along with the slashes.
 					name := strings.TrimSpace(res.Rows[0][0])
 					uri := tt.prefix + url.PathEscape(name)
 
@@ -95,10 +97,11 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 						var adtErr *adt.ADTError
 						if errors.As(err, &adtErr) && (adtErr.StatusCode == http.StatusNotFound ||
 							adtErr.Type == uriMappingErrorType) {
+							if isS4 {
+								t.Fatalf("%s: object from TADIR not reachable on S/4: HTTP %d (%s)",
+									tt.tadir, adtErr.StatusCode, adtErr.Type)
+							}
 							if adtErr.Type == uriMappingErrorType {
-								if isS4 {
-									t.Fatalf("%s: ADT has no handler for this URI on S/4 (%s): wrong URI", tt.tadir, uriMappingErrorType)
-								}
 								t.Skipf("%s: ADT has no handler for this URI (%s)", tt.tadir, uriMappingErrorType)
 							}
 							t.Skipf("%s object not found (HTTP %d)", tt.tadir, adtErr.StatusCode)

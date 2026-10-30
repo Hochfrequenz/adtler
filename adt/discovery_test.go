@@ -207,3 +207,17 @@ func TestAcceptHeaderForURI_RAPTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestAcceptHeaderForURI_FioriAppDescriptorItem covers adtler#217. A UIAD
+// (launchpad app descriptor item) is not served through VIT but under
+// /sap/bc/adt/fiori/uiad, which answers application/xml with 406. Without a
+// map entry the URI fell through to application/xml and only the */* retry in
+// readWithAcceptFallback reached it. The type is the first app:accept entry
+// SAP S/4HANA 2025, on-premise (SAP_BASIS 816) publishes for the collection.
+func TestAcceptHeaderForURI_FioriAppDescriptorItem(t *testing.T) {
+	c := &httpClient{}
+	want := "application/vnd.sap.adt.blues.v2+xml, application/xml"
+	if got := c.acceptHeaderForURI("/sap/bc/adt/fiori/uiad/%2Fabc%2F0123456789ABCDEF"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
