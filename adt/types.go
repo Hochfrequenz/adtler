@@ -193,6 +193,7 @@ const (
 	ExceptionTypeUnsupportedMediaType      = "ExceptionUnsupportedMediaType"  // 415
 	ExceptionTypeUnprocessableEntity       = "ExceptionUnprocessableEntity"   // 422
 	ExceptionTypeNotAllowed                = "ExceptionNotAllowed"            // 405, S/4 only
+	ExceptionTypeResourceNotFound          = "ExceptionResourceNotFound"      // 404
 	// ExceptionTypeResourceCreationFailure is raised (HTTP 500) when an object
 	// create cannot complete. The PROGRAM-create endpoint reports a name
 	// collision this way rather than as ExceptionResourceAlreadyExists —

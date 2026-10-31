@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -275,6 +276,87 @@ func TestGetObjectInfoVIT(t *testing.T) {
 				t.Error("PackageName is empty")
 			}
 		})
+	}
+}
+
+// TestGetObjectInfoVIT_EchoIsNotFound covers adtler#251: VIT answers 200 for a
+// name that does not exist and echoes name and type back without a package.
+// GetObjectInfo must report that as a missing object, not as a found one.
+func TestGetObjectInfoVIT_EchoIsNotFound(t *testing.T) {
+	tests := []struct {
+		name    string
+		uri     string
+		echoXML string
+	}{
+		{
+			name: "S/4 echo",
+			uri:  "/sap/bc/adt/vit/wb/object_type/uiac/object_name/%2fABC%2fDOES_NOT_EXIST",
+			echoXML: `<?xml version="1.0" encoding="utf-8"?><adtcore:mainObject adtcore:name="/ABC/DOES_NOT_EXIST" ` +
+				`adtcore:type="UIAC" adtcore:version="active" xmlns:adtcore="http://www.sap.com/adt/core"/>`,
+		},
+		{
+			name: "ECC echo with language",
+			uri:  "/sap/bc/adt/vit/wb/object_type/wdccyg/object_name/ZZ_DOES_NOT_EXIST",
+			echoXML: `<?xml version="1.0" encoding="utf-8"?><adtcore:mainObject adtcore:name="ZZ_DOES_NOT_EXIST" ` +
+				`adtcore:type="WDCC/YG" adtcore:version="active" adtcore:language="EN" ` +
+				`xmlns:adtcore="http://www.sap.com/adt/core"/>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			echoXML := tt.echoXML
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == csrfEndpoint {
+					w.Header().Set("X-CSRF-Token", "token")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.Header().Set("Content-Type", "application/vnd.sap.adt.basic.object.properties+xml")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(echoXML))
+			}))
+			defer srv.Close()
+
+			client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+			info, err := client.GetObjectInfo(context.Background(), tt.uri)
+			if err == nil {
+				t.Fatalf("GetObjectInfo returned %+v for an echo, want a not-found error", info)
+			}
+			if k := adt.ClassifyError(err); k != adt.ErrorNotFound {
+				t.Errorf("ClassifyError = %v, want ErrorNotFound", k)
+			}
+			var adtErr *adt.ADTError
+			if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusNotFound ||
+				adtErr.Type != adt.ExceptionTypeResourceNotFound {
+				t.Errorf("err = %v, want *ADTError 404 %s", err, adt.ExceptionTypeResourceNotFound)
+			}
+		})
+	}
+}
+
+// TestGetObjectInfo_NoPackageOutsideVIT pins the scope of adtler#251: only VIT
+// echoes missing objects with 200, so a document without a package from any
+// other endpoint is still a found object.
+func TestGetObjectInfo_NoPackageOutsideVIT(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><adtcore:mainObject adtcore:name="ZEXAMPLE" ` +
+			`adtcore:type="PROG/P" xmlns:adtcore="http://www.sap.com/adt/core"/>`))
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), "/sap/bc/adt/programs/programs/zexample")
+	if err != nil {
+		t.Fatalf("GetObjectInfo: %v", err)
+	}
+	if info.Name != "ZEXAMPLE" || info.PackageName != "" {
+		t.Errorf("info = %+v, want ZEXAMPLE without package", info)
 	}
 }
 

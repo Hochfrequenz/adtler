@@ -119,6 +119,41 @@ const fugrModuleContentType = "application/vnd.sap.adt.functions.fmodules.v3+xml
 // response when the wrong Accept header is sent. See adtler#72.
 const vitObjectPropertiesContentType = "application/vnd.sap.adt.basic.object.properties+xml"
 
+// vitObjectTypePrefix is the URI prefix of every VIT object document.
+const vitObjectTypePrefix = "/sap/bc/adt/vit/wb/object_type/"
+
+// vitObjectNotFound reports a VIT object that SAP did not find.
+//
+// VIT answers 200 for a name that does not exist and echoes the name and type
+// back without a package, so the status alone cannot tell GetObjectInfo that
+// the object is missing (adtler#251). The package can: every real object of
+// the VIT types this client reads (UIAC, ADVC/LRP, LRCC/LRP, WDCC/YG) carried
+// an <adtcore:packageRef>, and no echo did. Measured on 2026-10-31 over every
+// object of these types up to 60 per system and package class, on SAP S/4HANA
+// 2025, on-premise (SAP_BASIS 816) and on SAP ERP 6.0 EHP8 (SAP_BASIS 750), which
+// serves only wdccyg and echoes the same way. Neither system held a local
+// ($TMP) object of these types, so that case is unmeasured.
+//
+// The rule is confined to VIT. Other endpoints answer a missing object with
+// 404, and some of their real objects carry no package of their own (function
+// modules, see packageOfFunctionGroup).
+//
+// The error is shaped like the 404 the other endpoints send, so that
+// ClassifyError reports ErrorNotFound and callers need no VIT case of their
+// own. SAP's HTTP status was 200; the message says so.
+//
+// SAP decodes a '+' in the URI path as a blank. A name containing '+' must be
+// sent as %2B, or SAP looks up a different name and echoes that one, which
+// ends up here as well.
+func vitObjectNotFound(objectURI string) error {
+	return &ADTError{
+		StatusCode: http.StatusNotFound,
+		Type:       ExceptionTypeResourceNotFound,
+		Message: "GetObjectInfo: " + objectURI + " does not exist (VIT answered 200 and echoed the name " +
+			"without a package, which it does for a name it did not find)",
+	}
+}
+
 // acceptHeaderForURI returns the best Accept header for a given object URI.
 // It first checks the ADT discovery cache (populated from /sap/bc/adt/discovery
 // during CSRF fetch) for supported content types, then falls back to the
@@ -217,6 +252,9 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 	info, err := parseGenericObjectInfo(data, objectURI)
 	if err != nil {
 		return nil, err
+	}
+	if info.PackageName == "" && strings.HasPrefix(objectURI, vitObjectTypePrefix) {
+		return nil, vitObjectNotFound(objectURI)
 	}
 	if info.PackageName == "" {
 		if groupURI, ok := functionGroupURIOfPart(objectURI); ok {
