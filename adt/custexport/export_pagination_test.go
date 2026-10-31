@@ -145,3 +145,63 @@ func TestExportTable_CompositeKeyPageBoundary(t *testing.T) {
 		t.Errorf("expected 5 rows on 3 pages, got %d rows on %d pages", result.TotalRows, result.Pages)
 	}
 }
+
+// TestExportTable_FullPageWithoutPaginationKeyIsAnError guards #229: a table
+// without a key besides the client cannot be paginated, and a full first page
+// used to end the export with the rows read so far, reported as a success.
+func TestExportTable_FullPageWithoutPaginationKeyIsAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []string
+	}{
+		{"no key", nil},
+		{"client only", []string{"MANDT"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := &mockClient{
+				runQueryFn: func(_ context.Context, _ string, _ int) (*adt.QueryResult, error) {
+					calls++
+					return &adt.QueryResult{
+						Columns: paginationColumns(),
+						Rows:    [][]string{{"100", "1000", "A"}, {"100", "2000", "B"}},
+					}, nil
+				},
+			}
+
+			result, err := exportTable(context.Background(), client, "T001", tc.keys, nil, 2)
+			if err == nil {
+				t.Fatalf("expected an error for a full page without a pagination key, got %d rows without error", result.TotalRows)
+			}
+			for _, want := range []string{"T001", "page size 2"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error should mention %q, got: %v", want, err)
+				}
+			}
+			if calls != 1 {
+				t.Errorf("expected 1 query, got %d", calls)
+			}
+		})
+	}
+}
+
+// TestExportTable_ShortPageWithoutPaginationKey checks that a table without a
+// key besides the client is still exported when it fits on one page (#229).
+func TestExportTable_ShortPageWithoutPaginationKey(t *testing.T) {
+	client := &mockClient{
+		runQueryFn: func(_ context.Context, _ string, _ int) (*adt.QueryResult, error) {
+			return &adt.QueryResult{
+				Columns: paginationColumns(),
+				Rows:    [][]string{{"100", "1000", "A"}},
+			}, nil
+		},
+	}
+
+	result, err := exportTable(context.Background(), client, "T001", []string{"MANDT"}, nil, 2)
+	if err != nil {
+		t.Fatalf("exportTable: %v", err)
+	}
+	if result.TotalRows != 1 || result.Pages != 1 {
+		t.Errorf("expected 1 row on 1 page, got %d rows on %d pages", result.TotalRows, result.Pages)
+	}
+}

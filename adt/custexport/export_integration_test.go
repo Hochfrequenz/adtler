@@ -585,3 +585,65 @@ func logTableErrorKinds(t *testing.T, tableErrors []custexport.TableError) {
 		}
 	}
 }
+
+// TestExportCustomizing_ClientOnlyKey guards #229 against a real system: a
+// table whose only key is the client cannot be paginated. A full page used to
+// end the table as exported; it has to fail instead, and a short page has to
+// export normally. The test discovers a customizing table with that key and
+// exactly one row, so page size 1 fills the page and page size 2 does not.
+func TestExportCustomizing_ClientOnlyKey(t *testing.T) {
+	client := newClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const maxCandidates = 200
+	candidates := discoverTables(t, ctx, client, customizingTablesSQL(
+		"a~TABNAME", "a~AS4VERS = '0000'", "GROUP BY a~TABNAME HAVING COUNT(*) = 1 ORDER BY a~TABNAME"), maxCandidates)
+
+	var table string
+	checked := 0
+	for _, c := range candidates {
+		keys := tableKeyFields(t, ctx, client, c)
+		if len(keys) != 1 || keys[0] != "MANDT" {
+			continue
+		}
+		checked++
+		if sourceRowCount(t, ctx, client, c) == 1 {
+			table = c
+			break
+		}
+	}
+	t.Logf("%d candidate tables with a single key field, %d with the client as key checked", len(candidates), checked)
+	if table == "" {
+		t.Skip("no customizing table with the client as its only key and exactly one row found")
+	}
+
+	export := func(pageSize int) *custexport.ExportSummary {
+		t.Helper()
+		summary, err := custexport.RunExport(ctx, client, custexport.ExportConfig{
+			OutputDir: t.TempDir(),
+			Tables:    []string{table},
+			PageSize:  pageSize,
+			Workers:   1,
+		})
+		if err != nil {
+			t.Fatalf("RunExport with page size %d failed: %v", pageSize, err)
+		}
+		return summary
+	}
+
+	full := export(1)
+	if len(full.Errors) != 1 || full.ExportedTables != 0 {
+		t.Errorf("page size 1: want the table failed, got %d exported, %d errors", full.ExportedTables, len(full.Errors))
+	} else if !strings.Contains(full.Errors[0].Error, "no key besides the client") {
+		t.Errorf("page size 1: the table failed for another reason")
+		logTableErrorKinds(t, full.Errors)
+	}
+
+	short := export(2)
+	if len(short.Errors) != 0 || short.ExportedTables != 1 || short.TotalRows != 1 {
+		t.Errorf("page size 2: want 1 table with 1 row exported, got %d tables, %d rows, %d errors",
+			short.ExportedTables, short.TotalRows, len(short.Errors))
+		logTableErrorKinds(t, short.Errors)
+	}
+}
