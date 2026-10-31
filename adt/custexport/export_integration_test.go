@@ -598,7 +598,8 @@ func TestExportCustomizing_ClientOnlyKey(t *testing.T) {
 
 	const maxCandidates = 200
 	candidates := discoverTables(t, ctx, client, customizingTablesSQL(
-		"a~TABNAME", "a~AS4VERS = '0000'", "GROUP BY a~TABNAME HAVING COUNT(*) = 1 ORDER BY a~TABNAME"), maxCandidates)
+		"a~TABNAME", "a~AS4VERS = '0000'",
+		"GROUP BY a~TABNAME HAVING COUNT(*) = 1 AND MAX( b~FIELDNAME ) = 'MANDT' ORDER BY a~TABNAME"), maxCandidates)
 
 	var table string
 	checked := 0
@@ -613,7 +614,7 @@ func TestExportCustomizing_ClientOnlyKey(t *testing.T) {
 			break
 		}
 	}
-	t.Logf("%d candidate tables with a single key field, %d with the client as key checked", len(candidates), checked)
+	t.Logf("%d candidate tables with the client as their only key, %d checked", len(candidates), checked)
 	if table == "" {
 		t.Skip("no customizing table with the client as its only key and exactly one row found")
 	}
