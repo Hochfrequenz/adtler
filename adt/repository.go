@@ -144,13 +144,18 @@ const vitObjectTypePrefix = "/sap/bc/adt/vit/wb/object_type/"
 //
 // SAP decodes a '+' in the URI path as a blank. A name containing '+' must be
 // sent as %2B, or SAP looks up a different name and echoes that one, which
-// ends up here as well.
+// ends up here as well. The message says so when the URI carries a raw '+',
+// because the object may well exist under the name the caller meant.
 func vitObjectNotFound(objectURI string) error {
+	msg := "GetObjectInfo: " + objectURI + " does not exist (VIT answered 200 and echoed the name " +
+		"without a package, which it does for a name it did not find)"
+	if strings.Contains(objectURI, "+") {
+		msg += "; the URI contains a raw '+', which SAP reads as a blank — encode it as %2B"
+	}
 	return &ADTError{
 		StatusCode: http.StatusNotFound,
 		Type:       ExceptionTypeResourceNotFound,
-		Message: "GetObjectInfo: " + objectURI + " does not exist (VIT answered 200 and echoed the name " +
-			"without a package, which it does for a name it did not find)",
+		Message:    msg,
 	}
 }
 

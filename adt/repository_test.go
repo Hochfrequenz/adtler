@@ -301,10 +301,17 @@ func TestGetObjectInfoVIT_EchoIsNotFound(t *testing.T) {
 				`adtcore:type="WDCC/YG" adtcore:version="active" adtcore:language="EN" ` +
 				`xmlns:adtcore="http://www.sap.com/adt/core"/>`,
 		},
+		{
+			name: "raw '+' in the name",
+			uri:  "/sap/bc/adt/vit/wb/object_type/lrcclrp/object_name/AB+CD=",
+			echoXML: `<?xml version="1.0" encoding="utf-8"?><adtcore:mainObject adtcore:name="AB CD=" ` +
+				`adtcore:type="LRCC/LRP" adtcore:version="active" xmlns:adtcore="http://www.sap.com/adt/core"/>`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			echoXML := tt.echoXML
+			wantPlusHint := strings.Contains(tt.uri, "+")
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == csrfEndpoint {
 					w.Header().Set("X-CSRF-Token", "token")
@@ -329,6 +336,9 @@ func TestGetObjectInfoVIT_EchoIsNotFound(t *testing.T) {
 			if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusNotFound ||
 				adtErr.Type != adt.ExceptionTypeResourceNotFound {
 				t.Errorf("err = %v, want *ADTError 404 %s", err, adt.ExceptionTypeResourceNotFound)
+			}
+			if got := strings.Contains(err.Error(), "%2B"); got != wantPlusHint {
+				t.Errorf("'+' hint in %q = %t, want %t", err.Error(), got, wantPlusHint)
 			}
 		})
 	}
