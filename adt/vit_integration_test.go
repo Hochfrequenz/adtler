@@ -88,9 +88,9 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 					// The TADIR name is used whole. A WDCC name is the
 					// configuration ID padded to 32 characters followed by the
 					// two-character configuration type, so it can carry inner
-					// blanks, which PathEscape encodes along with the slashes.
+					// blanks, which vitPathEscape encodes along with the slashes.
 					name := strings.TrimSpace(res.Rows[0][0])
-					uri := tt.prefix + url.PathEscape(name)
+					uri := tt.prefix + vitPathEscape(name)
 
 					info, err := sys.Client.GetObjectInfo(ctx, uri)
 					if err != nil {
@@ -119,13 +119,58 @@ func TestGetObjectInfo_VIT_Integration(t *testing.T) {
 						t.Error("Type is empty")
 					}
 					// VIT answers 200 for a name that does not exist, echoing
-					// the name and type back without a package. Only the
-					// package shows that SAP found the object.
+					// the name and type back without a package (#251).
+					// GetObjectInfo turns that echo into a 404, so a package
+					// is expected here; its absence is a regression.
 					if info.PackageName == "" {
 						t.Error("PackageName is empty: SAP echoed the URI instead of finding the object")
 					}
 					t.Logf("type=%s nameSet=%t typeSet=%t packageSet=%t",
 						tt.tadir, info.Name != "", info.Type != "", info.PackageName != "")
+				})
+			}
+		})
+	}
+}
+
+// vitPathEscape encodes an object name for a VIT URI. SAP decodes a '+' in
+// the path as a blank, which url.PathEscape leaves alone: S/4 LRCC names are
+// base64-shaped and often contain one, and without %2B SAP looks up a
+// different name and echoes it (#251).
+func vitPathEscape(name string) string {
+	return strings.ReplaceAll(url.PathEscape(name), "+", "%2B")
+}
+
+// TestGetObjectInfo_VITMissing_Integration guards adtler#251: VIT answers 200
+// for a name that does not exist and echoes name and type back, and
+// GetObjectInfo used to report that echo as an existing object. It must
+// classify as ErrorNotFound on every system that serves the segment.
+//
+// The name is one no system holds. A segment the system has no handler for
+// (ECC serves only wdccyg) answers uriMappingError and skips; that is a
+// missing endpoint, not the echo this test is about.
+func TestGetObjectInfo_VITMissing_Integration(t *testing.T) {
+	const vitPrefix = "/sap/bc/adt/vit/wb/object_type/"
+	segments := []string{"uiac", "advclrp", "lrcclrp", "wdccyg"}
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			for _, seg := range segments {
+				seg := seg
+				t.Run(seg, func(t *testing.T) {
+					uri := vitPrefix + seg + "/object_name/" + vitPathEscape("/ABC/ADTLER_251_MISSING")
+					info, err := sys.Client.GetObjectInfo(context.Background(), uri)
+					if err == nil {
+						t.Fatalf("%s: GetObjectInfo reported a nonexistent object as existing (type=%q packageSet=%t)",
+							seg, info.Type, info.PackageName != "")
+					}
+					var adtErr *adt.ADTError
+					if errors.As(err, &adtErr) && adtErr.Type == uriMappingErrorType {
+						t.Skipf("%s: ADT has no handler for this URI (%s)", seg, uriMappingErrorType)
+					}
+					if k := adt.ClassifyError(err); k != adt.ErrorNotFound {
+						t.Fatalf("%s: ClassifyError = %v, want ErrorNotFound (%T)", seg, k, err)
+					}
 				})
 			}
 		})
