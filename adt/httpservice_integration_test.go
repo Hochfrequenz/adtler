@@ -70,15 +70,18 @@ func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 			}
 
 			res, err := sys.Client.ActivateObjects(ctx, []string{uri})
-			if err != nil || !res.Success {
-				t.Fatalf("[%s] ActivateObjects: err=%v result=%+v", sys.Name, err, res)
+			if err != nil {
+				t.Fatalf("[%s] ActivateObjects: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
+			}
+			if !res.Success {
+				t.Fatalf("[%s] activation failed with %d message(s)", sys.Name, len(res.Messages))
 			}
 
 			if err := sys.Client.DeleteObject(ctx, uri, "", ""); err != nil {
 				t.Fatalf("[%s] DeleteObject: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 			}
 			if _, err := sys.Client.GetObjectInfo(ctx, uri); adt.ClassifyError(err) != adt.ErrorNotFound {
-				t.Errorf("[%s] after DeleteObject, GetObjectInfo should report not found, got: %v", sys.Name, err)
+				t.Errorf("[%s] after DeleteObject, GetObjectInfo should report not found, got kind %s", sys.Name, adt.ClassifyError(err))
 			}
 			t.Logf("[%s] create → read handler → activate → delete OK", sys.Name)
 		})
@@ -86,17 +89,22 @@ func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 }
 
 // discoverHTTPHandlerClass returns the handler class of an existing HTTP
-// service, or "" when the system has none.
+// service, or "" when the system has none. Any failed request fails the test:
+// a 401 must not be repeated in the loop, and a read regression must not
+// pass as a skip.
 func discoverHTTPHandlerClass(t *testing.T, sys integrationSystem) string {
 	t.Helper()
 	ctx := context.Background()
 	found, err := sys.Client.SearchObjects(ctx, "*", "HTTP", 20)
 	if err != nil {
-		t.Logf("[%s] searching HTTP services: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
-		return ""
+		t.Fatalf("[%s] searching HTTP services: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 	}
 	for _, o := range found {
-		if svc, err := sys.Client.GetHTTPService(ctx, o.Name); err == nil && svc.HandlerClass != "" {
+		svc, err := sys.Client.GetHTTPService(ctx, o.Name)
+		if err != nil {
+			t.Fatalf("[%s] GetHTTPService on a discovered service: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
+		}
+		if svc.HandlerClass != "" {
 			t.Logf("[%s] borrowing the handler class of one of %d HTTP services", sys.Name, len(found))
 			return svc.HandlerClass
 		}
