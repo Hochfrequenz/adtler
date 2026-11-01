@@ -115,6 +115,12 @@ func (m *mockClient) CreateFunctionModule(context.Context, string, string, strin
 func (m *mockClient) CreatePackage(context.Context, string, string, string, string, string, string) error {
 	panic("not implemented")
 }
+func (m *mockClient) CreateHTTPService(context.Context, string, string, string, string, string) error {
+	panic("not implemented")
+}
+func (m *mockClient) GetHTTPService(context.Context, string) (*adt.HTTPService, error) {
+	panic("not implemented")
+}
 func (m *mockClient) DeleteObject(context.Context, string, string, string) error {
 	panic("not implemented")
 }

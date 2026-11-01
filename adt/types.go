@@ -28,6 +28,14 @@ type ObjectInfo struct {
 	PackageName string
 }
 
+// HTTPService is what GetHTTPService reads from an HTTP service (R3TR HTTP).
+type HTTPService struct {
+	Name         string
+	Description  string
+	HandlerClass string // class implementing IF_HTTP_SERVICE_EXTENSION; empty when none is set
+	URL          string // path the service answers at, e.g. /sap/bc/http/sap/<name>
+}
+
 // ActivationMessage is a per-object message from an activation response.
 type ActivationMessage struct {
 	ObjectURI string

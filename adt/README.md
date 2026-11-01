@@ -73,7 +73,7 @@ The `Client` interface is composed of focused sub-interfaces, so you can depend 
 | Interface | Methods |
 |-----------|---------|
 | `SourceClient` | `GetSource`, `SetSource`, `GetClassDefinition`, `GetIncludeSource`, `SetIncludeSource`, `CreateTestInclude`, `PrettyPrint`, `GetCompletions` |
-| `ObjectClient` | `CreateObject`, `CreateFunctionModule`, `CreatePackage`, `DeleteObject`, `ActivateObjects`, `GetInactiveObjects` |
+| `ObjectClient` | `CreateObject`, `CreateFunctionModule`, `CreatePackage`, `CreateHTTPService`, `GetHTTPService`, `DeleteObject`, `ActivateObjects`, `GetInactiveObjects` |
 | `LockClient` | `LockObject`, `UnlockObject` |
 | `SearchClient` | `SearchObjects`, `WhereUsed`, `BrowsePackage`, `GetObjectInfo` |
 | `QualityClient` | `SyntaxCheck`, `BatchSyntaxCheck`, `RunUnitTests`, `RunATCCheck`, `GetATCCustomizing` |
