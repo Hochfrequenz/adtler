@@ -321,9 +321,13 @@ func parseGenericObjectInfo(data []byte, objectURI string) (*ObjectInfo, error) 
 		Name        string `xml:"name,attr"`
 		Type        string `xml:"type,attr"`
 		Description string `xml:"description,attr"`
+		LangVersion string `xml:"abapLanguageVersion,attr"`
 		PackageRef  struct {
 			Name string `xml:"name,attr"`
 		} `xml:"packageRef"`
+		PakAttributes struct {
+			LanguageVersion string `xml:"http://www.sap.com/adt/packages languageVersion,attr"`
+		} `xml:"http://www.sap.com/adt/packages attributes"`
 	}
 	if err := xml.Unmarshal(data, &obj); err != nil {
 		return nil, fmt.Errorf("GetObjectInfo parsing: %w", err)
@@ -345,5 +349,8 @@ func parseGenericObjectInfo(data []byte, objectURI string) (*ObjectInfo, error) 
 		Type:        obj.Type,
 		Description: obj.Description,
 		PackageName: obj.PackageRef.Name,
+
+		ABAPLanguageVersion:    obj.LangVersion,
+		PackageLanguageVersion: obj.PakAttributes.LanguageVersion,
 	}, nil
 }

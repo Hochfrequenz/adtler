@@ -142,6 +142,10 @@ type CreatePackage struct {
 // PakAttributes holds package attributes like packageType.
 type PakAttributes struct {
 	PackageType string `xml:"pak:packageType,attr"`
+	// LanguageVersion is the domain value of ABAP_LANGUAGE_VERSION ("" Standard
+	// ABAP, "2" ABAP for Key Users, "5" ABAP for Cloud Development). Omitted
+	// when empty so SAP keeps choosing its default (adtler#254).
+	LanguageVersion string `xml:"pak:languageVersion,attr,omitempty"`
 }
 
 // PakSuperPackage references the parent package (empty for top-level).

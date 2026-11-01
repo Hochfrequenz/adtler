@@ -50,7 +50,7 @@ func TestCreatePackage_SendsAcceptHeader(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.CreatePackage(context.Background(), "$ZEXAMPLE", "Example package", "DEVELOPER", "LOCAL", "", "")
+	err := client.CreatePackage(context.Background(), "$ZEXAMPLE", "Example package", "DEVELOPER", "LOCAL", "", "", "")
 	if err != nil {
 		t.Fatalf("CreatePackage: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCreatePackage_ServerRejectionSurfaces(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.CreatePackage(context.Background(), "$ZEXAMPLE", "Example package", "", "LOCAL", "", "")
+	err := client.CreatePackage(context.Background(), "$ZEXAMPLE", "Example package", "", "LOCAL", "", "", "")
 	if err == nil {
 		t.Fatal("expected the server rejection to surface as an error")
 	}

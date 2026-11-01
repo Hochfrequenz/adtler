@@ -306,7 +306,14 @@ func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, module
 	return checkResponse(resp)
 }
 
-func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, transport string) error {
+func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error {
+	// The fixed values of domain ABAP_LANGUAGE_VERSION. Checking them also
+	// catches a transport number passed one position too early (adtler#254).
+	switch languageVersion {
+	case "", "2", LanguageVersionCloudDevelopment:
+	default:
+		return fmt.Errorf("CreatePackage: language version %q is not a value of ABAP_LANGUAGE_VERSION (\"\", \"2\" or \"5\")", languageVersion)
+	}
 	body, err := xml.Marshal(adtxml.CreatePackage{
 		NSPak:       "http://www.sap.com/adt/packages",
 		NSCore:      nsADTCore,
@@ -314,7 +321,7 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 		Type:        ObjectTypePackage,
 		Description: description,
 		Responsible: strings.ToUpper(responsible),
-		Attributes:  adtxml.PakAttributes{PackageType: "development"},
+		Attributes:  adtxml.PakAttributes{PackageType: "development", LanguageVersion: languageVersion},
 		Transport: adtxml.PakTransport{
 			SoftwareComponent: adtxml.PakNamedItem{Name: softwareComponent},
 			TransportLayer:    adtxml.PakNamedItem{Name: transportLayer},

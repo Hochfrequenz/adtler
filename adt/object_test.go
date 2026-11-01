@@ -161,7 +161,7 @@ func TestCreatePackage(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.CreatePackage(context.Background(), "Z_MY_PKG", "My Package", "TESTUSER", "HOME", "ZLAY", "AAAK900001")
+	err := client.CreatePackage(context.Background(), "Z_MY_PKG", "My Package", "TESTUSER", "HOME", "ZLAY", "", "AAAK900001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestCreatePackageWithoutTransport(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	err := client.CreatePackage(context.Background(), "z_tmp_pkg", "Temp", "testuser", "", "", "")
+	err := client.CreatePackage(context.Background(), "z_tmp_pkg", "Temp", "testuser", "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

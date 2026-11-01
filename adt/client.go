@@ -38,7 +38,11 @@ type SourceClient interface {
 type ObjectClient interface {
 	CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error
 	CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error
-	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, transport string) error
+	// CreatePackage creates a top-level package. languageVersion is the value of
+	// domain ABAP_LANGUAGE_VERSION the package gets: "" leaves the choice to SAP
+	// (Standard ABAP), LanguageVersionCloudDevelopment requests an ABAP Cloud package.
+	// Any other value is refused before a request is sent.
+	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error
 	// DeleteObject deletes the object. lockHandle is optional: pass "" when
 	// you hold no lock, or the handle from LockObject and it is released
 	// before the delete (adtler#187).

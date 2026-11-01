@@ -76,7 +76,7 @@ func TestCreatePackage_DuplicateSurfacesAsADTError_MultiSystem_Integration(t *te
 			}
 
 			err = sys.Client.CreatePackage(ctx, existing,
-				"adtler duplicate-rejection probe", sys.Config.User, "", "", "")
+				"adtler duplicate-rejection probe", sys.Config.User, "", "", "", "")
 
 			if endpointUnavailable(err) {
 				t.Skipf("[%s] /sap/bc/adt/packages is not available on this release", sys.Name)

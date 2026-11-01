@@ -89,6 +89,20 @@ The `Client` interface is composed of focused sub-interfaces, so you can depend 
 | `RefactoringClient` | `Rename` |
 | `SystemClient` | `SystemInfo`, `Logout` |
 
+## ABAP language version (ABAP Cloud)
+
+`CreatePackage` takes the package's ABAP language version as the value of domain
+`ABAP_LANGUAGE_VERSION`: pass `adt.LanguageVersionCloudDevelopment` (`"5"`) for an
+ABAP Cloud package, or `""` to leave SAP's default (Standard ABAP). Classes created in
+an ABAP Cloud package get the ABAP Cloud language version without further input
+(measured on SAP S/4HANA, SAP_BASIS 816).
+
+`GetObjectInfo` reports the version in two fields, because ADT reports it in two forms:
+`ABAPLanguageVersion` holds an object's version by name (`standard`,
+`cloudDevelopment`), and `PackageLanguageVersion` holds a package's setting as the
+domain value. The package setting does not describe every object in it: SAP classes in
+a key-user package report `standard`.
+
 ## Multi-system support
 
 Use `ClientRegistry` to manage multiple SAP systems:
