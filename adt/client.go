@@ -38,7 +38,11 @@ type SourceClient interface {
 type ObjectClient interface {
 	CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error
 	CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error
-	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, transport string) error
+	// CreatePackage creates a top-level package. languageVersion is the value of
+	// domain ABAP_LANGUAGE_VERSION the package gets: "" leaves the choice to SAP
+	// (Standard ABAP), LanguageVersionCloudDevelopment requests an ABAP Cloud package.
+	// Any other value is refused before a request is sent.
+	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error
 	// CreateHTTPService creates an HTTP service (R3TR HTTP) whose requests
 	// handlerClass answers. S/4HANA only (adtler#255).
 	CreateHTTPService(ctx context.Context, name, packageName, description, handlerClass, transport string) error
