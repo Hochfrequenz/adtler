@@ -43,6 +43,11 @@ type ObjectClient interface {
 	// (Standard ABAP), LanguageVersionCloudDevelopment requests an ABAP Cloud package.
 	// Any other value is refused before a request is sent.
 	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error
+	// CreateHTTPService creates an HTTP service (R3TR HTTP) whose requests
+	// handlerClass answers. S/4HANA only (adtler#255).
+	CreateHTTPService(ctx context.Context, name, packageName, description, handlerClass, transport string) error
+	// GetHTTPService reads an HTTP service's handler class and URL.
+	GetHTTPService(ctx context.Context, name string) (*HTTPService, error)
 	// DeleteObject deletes the object. lockHandle is optional: pass "" when
 	// you hold no lock, or the handle from LockObject and it is released
 	// before the delete (adtler#187).

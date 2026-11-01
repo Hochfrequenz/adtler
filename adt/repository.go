@@ -90,6 +90,7 @@ var objectTypeAcceptHeaders = map[string]string{
 	"/sap/bc/adt/acm/dcl/sources":           "application/vnd.sap.adt.dclSource+xml",
 	"/sap/bc/adt/vit/wb/object_type":        vitObjectPropertiesContentType,
 	"/sap/bc/adt/fiori/uiad":                "application/vnd.sap.adt.blues.v2+xml",
+	"/sap/bc/adt/ucon/httpservices":         httpServiceContentType,
 }
 
 // fugrIncludeContentType is the vendor MIME type S/4 requires for function

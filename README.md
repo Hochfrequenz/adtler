@@ -391,6 +391,26 @@ Definition* wizard (adtler#148). The refusal is derived from the absence of a
 request body rather than from a hand-maintained list, so any endpoint added for
 reading is refused for creation until someone writes its create arm.
 
+## HTTP services
+
+An HTTP service (`R3TR HTTP`) is the released way to expose an HTTP endpoint from
+ABAP Cloud code: it names a handler class that implements `IF_HTTP_SERVICE_EXTENSION`.
+It lives at `/sap/bc/adt/ucon/httpservices` and speaks
+`application/vnd.sap.adt.uconn.http.v1+xml`. Measured on SAP S/4HANA 2025, on-premise
+(SAP_BASIS 816, S4CORE 109), on 2026-11-01 (adtler#255):
+
+- `CreateHTTPService` creates one with its handler class; `CreateObject` with type
+  `HTTP` creates one without. SAP accepts and activates both.
+- `GetHTTPService` reads the handler class and the URL the service answers at
+  (`/sap/bc/http/sap/<name>`). `ActivateObjects` and `DeleteObject` work as for any object.
+- **Creating and activating the service does not create its ICF node.** Neither did the
+  object's *Publish Locally* action (`POST <uri>/publish`, answered 200) for a service in
+  `$TMP`. Whether a service in a transportable package gets its node, and how, is not
+  measured yet. `ICF_NAME` holds 15 characters, so keep service names that short.
+- SAP ERP 6.0 (SAP_BASIS 750) does not publish the endpoint in its discovery document and
+  answers both a GET below it and the create POST with 404. The create then fails with
+  "probably not available on this SAP system", followed by SAP's own error.
+
 ## Status
 
 `adtler` was extracted from

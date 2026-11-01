@@ -212,6 +212,12 @@ func (r *ClientRegistry) CreateFunctionModule(ctx context.Context, groupName, mo
 func (r *ClientRegistry) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error {
 	return r.activeClient().CreatePackage(ctx, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport)
 }
+func (r *ClientRegistry) CreateHTTPService(ctx context.Context, name, packageName, description, handlerClass, transport string) error {
+	return r.activeClient().CreateHTTPService(ctx, name, packageName, description, handlerClass, transport)
+}
+func (r *ClientRegistry) GetHTTPService(ctx context.Context, name string) (*HTTPService, error) {
+	return r.activeClient().GetHTTPService(ctx, name)
+}
 func (r *ClientRegistry) DeleteObject(ctx context.Context, objectURI, lockHandle, transport string) error {
 	return r.activeClient().DeleteObject(ctx, objectURI, lockHandle, transport)
 }

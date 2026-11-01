@@ -39,6 +39,14 @@ type ObjectInfo struct {
 	PackageLanguageVersion string
 }
 
+// HTTPService is what GetHTTPService reads from an HTTP service (R3TR HTTP).
+type HTTPService struct {
+	Name         string
+	Description  string
+	HandlerClass string // class implementing IF_HTTP_SERVICE_EXTENSION; empty when none is set
+	URL          string // path the service answers at, e.g. /sap/bc/http/sap/<name>
+}
+
 // LanguageVersionCloudDevelopment is the ABAP_LANGUAGE_VERSION value of an
 // ABAP Cloud package ("ABAP for Cloud Development"), for CreatePackage.
 const LanguageVersionCloudDevelopment = "5"
