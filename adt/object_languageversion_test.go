@@ -99,3 +99,24 @@ func TestGetObjectInfo_ReportsPackageLanguageVersion(t *testing.T) {
 		t.Errorf("PackageLanguageVersion = %q, want %q", info.PackageLanguageVersion, adt.LanguageVersionCloudDevelopment)
 	}
 }
+
+// A value outside ABAP_LANGUAGE_VERSION is refused before any request, so a
+// transport number passed in the languageVersion position (the parameter sits
+// just before transport) cannot reach SAP as a language version.
+func TestCreatePackage_RejectsUnknownLanguageVersion(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	err := client.CreatePackage(context.Background(), "ZEXAMPLE", "Example", "USERA", "HOME", "ZLAY", "AAAK900001", "")
+	if err == nil {
+		t.Fatal("CreatePackage accepted a transport number as language version")
+	}
+	if requests != 0 {
+		t.Errorf("CreatePackage sent %d request(s) before refusing the value", requests)
+	}
+}

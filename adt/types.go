@@ -34,7 +34,8 @@ type ObjectInfo struct {
 	// ABAP_LANGUAGE_VERSION ("" Standard ABAP, "2" ABAP for Key Users, "5"
 	// ABAP for Cloud Development). It is the package's setting, not the
 	// version of every object in it: SAP classes in a key-user package
-	// report "standard" (measured on S/4HANA, SAP_BASIS 816).
+	// report "standard" (measured on S/4HANA, SAP_BASIS 816). Empty also
+	// when the release does not report the attribute at all.
 	PackageLanguageVersion string
 }
 

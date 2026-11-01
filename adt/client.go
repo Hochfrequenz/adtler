@@ -41,6 +41,7 @@ type ObjectClient interface {
 	// CreatePackage creates a top-level package. languageVersion is the value of
 	// domain ABAP_LANGUAGE_VERSION the package gets: "" leaves the choice to SAP
 	// (Standard ABAP), LanguageVersionCloudDevelopment requests an ABAP Cloud package.
+	// Any other value is refused before a request is sent.
 	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error
 	// DeleteObject deletes the object. lockHandle is optional: pass "" when
 	// you hold no lock, or the handle from LockObject and it is released
