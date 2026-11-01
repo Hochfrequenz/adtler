@@ -44,7 +44,7 @@ func TestDeletePackage_MultiSystem_Integration(t *testing.T) {
 			name := fmt.Sprintf("$ZADTLER_DEL_%06d", rand.Intn(1000000)) //nolint:gosec // throwaway name, not security-sensitive
 			uri := "/sap/bc/adt/packages/" + strings.ReplaceAll(strings.ToLower(name), "$", "%24")
 
-			err := sys.Client.CreatePackage(ctx, name, "adtler#150 delete test", sys.Config.User, "LOCAL", "", "")
+			err := sys.Client.CreatePackage(ctx, name, "adtler#150 delete test", sys.Config.User, "LOCAL", "", "", "")
 			if endpointUnavailable(err) {
 				t.Skipf("[%s] /sap/bc/adt/packages is not available on this release", sys.Name)
 			}

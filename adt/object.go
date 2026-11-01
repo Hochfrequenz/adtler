@@ -20,6 +20,15 @@ const (
 	objTypeDDLS = "DDLS"
 )
 
+// objTypeHTTP is an HTTP service (R3TR HTTP, handler interface
+// IF_HTTP_SERVICE_EXTENSION). Measured on SAP S/4HANA 2025 on-premise
+// (SAP_BASIS 816, S4CORE 109) on 2026-11-01; SAP ERP 6.0 (SAP_BASIS 750) has no
+// such endpoint and answers 404. See adtler#255.
+const (
+	objTypeHTTP            = "HTTP"
+	httpServiceContentType = "application/vnd.sap.adt.uconn.http.v1+xml"
+)
+
 // Object type constants for the RAP types. These are read-only here: this
 // client can address and read them, but cannot create them (see adtler#148
 // for BDEF). Their endpoints were measured against SAP S/4HANA on-premise
@@ -61,6 +70,7 @@ var objectTypeMap = map[string]objectTypeInfo{
 	objTypeBDEF: {"/sap/bc/adt/bo/behaviordefinitions", "BDEF/BDO"},
 	objTypeSRVD: {"/sap/bc/adt/ddic/srvd/sources", "SRVD/SRV"},
 	objTypeSRVB: {"/sap/bc/adt/businessservices/bindings", "SRVB/SVB"},
+	objTypeHTTP: {"/sap/bc/adt/ucon/httpservices", objTypeHTTP},
 }
 
 // supportedObjectTypes returns the object-type keys known to objectTypeMap,
@@ -94,8 +104,8 @@ func ObjectURI(objectType, name string) (string, error) {
 // returns a nil body for a type that has no create arm. It is the single
 // source of truth for which types this client can create: both CreateObject's
 // refusal and creatableObjectTypes read their answer from here, so neither can
-// drift from the arms below.
-func marshalCreateBody(objectType, name, packageName, description string, info objectTypeInfo) ([]byte, error) {
+// drift from the arms below. handlerClass is only used by HTTP services.
+func marshalCreateBody(objectType, name, packageName, description, handlerClass string, info objectTypeInfo) ([]byte, error) {
 	var body []byte
 	var err error
 	pkgRef := adtxml.PackageRef{Name: packageName}
@@ -145,6 +155,12 @@ func marshalCreateBody(objectType, name, packageName, description string, info o
 			NSMC: "http://www.sap.com/adt/MessageClass", NSCore: nsADTCore,
 			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
 		})
+	case objTypeHTTP:
+		body, err = xml.Marshal(adtxml.CreateHTTPService{
+			NSHTTP: "http://www.sap.com/uc_object_type_group/http/abapxml", NSCore: nsADTCore,
+			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
+			HandlerClass: strings.ToUpper(handlerClass),
+		})
 	}
 	return body, err
 }
@@ -156,7 +172,7 @@ func marshalCreateBody(objectType, name, packageName, description string, info o
 func creatableObjectTypes() []string {
 	creatable := make([]string, 0, len(objectTypeMap))
 	for objectType, info := range objectTypeMap {
-		if body, err := marshalCreateBody(objectType, "PROBE", "PROBE", "probe", info); err == nil && body != nil {
+		if body, err := marshalCreateBody(objectType, "PROBE", "PROBE", "probe", "", info); err == nil && body != nil {
 			creatable = append(creatable, objectType)
 		}
 	}
@@ -171,12 +187,25 @@ func creatableObjectTypes() []string {
 var ErrObjectCreated = errors.New("adt: the object was created")
 
 func (c *httpClient) CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error {
+	return c.createObject(ctx, objectType, name, packageName, description, "", transport)
+}
+
+// CreateHTTPService creates an HTTP service whose requests handlerClass, a
+// class implementing IF_HTTP_SERVICE_EXTENSION, answers. It is CreateObject
+// with type HTTP plus the handler class. SAP does not create the ICF node
+// with it: activation does not, and in $TMP neither did the object's
+// "publish" action (measured 2026-11-01, adtler#255).
+func (c *httpClient) CreateHTTPService(ctx context.Context, name, packageName, description, handlerClass, transport string) error {
+	return c.createObject(ctx, objTypeHTTP, name, packageName, description, handlerClass, transport)
+}
+
+func (c *httpClient) createObject(ctx context.Context, objectType, name, packageName, description, handlerClass, transport string) error {
 	info, ok := objectTypeMap[strings.ToUpper(objectType)]
 	if !ok {
 		return fmt.Errorf("unsupported object type %q, creatable types: %s", objectType, strings.Join(creatableObjectTypes(), ", "))
 	}
 
-	body, err := marshalCreateBody(objectType, name, packageName, description, info)
+	body, err := marshalCreateBody(objectType, name, packageName, description, handlerClass, info)
 	if err != nil {
 		return fmt.Errorf("CreateObject marshal: %w", err)
 	}
@@ -207,6 +236,8 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 		ct = "application/vnd.sap.adt.tables.v2+xml"
 	case objTypeDDLS:
 		ct = "application/vnd.sap.adt.ddlSource+xml"
+	case objTypeHTTP:
+		ct = httpServiceContentType
 	}
 
 	path := info.endpoint
@@ -234,6 +265,11 @@ func (c *httpClient) CreateObject(ctx context.Context, objectType, name, package
 				"DDIC object creation via ADT REST requires S/4HANA or a recent ABAP Platform version. "+
 				"On older ECC systems, create DDIC objects via transaction SE11", ot)
 		}
+	}
+	// SAP's own answer is kept: a 404 with another cause should not hide behind the hint.
+	if resp.StatusCode == http.StatusNotFound && strings.EqualFold(objectType, objTypeHTTP) {
+		return fmt.Errorf("CreateObject: the %s endpoint for HTTP services is probably not available on this SAP system — "+
+			"HTTP service objects need S/4HANA or a recent ABAP Platform version: %w", info.endpoint, checkResponse(resp))
 	}
 	if err := checkResponse(resp); err != nil {
 		return err
@@ -306,7 +342,14 @@ func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, module
 	return checkResponse(resp)
 }
 
-func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, transport string) error {
+func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error {
+	// The fixed values of domain ABAP_LANGUAGE_VERSION. Checking them also
+	// catches a transport number passed one position too early (adtler#254).
+	switch languageVersion {
+	case "", "2", LanguageVersionCloudDevelopment:
+	default:
+		return fmt.Errorf("CreatePackage: language version %q is not a value of ABAP_LANGUAGE_VERSION (\"\", \"2\" or \"5\")", languageVersion)
+	}
 	body, err := xml.Marshal(adtxml.CreatePackage{
 		NSPak:       "http://www.sap.com/adt/packages",
 		NSCore:      nsADTCore,
@@ -314,7 +357,7 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 		Type:        ObjectTypePackage,
 		Description: description,
 		Responsible: strings.ToUpper(responsible),
-		Attributes:  adtxml.PakAttributes{PackageType: "development"},
+		Attributes:  adtxml.PakAttributes{PackageType: "development", LanguageVersion: languageVersion},
 		Transport: adtxml.PakTransport{
 			SoftwareComponent: adtxml.PakNamedItem{Name: softwareComponent},
 			TransportLayer:    adtxml.PakNamedItem{Name: transportLayer},

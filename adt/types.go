@@ -26,7 +26,30 @@ type ObjectInfo struct {
 	Name        string
 	Description string
 	PackageName string
+	// ABAPLanguageVersion is the object's language version as its document
+	// names it, e.g. "standard" or "cloudDevelopment". Empty where ADT does
+	// not report one, which includes packages.
+	ABAPLanguageVersion string
+	// PackageLanguageVersion is set for packages only: the domain value of
+	// ABAP_LANGUAGE_VERSION ("" Standard ABAP, "2" ABAP for Key Users, "5"
+	// ABAP for Cloud Development). It is the package's setting, not the
+	// version of every object in it: SAP classes in a key-user package
+	// report "standard" (measured on S/4HANA, SAP_BASIS 816). Empty also
+	// when the release does not report the attribute at all.
+	PackageLanguageVersion string
 }
+
+// HTTPService is what GetHTTPService reads from an HTTP service (R3TR HTTP).
+type HTTPService struct {
+	Name         string
+	Description  string
+	HandlerClass string // class implementing IF_HTTP_SERVICE_EXTENSION; empty when none is set
+	URL          string // path the service answers at, e.g. /sap/bc/http/sap/<name>
+}
+
+// LanguageVersionCloudDevelopment is the ABAP_LANGUAGE_VERSION value of an
+// ABAP Cloud package ("ABAP for Cloud Development"), for CreatePackage.
+const LanguageVersionCloudDevelopment = "5"
 
 // ActivationMessage is a per-object message from an activation response.
 type ActivationMessage struct {

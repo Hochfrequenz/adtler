@@ -89,7 +89,7 @@ func TestCreatePackage_Integration(t *testing.T) {
 	transportLayer := strings.TrimSpace(layerRes.Rows[0][0])
 
 	err = client.CreatePackage(ctx, pkgName, "Integration test package",
-		cfg.User, "HOME", transportLayer, "")
+		cfg.User, "HOME", transportLayer, "", "")
 	if err != nil {
 		// The reuse branch below is how adtler#149 stayed invisible. This test
 		// does not delete its package (the client could not until adtler#150, an

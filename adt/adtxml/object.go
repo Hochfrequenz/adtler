@@ -57,6 +57,29 @@ type CreateDDLSource struct {
 	PackageRef  PackageRef `xml:"adtcore:packageRef"`
 }
 
+// CreateHTTPService is the XML body for creating an HTTP service (R3TR HTTP).
+// S/4HANA only. It is the object document's root element with the attributes
+// a create needs; SAP accepts it without a handler class (adtler#255).
+type CreateHTTPService struct {
+	XMLName      xml.Name   `xml:"http:abap"`
+	NSHTTP       string     `xml:"xmlns:http,attr"`
+	NSCore       string     `xml:"xmlns:adtcore,attr"`
+	Type         string     `xml:"adtcore:type,attr"`
+	Description  string     `xml:"adtcore:description,attr"`
+	Name         string     `xml:"adtcore:name,attr"`
+	HandlerClass string     `xml:"http:handler_servicehandler,attr,omitempty"`
+	PackageRef   PackageRef `xml:"adtcore:packageRef"`
+}
+
+// HTTPService is the part of an HTTP service's object document that
+// GetHTTPService reads.
+type HTTPService struct {
+	Name         string `xml:"name,attr"`
+	Description  string `xml:"description,attr"`
+	HandlerClass string `xml:"handler_servicehandler,attr"`
+	CanonicalURL string `xml:"header_canonicalurl,attr"`
+}
+
 // CreateTable is the XML body for creating a transparent table (TABL). S4 only.
 // Note: the table is created empty — use SetSource with DDL syntax to define fields,
 // then ActivateObjects to make it usable.
@@ -142,6 +165,10 @@ type CreatePackage struct {
 // PakAttributes holds package attributes like packageType.
 type PakAttributes struct {
 	PackageType string `xml:"pak:packageType,attr"`
+	// LanguageVersion is the domain value of ABAP_LANGUAGE_VERSION ("" Standard
+	// ABAP, "2" ABAP for Key Users, "5" ABAP for Cloud Development). Omitted
+	// when empty so SAP keeps choosing its default (adtler#254).
+	LanguageVersion string `xml:"pak:languageVersion,attr,omitempty"`
 }
 
 // PakSuperPackage references the parent package (empty for top-level).
