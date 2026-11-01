@@ -19,7 +19,7 @@ import (
 // The delete is part of the assertion: before HTTP had an Accept entry,
 // DeleteObject's ETag read was answered 406.
 //
-// On a system without them (SAP ERP 6.0) the create must fail with the
+// On SAP ERP 6.0, which has no HTTP services, the create must fail with the
 // "not available on this SAP system" message instead of a raw 404.
 //
 // The handler class is discovered: the test borrows the one of an existing
@@ -28,24 +28,32 @@ func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
 		t.Run(sys.Name, func(t *testing.T) {
-			handler := discoverHTTPHandlerClass(t, sys)
+			flavor, err := sys.Client.SystemFlavor(ctx)
+			if err != nil {
+				t.Fatalf("[%s] SystemFlavor: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
+			}
 			name := fmt.Sprintf("ZADTLER_HT%05d", rand.Intn(100000)) //nolint:gosec // throwaway name, not security-sensitive
 			uri, err := adt.ObjectURI("HTTP", name)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			if handler == "" {
+			if flavor == adt.SystemFlavorECC {
 				err := sys.Client.CreateHTTPService(ctx, name, "$TMP", "adtler#255 integration test", "CL_EXAMPLE", "")
 				if err == nil {
 					removeProgramIfPresent(t, sys.Client, uri)
-					t.Fatalf("[%s] found no HTTP services, yet CreateHTTPService succeeded", sys.Name)
+					t.Fatalf("[%s] ECC system, yet CreateHTTPService succeeded", sys.Name)
 				}
 				if !strings.Contains(err.Error(), "not available on this SAP system") {
 					t.Fatalf("[%s] want the 'not available' message, got: %s", sys.Name, redact(err.Error(), sys.Config.Host, ""))
 				}
-				t.Logf("[%s] no HTTP services on this system; create refused as expected", sys.Name)
+				t.Logf("[%s] ECC system; create refused as expected", sys.Name)
 				return
+			}
+
+			handler := discoverHTTPHandlerClass(t, sys)
+			if handler == "" {
+				t.Skipf("[%s] found no HTTP service with a handler class to borrow", sys.Name)
 			}
 
 			if err := sys.Client.CreateHTTPService(ctx, name, "$TMP", "adtler#255 integration test", handler, ""); err != nil {

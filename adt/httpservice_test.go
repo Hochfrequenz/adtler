@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -109,6 +110,11 @@ func TestCreateHTTPService_UnavailableOnECC(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not available on this SAP system") || !strings.Contains(err.Error(), "HTTP") {
 		t.Errorf("error should say HTTP services are not available on this system, got: %v", err)
+	}
+	// SAP's own answer stays inspectable, in case the 404 had another cause.
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusNotFound {
+		t.Errorf("error should wrap SAP's 404 as *adt.ADTError, got: %v", err)
 	}
 }
 

@@ -32,7 +32,8 @@ func (c *httpClient) GetHTTPService(ctx context.Context, name string) (*HTTPServ
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("GetHTTPService parsing: %w", err)
 	}
-	// An HTML page or another document parses without error into empty fields.
+	// adtxml.HTTPService names no root element, so any XML document (or an
+	// HTML page) parses without error into empty fields.
 	if doc.Name == "" {
 		return nil, fmt.Errorf("GetHTTPService parsing: response carried no adtcore:name — it is not an HTTP service document")
 	}

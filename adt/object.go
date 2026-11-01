@@ -266,9 +266,10 @@ func (c *httpClient) createObject(ctx context.Context, objectType, name, package
 				"On older ECC systems, create DDIC objects via transaction SE11", ot)
 		}
 	}
+	// SAP's own answer is kept: a 404 with another cause should not hide behind the hint.
 	if resp.StatusCode == http.StatusNotFound && strings.EqualFold(objectType, objTypeHTTP) {
-		return fmt.Errorf("CreateObject: the %s endpoint for HTTP services is not available on this SAP system — "+
-			"HTTP service objects need S/4HANA or a recent ABAP Platform version", info.endpoint)
+		return fmt.Errorf("CreateObject: the %s endpoint for HTTP services is probably not available on this SAP system — "+
+			"HTTP service objects need S/4HANA or a recent ABAP Platform version: %w", info.endpoint, checkResponse(resp))
 	}
 	if err := checkResponse(resp); err != nil {
 		return err

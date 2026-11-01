@@ -407,8 +407,9 @@ It lives at `/sap/bc/adt/ucon/httpservices` and speaks
   object's *Publish Locally* action (`POST <uri>/publish`, answered 200) for a service in
   `$TMP`. Whether a service in a transportable package gets its node, and how, is not
   measured yet. `ICF_NAME` holds 15 characters, so keep service names that short.
-- SAP ERP 6.0 (SAP_BASIS 750) has no such endpoint; a create there fails with
-  "not available on this SAP system".
+- SAP ERP 6.0 (SAP_BASIS 750) does not publish the endpoint in its discovery document, and
+  a GET below it answers 404. A create that SAP answers with 404 fails with "probably not
+  available on this SAP system", followed by SAP's own error.
 
 ## Status
 
