@@ -435,10 +435,13 @@ func (c *httpClient) deleteObject(ctx context.Context, objectURI, transport stri
 	// Use optimistic locking via If-Match header: SAP locks internally and deletes.
 	// The pessimistic path (lockHandle query param) fails on some systems because
 	// CL_ADT_ENQUEUE=>READ doesn't find the REST-session lock.
-	// Fetch the ETag from the object URI itself (not /source/main).
-	etag, err := c.fetchDeleteETag(ctx, objectURI)
+	// Fetch the ETag from the object URI itself (not /source/main). FetchETag
+	// retries a 406 with */*, so an object kind without an Accept entry can be
+	// deleted too (adtler#257); the */* read returns the same vendor type and
+	// ETag as the specific one.
+	etag, err := c.FetchETag(ctx, objectURI)
 	if err != nil {
-		return err
+		return fmt.Errorf("DeleteObject: %w", err)
 	}
 	err = c.sendDelete(ctx, path, etag)
 	if ClassifyError(err) != ErrorEtagMismatch || !isPackageURI(objectURI) {
@@ -474,29 +477,6 @@ func isPackageURI(objectURI string) bool {
 		name = name[:i]
 	}
 	return strings.Trim(name, "/") != "" && !strings.Contains(name, "..")
-}
-
-// fetchDeleteETag reads the object's ETag for a DELETE's If-Match header.
-func (c *httpClient) fetchDeleteETag(ctx context.Context, objectURI string) (string, error) {
-	etagResp, err := c.doRead(ctx, objectURI, map[string]string{"Accept": c.acceptHeaderForURI(objectURI)})
-	if err != nil {
-		return "", fmt.Errorf("DeleteObject fetch ETag: %w", err)
-	}
-	defer func() { _ = etagResp.Body.Close() }()
-	// Check the HTTP status before reading the ETag header. doRead only
-	// surfaces transport-level errors; an HTTP 4xx response (e.g. S/4 returning
-	// 400 ExceptionResourceWrongData for a CLAS bare-URI GET) flows through as
-	// a "successful" response with no ETag header, and the old code surfaced
-	// the misleading "no ETag returned" instead of the real SAP error.
-	// See adtler#19 / mcp-server-abap#299.
-	if err := checkResponse(etagResp); err != nil {
-		return "", fmt.Errorf("DeleteObject fetch ETag: %w", err)
-	}
-	etag := etagResp.Header.Get("ETag")
-	if etag == "" {
-		return "", fmt.Errorf("DeleteObject: no ETag returned for %s", objectURI)
-	}
-	return etag, nil
 }
 
 // sendDelete sends the DELETE with the given ETag as If-Match, or without any
