@@ -14,7 +14,7 @@ import (
 
 // FetchETag reads the ETag for any object URI by GETting the bare URI with
 // the type-appropriate Accept header (via acceptHeaderForURI / discovery).
-// This is the same pattern DeleteObject uses for optimistic locking.
+// DeleteObject reads its If-Match ETag through it.
 //
 // Unlike GetSource (which hardcodes /source/main and text/plain), this works
 // for ALL object types including CLAS, DTEL, DOMA, and TABL — because it

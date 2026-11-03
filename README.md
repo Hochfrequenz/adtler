@@ -355,7 +355,17 @@ a dead end for this reason; the same URI answers `200` when asked with `*/*`.
 `GetObjectInfo` and `FetchETag` therefore make their specific offer first and,
 on a 406 only, ask once more with `*/*`. That keeps object kinds this client
 has no catalogue entry for readable — enhancement implementations, for one,
-which behave the same way. The retry is a safety net, not the plan: function
+which behave the same way. `DeleteObject` reads its ETag through `FetchETag`, so
+such objects can be deleted as well
+([#257](https://github.com/Hochfrequenz/adtler/issues/257)). Measured on
+SAP S/4HANA on-premise (SAP_BASIS 816, S4CORE 109) on 2026-11-03: the `*/*` read
+returned the object kind's own vendor type, never HTML, and the same ETag as the
+specific read. On a read, both releases check the `Accept` header before they
+look the object up, so a missing object answers 406 to a wrong offer and 404 to
+`*/*`; this is the opposite order from a create, where SAP checks `Accept` last
+(see "What this client cannot currently undo"). On SAP ERP 6.0 an enhancement implementation's document carries
+no ETag at all, so `DeleteObject` still cannot delete one there and says so.
+The retry is a safety net, not the plan: function
 group includes and function modules share the function group's URI prefix but
 not its media type, so each has its own first offer (`fincludes.v2+xml` and
 `fmodules.v3+xml`) and a lookup does not cost a 406 on S/4HANA.
