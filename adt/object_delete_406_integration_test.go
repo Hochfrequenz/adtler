@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"testing"
@@ -21,21 +22,35 @@ import (
 // DeleteObject stopped at the 406; with the */* retry the read reaches the
 // object lookup, and a missing object comes back as a 404.
 //
-// The object does not exist, so the test creates and deletes nothing: the read
-// fails and no DELETE is sent.
+// The object is meant not to exist, so the read fails and no DELETE is sent.
+// The client refuses to send a DELETE all the same, so an object that happens
+// to carry this name is never removed: the test then fails instead.
 func TestDeleteObject_KindWithoutAcceptEntry_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	const missingURI = "/sap/bc/adt/enhancements/enhoxh/zadtler_257_missing"
 
 	for _, sys := range eachSystem(t) {
 		t.Run(sys.Name, func(t *testing.T) {
-			err := sys.Client.DeleteObject(ctx, missingURI, "", "")
+			base := http.DefaultTransport.(*http.Transport).Clone()
+			base.TLSClientConfig = &tls.Config{InsecureSkipVerify: sys.Config.TLSSkipVerify} //nolint:gosec
+			t.Cleanup(base.CloseIdleConnections)
+			client := adt.NewClientWithTransport(sys.Config, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodDelete {
+					return nil, errBlockedWrite
+				}
+				return base.RoundTrip(req)
+			}))
+
+			err := client.DeleteObject(ctx, missingURI, "", "")
 			if err == nil {
 				t.Fatal("DeleteObject of a missing enhancement implementation succeeded")
 			}
+			if errors.Is(err, errBlockedWrite) {
+				t.Fatal("an enhancement implementation with the test's name exists; the DELETE was blocked, pick another name")
+			}
 			var adtErr *adt.ADTError
 			if !errors.As(err, &adtErr) {
-				t.Fatalf("want an *adt.ADTError, got %T: %v", err, err)
+				t.Fatalf("want an *adt.ADTError, got %T: %s", err, redact(err.Error(), sys.Config.Host, ""))
 			}
 			t.Logf("status %d, type %s", adtErr.StatusCode, adtErr.Type)
 			if adtErr.StatusCode != http.StatusNotFound {
