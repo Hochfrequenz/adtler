@@ -3,6 +3,7 @@ package adt_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,6 +209,51 @@ func (tr cancelOnPathTransport) RoundTrip(req *http.Request) (*http.Response, er
 		return nil, req.Context().Err()
 	}
 	return http.DefaultTransport.RoundTrip(req)
+}
+
+// cancelOnBodyReadTransport delivers the response for path, but cancels the
+// caller's context on the first read of its body, the way a caller that gives
+// up while the answer is still arriving would.
+type cancelOnBodyReadTransport struct {
+	path   string
+	cancel context.CancelFunc
+}
+
+func (tr cancelOnBodyReadTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err == nil && req.URL.Path == tr.path {
+		resp.Body = cancellingBody{ReadCloser: resp.Body, cancel: tr.cancel}
+	}
+	return resp, err
+}
+
+type cancellingBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancellingBody) Read([]byte) (int, error) {
+	b.cancel()
+	return 0, context.Canceled
+}
+
+// TestGetObjectInfo_HTTPService_CancelledWhileReadingTheAnswer pins that a
+// cancellation during the body read is reported too, not mistaken for an
+// unreadable answer and turned into an empty package.
+func TestGetObjectInfo_HTTPService_CancelledWhileReadingTheAnswer(t *testing.T) {
+	srv := newHTTPSvcPackageServer(httpSvcXML, http.StatusOK)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := adt.NewClientWithTransport(
+		sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"},
+		cancelOnBodyReadTransport{path: objPropsPath, cancel: cancel})
+
+	info, err := client.GetObjectInfo(ctx, httpSvcURI)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetObjectInfo: got info %v, error %v, want context.Canceled", info, err)
+	}
 }
 
 // TestGetObjectInfo_HTTPService_CancelledDuringLookup pins that a caller who

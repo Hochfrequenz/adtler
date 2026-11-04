@@ -311,7 +311,10 @@ func (c *httpClient) packageFromObjectProperties(ctx context.Context, objectURI 
 			Package string `xml:"package,attr"`
 		} `xml:"object"`
 	}
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", ctx.Err()
+	}
 	if xml.Unmarshal(data, &props) != nil {
 		return "", nil
 	}
