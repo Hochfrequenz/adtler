@@ -256,6 +256,25 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	}
 	t.Logf("[3] activated v2 source")
 
+	// The same request also creates a program (#268): RollbackTransport must
+	// report it in Created and leave it in place, and DeleteCreatedObjects
+	// must delete it while restoring the changed program as before.
+	newName := timestampedName("Z_RBN_")
+	newURI := "/sap/bc/adt/programs/programs/" + newName
+	if err := client.CreateObject(ctx, "PROG", newName, testPackage, "Rollback test, created", t2); err != nil {
+		t.Fatalf("[3] CreateObject (created program): %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := client.GetObjectInfo(context.Background(), newURI); adt.ClassifyError(err) == adt.ErrorNotFound {
+			return
+		}
+		if err := client.DeleteObject(context.Background(), newURI, "", t2); err != nil {
+			t.Logf("cleanup: delete created program: %v (manual cleanup may be needed)", err)
+		}
+	})
+	writeAndActivate(t, client, newURI, "REPORT "+newName+".\n\" created by T2\n", t2)
+	t.Logf("[3] created and activated a second program in T2")
+
 	// ── Phase 4: RollbackTransport(T2) — expect v1 restored ────────────────
 	result, err := client.RollbackTransport(ctx, t2)
 	if err != nil {
@@ -279,6 +298,12 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	if len(result.Failed) > 0 {
 		t.Errorf("[4] unexpected rollback failures: %v", result.Failed)
 	}
+	if !rollbackLists(result.Created, newName) {
+		t.Errorf("[4] created program not in Created; created=%v", result.Created)
+	}
+	if _, err := client.GetObjectInfo(ctx, newURI); err != nil {
+		t.Errorf("[4] created program gone after RollbackTransport without options: %v", err)
+	}
 
 	// ── Phase 5: Verify source is back to v1 ───────────────────────────────
 	after, err := client.GetSource(ctx, objectURI)
@@ -295,4 +320,31 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		t.Errorf("[5] source after rollback still contains %q — rollback did not restore v1", v2Marker)
 	}
 	t.Logf("[5] source correctly restored to v1 (%d bytes)", len(after.Source))
+
+	// ── Phase 6: RollbackTransportWithOptions(T2, DeleteCreatedObjects) ────
+	_ = client.Logout(ctx)
+	result, err = client.RollbackTransportWithOptions(ctx, t2, adt.RollbackOptions{DeleteCreatedObjects: true})
+	if err != nil {
+		t.Fatalf("[6] RollbackTransportWithOptions: %v", err)
+	}
+	logRollback(t, "[6]", t2, result)
+	if !rollbackLists(result.Restored, objName) {
+		t.Errorf("[6] changed program not in Restored")
+	}
+	if !rollbackLists(result.Deleted, newName) {
+		t.Errorf("[6] created program not in Deleted")
+	}
+	if len(result.Failed) != 0 || len(result.Created) != 0 {
+		t.Errorf("[6] failed=%v created=%v, want both empty", result.Failed, result.Created)
+	}
+	if _, err := client.GetObjectInfo(ctx, newURI); adt.ClassifyError(err) != adt.ErrorNotFound {
+		t.Errorf("[6] GetObjectInfo of the created program: want ErrorNotFound, got %v", err)
+	}
+	after, err = client.GetSource(ctx, objectURI)
+	if err != nil {
+		t.Fatalf("[6] GetSource: %v", err)
+	}
+	if !strings.Contains(after.Source, v1Marker) {
+		t.Errorf("[6] changed program no longer at v1 after the second rollback")
+	}
 }

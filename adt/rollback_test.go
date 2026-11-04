@@ -175,7 +175,7 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 </feed>`))
 		case r.URL.Path == "/older-version":
 			_, _ = w.Write([]byte("REPORT ZTEST.\n"))
-		case r.URL.Path == object && r.URL.Query().Get("_action") == "LOCK":
+		case r.URL.Path == object && r.URL.Query().Get("_action") == createdTestLockAction:
 			calls = append(calls, "lock")
 			_, _ = w.Write([]byte("lock-handle"))
 		case r.URL.Path == object+"/source/main" && r.Method == http.MethodGet:
@@ -201,8 +201,12 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 	defer srv.Close()
 
 	client := NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}).(*httpClient)
-	if err := client.rollbackObject(context.Background(), object, []string{request, task}); err != nil {
-		t.Fatalf("rollbackObject: %v", err)
+	created, err := client.rollbackOrClassify(context.Background(), object, []string{request, task})
+	if err != nil {
+		t.Fatalf("rollbackOrClassify: %v", err)
+	}
+	if created {
+		t.Fatal("rollbackOrClassify reported the object as created; it has a version outside the transport")
 	}
 	if corrNr != request {
 		t.Errorf("SetSource corrNr = %q, want request number %q", corrNr, request)

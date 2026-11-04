@@ -92,8 +92,9 @@ fallback or cleanup they would otherwise send: `DeleteObject`,
 `LockMap.ResolveETag`, `RemoveFromTransport`, `CopyTransportObjects`,
 `AddPackageToTransport`, `ReleaseTransport` (its polling
 and the read of its result), `CreateObject`, `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
-`401` as their error), `GetObjectDependencies`, `RollbackTransport` (the objects
-not processed are reported as failed) and `VerifySource`. When `VerifySource`
+`401` as their error), `GetObjectDependencies`, `RollbackTransport` and
+`RollbackTransportWithOptions` (the objects not processed, or not deleted, are
+reported as failed) and `VerifySource`. When `VerifySource`
 stops this way, its temporary program stays in `$TMP`, and the error names it.
 
 `Logout` reports a `401` on its logoff request as an `*adt.ADTError` and ignores
@@ -226,6 +227,17 @@ reasoning generalises. It was true of packages until
 [#150](https://github.com/Hochfrequenz/adtler/issues/150) made them deletable
 (below), and it stays true of `TestCreatePackage_Integration`, which does not
 use that yet.
+
+**A rollback that deletes cannot itself be rolled back.**
+`RollbackTransportWithOptions` with `DeleteCreatedObjects` deletes the source
+objects a request created
+([#268](https://github.com/Hochfrequenz/adtler/issues/268)). adtler has no way
+to bring a deleted object back. It deletes only objects whose version history
+shows nothing but this request and whose TADIR source system is the request's
+own, so an imported object is kept; but an object that existed in this system
+before the request without a version outside it (a local object without
+versions, later moved into the request) is lost for good. That is why the option is off by default:
+`RollbackTransport` reports such objects in `Created` and leaves them in place.
 
 **Deleting a package works since #150.** `DeleteObject` used to send the ETag it
 had just read as `If-Match`, and SAP S/4HANA refused it with `412` for a package
