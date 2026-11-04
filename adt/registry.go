@@ -179,6 +179,14 @@ func (r *ClientRegistry) AddToTransport(ctx context.Context, objectURI, transpor
 func (r *ClientRegistry) RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error {
 	return r.activeClient().RemoveFromTransport(ctx, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position)
 }
+
+func (r *ClientRegistry) CopyTransportObjects(ctx context.Context, sourceRequest, targetRequest string, withDocumentation bool) error {
+	return r.activeClient().CopyTransportObjects(ctx, sourceRequest, targetRequest, withDocumentation)
+}
+
+func (r *ClientRegistry) AddPackageToTransport(ctx context.Context, packageName, targetRequest string, includeSubpackages bool) error {
+	return r.activeClient().AddPackageToTransport(ctx, packageName, targetRequest, includeSubpackages)
+}
 func (r *ClientRegistry) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return r.activeClient().ReleaseTransportWithTasks(ctx, transportNumber)
 }

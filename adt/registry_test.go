@@ -270,6 +270,20 @@ func TestRegistryDelegatesAllMethods(t *testing.T) {
 			t.Fatalf("RemoveFromTransport: %v", err)
 		}
 	})
+	// The mock answers transport reads with an empty body, so the capability
+	// gate refuses both calls; reaching that gate is what shows delegation.
+	t.Run("CopyTransportObjects", func(t *testing.T) {
+		err := registry.CopyTransportObjects(ctx, "NPLK000002", "NPLK000001", true)
+		if adt.ClassifyError(err) != adt.ErrorNotSupported {
+			t.Fatalf("CopyTransportObjects: want the capability gate's error, got %v", err)
+		}
+	})
+	t.Run("AddPackageToTransport", func(t *testing.T) {
+		err := registry.AddPackageToTransport(ctx, "ZPACKAGE", "NPLK000001", false)
+		if adt.ClassifyError(err) != adt.ErrorNotSupported {
+			t.Fatalf("AddPackageToTransport: want the capability gate's error, got %v", err)
+		}
+	})
 	t.Run("LockObject", func(t *testing.T) {
 		if _, err := registry.LockObject(ctx, objURI); err != nil {
 			t.Fatalf("LockObject: %v", err)

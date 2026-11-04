@@ -41,16 +41,20 @@ type TransportComponent struct {
 // TMRoot is the XML body for transport organizer actions (removeobject, etc.).
 // Namespace: http://www.sap.com/cts/adt/tm
 type TMRoot struct {
-	XMLName    xml.Name  `xml:"tm:root"`
-	NSTM       string    `xml:"xmlns:tm,attr"`
-	UserAction string    `xml:"tm:useraction,attr"`
-	Number     string    `xml:"tm:number,attr"`
-	Request    TMRequest `xml:"tm:request"`
+	XMLName    xml.Name `xml:"tm:root"`
+	NSTM       string   `xml:"xmlns:tm,attr"`
+	UserAction string   `xml:"tm:useraction,attr"`
+	// Number and Request are omitted when empty. S/4 (SAP_BASIS 816) answers
+	// 400 ExceptionInvalidData "Check of condition failed" to a body that
+	// carries an empty tm:number: addobjectsfrompackage sends no root number,
+	// and addobjectfromrequest no <tm:request> (measured 2026-11-04, #267).
+	Number  string     `xml:"tm:number,attr,omitempty"`
+	Request *TMRequest `xml:"tm:request,omitempty"`
 }
 
 // TMRequest wraps objects in a transport organizer request body.
 type TMRequest struct {
-	Number  string         `xml:"tm:number,attr"`
+	Number  string         `xml:"tm:number,attr,omitempty"`
 	Objects []TMAbapObject `xml:"tm:abap_object"`
 }
 

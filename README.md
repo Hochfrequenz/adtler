@@ -89,7 +89,8 @@ the request once.
 
 Calls that send several requests stop at the first `401` too, including any
 fallback or cleanup they would otherwise send: `DeleteObject`,
-`LockMap.ResolveETag`, `RemoveFromTransport`, `ReleaseTransport` (its polling
+`LockMap.ResolveETag`, `RemoveFromTransport`, `CopyTransportObjects`,
+`AddPackageToTransport`, `ReleaseTransport` (its polling
 and the read of its result), `CreateObject`, `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
 `401` as their error), `GetObjectDependencies`, `RollbackTransport` (the objects
 not processed are reported as failed) and `VerifySource`. When `VerifySource`

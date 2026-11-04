@@ -603,10 +603,10 @@ func (c *httpClient) RemoveFromTransport(ctx context.Context, taskNumber, parent
 	}
 
 	body, err := xml.Marshal(adtxml.TMRoot{
-		NSTM:       "http://www.sap.com/cts/adt/tm",
+		NSTM:       nsTM,
 		UserAction: "removeobject",
 		Number:     taskNumber,
-		Request: adtxml.TMRequest{
+		Request: &adtxml.TMRequest{
 			Number: parentTransport,
 			Objects: []adtxml.TMAbapObject{{
 				PgmID:    pgmID,
