@@ -16,8 +16,9 @@ import (
 //
 // Removing an object from a transport request reached SAP's ADT only in
 // AS ABAP 7.53 SP00 / ABAP Platform 1809. On older releases the endpoint
-// does not exist and the PUT this library used to send was absorbed by a
-// legacy change-owner handler, so RemoveFromTransport now derives the
+// does not exist and the PUT this library used to send was answered by a
+// legacy change-owner handler with a misleading empty-user error (nothing
+// changed), so RemoveFromTransport now derives the
 // system's capability from the atom relations the server advertises and
 // blocks the write when it is confirmed unsupported (see
 // adt.RemoveObjectSupport and ensureRemoveObjectSupported, adtler#125).

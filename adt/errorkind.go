@@ -51,9 +51,10 @@ const (
 	// system at all — not rejected by SAP, but refused locally before any
 	// request went out. RemoveFromTransport's capability gate is the first
 	// source of this kind: on a system that does not advertise the
-	// removeobject relation (see RemoveObjectSupport), sending the PUT
-	// anyway would be silently reinterpreted by a legacy handler as an
-	// unrelated, damaging operation, so the call never leaves the library.
+	// removeobject relation (see RemoveObjectSupport), the PUT would reach a
+	// legacy change-owner handler, which fails without a target user and
+	// answers with a misleading error. The call therefore never leaves the
+	// library and reports this kind instead.
 	ErrorNotSupported
 	// ErrorUnauthorized means SAP rejected the logon itself (HTTP 401): the
 	// user name or password is wrong, the user is locked, or the OAuth token

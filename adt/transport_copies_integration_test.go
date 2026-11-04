@@ -17,8 +17,9 @@ import (
 // It branches on what the library reports, never on the system's name. A
 // system whose transport organizer does not advertise the
 // addobjectsfrompackage relation (ECC, SAP_BASIS 750) must refuse both calls
-// with ErrorNotSupported before any write — on such a system an unknown user
-// action reaches a legacy change-owner handler instead of being rejected.
+// with ErrorNotSupported before any write — on such a system every PUT goes
+// to a legacy change-owner handler, which fails without a target user and
+// returns an error about the owner instead of rejecting the action.
 // That branch is decided with an empty source request, before any object is
 // created, so it leaves nothing behind that this client could not remove.
 //

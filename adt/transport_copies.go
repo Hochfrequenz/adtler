@@ -63,8 +63,10 @@ const transportOrganizerType = "application/vnd.sap.adt.transportorganizer.v1+xm
 // targetRequest does not advertise the addobjectsfrompackage relation —
 // on a system older than ABAP Platform 2105, or for a released target.
 // On an older system the transport organizer does not reject an unknown
-// user action but hands it to a legacy change-owner handler (see #125), so
-// the PUT must not go out unless the system says it understands it.
+// user action: it treats every PUT as a change-owner request (see #125),
+// which fails without a target user and changes nothing, with an error
+// about the owner. The PUT goes out only when the system says it
+// understands the action, so the caller gets an accurate answer instead.
 func (c *httpClient) CopyTransportObjects(ctx context.Context, sourceRequest, targetRequest string, withDocumentation bool) error {
 	sourceRequest = strings.ToUpper(strings.TrimSpace(sourceRequest))
 	targetRequest = strings.ToUpper(strings.TrimSpace(targetRequest))
@@ -205,7 +207,7 @@ func (c *httpClient) putTransportUserAction(ctx context.Context, targetRequest, 
 // refuse anyway (released). This deliberately also refuses a system between
 // ABAP Platform 1809 and 2105 that might implement addobjectfromrequest
 // without advertising it: refusing there costs a missed feature, sending
-// there could reach the legacy change-owner handler.
+// to a system without the action returns a misleading change-owner error.
 func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetRequest string) error {
 	data, err := c.readTransportXML(ctx, targetRequest, transportOrganizerType)
 	if err != nil {
