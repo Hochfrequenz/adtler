@@ -271,7 +271,54 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 			info.PackageName = pkg
 		}
 	}
+	if info.PackageName == "" && strings.HasPrefix(objectURI, objectTypeMap[objTypeHTTP].endpoint+"/") {
+		pkg, err := c.packageFromObjectProperties(ctx, objectURI)
+		if err != nil {
+			return nil, err
+		}
+		info.PackageName = pkg
+	}
 	return info, nil
+}
+
+// packageFromObjectProperties reads an object's package from the
+// object-properties endpoint, keyed by the object's URI. An HTTP service's own
+// document carries no packageRef on SAP S/4HANA (SAP_BASIS 816), neither for an
+// SAP-delivered service nor for one in $TMP, and links to no document that does
+// (adtler#260).
+//
+// Best effort, like packageOfFunctionGroup: a failed lookup returns "", unless
+// the caller's context is done or SAP answered 401, which is final and must
+// not pass for a service without a package.
+func (c *httpClient) packageFromObjectProperties(ctx context.Context, objectURI string) (string, error) {
+	params := url.Values{}
+	params.Set("uri", objectURI)
+	params.Set("facet", "package")
+	resp, err := c.readWithAcceptFallback(ctx, "/sap/bc/adt/repository/informationsystem/objectproperties/values?"+params.Encode(),
+		"application/vnd.sap.adt.repository.objproperties.result.v1+xml")
+	if err == nil {
+		defer func() { _ = resp.Body.Close() }()
+		err = checkResponse(resp)
+	}
+	if isUnauthorized(err) {
+		return "", err
+	}
+	if err != nil {
+		return "", ctx.Err()
+	}
+	var props struct {
+		Object struct {
+			Package string `xml:"package,attr"`
+		} `xml:"object"`
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", ctx.Err()
+	}
+	if xml.Unmarshal(data, &props) != nil {
+		return "", nil
+	}
+	return props.Object.Package, nil
 }
 
 // functionGroupURIOfPart returns the URI of the function group that a function

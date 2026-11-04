@@ -381,6 +381,15 @@ empty `PackageName`. A function group that SAP generated for its own use is in n
 at all (it has no `TADIR` entry), so its function modules and includes report none either;
 that is correct, not a gap.
 
+**An HTTP service's package comes from the object-properties endpoint.** On SAP S/4HANA
+(SAP_BASIS 816) an HTTP service's object document has no `packageRef` and links to no document
+that has one, so `GetObjectInfo` asks
+`/sap/bc/adt/repository/informationsystem/objectproperties/values?uri=…&facet=package`, keyed
+by the service's own URI, and reports the package from there (retrying once with `*/*` on a
+406, like every object read). Like the function-group lookup,
+it costs no request when the document names a package, and a failed lookup returns the
+service with an empty `PackageName`. A 401 is the exception: it is returned as an error.
+
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.
 
