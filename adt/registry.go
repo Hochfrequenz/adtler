@@ -187,6 +187,7 @@ func (r *ClientRegistry) CopyTransportObjects(ctx context.Context, sourceRequest
 func (r *ClientRegistry) AddPackageToTransport(ctx context.Context, packageName, targetRequest string, includeSubpackages bool) error {
 	return r.activeClient().AddPackageToTransport(ctx, packageName, targetRequest, includeSubpackages)
 }
+
 func (r *ClientRegistry) ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return r.activeClient().ReleaseTransportWithTasks(ctx, transportNumber)
 }

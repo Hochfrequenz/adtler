@@ -42,7 +42,11 @@ const transportOrganizerType = "application/vnd.sap.adt.transportorganizer.v1+xm
 // it in the target. While a request is modifiable its objects sit in its
 // tasks, so for a modifiable source this copies the request and each of its
 // tasks. A released source already carries its tasks' objects at request
-// level and is copied as one.
+// level and is copied as one. sourceRequest may also be a task, which is
+// copied alone; targetRequest should be a request.
+//
+// The copies are separate PUTs. If one fails, the error names its source
+// and the target keeps what the earlier ones copied.
 //
 // withDocumentation copies the source's documentation as well, which is
 // SAP's default. SAP's own query parameter for this is named
@@ -100,7 +104,8 @@ func (c *httpClient) CopyTransportObjects(ctx context.Context, sourceRequest, ta
 }
 
 // copySources returns the numbers whose entries make up sourceRequest: the
-// request itself, followed by its tasks while it is modifiable.
+// request itself, followed by its tasks unless it is released. A task as
+// source has no tasks of its own and is copied alone.
 func (c *httpClient) copySources(ctx context.Context, sourceRequest string) ([]string, error) {
 	data, err := c.readTransportXML(ctx, sourceRequest, transportOrganizerType)
 	if err != nil {
@@ -111,7 +116,7 @@ func (c *httpClient) copySources(ctx context.Context, sourceRequest string) ([]s
 		return nil, fmt.Errorf("read source %s: %w", sourceRequest, err)
 	}
 	sources := []string{sourceRequest}
-	if info.Status != TransportStatusModifiable {
+	if isReleasedTRStatus(info.Status) {
 		return sources, nil
 	}
 	tasks, err := parseTransportTaskNumbers(data, sourceRequest)
@@ -222,6 +227,14 @@ func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetReques
 			"(added in ABAP Platform 2105; never offered for a released request); include the objects in SE09 instead",
 			targetRequest),
 	}
+}
+
+// isReleasedTRStatus reports whether a TRSTATUS value marks a released
+// request: R (released) or N (released, import protected). D (modifiable),
+// L (modifiable, protected) and O (release started) still hold entries in
+// their tasks, so their tasks are copied too.
+func isReleasedTRStatus(status string) bool {
+	return status == "R" || status == "N"
 }
 
 // validateTransportNumbers rejects empty numbers and numbers that would

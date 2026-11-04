@@ -183,6 +183,59 @@ func TestCopyTransportObjects_ReleasedSourceCopiesRequestOnly(t *testing.T) {
 	}
 }
 
+func TestCopyTransportObjects_ProtectedSourceCopiesTasks(t *testing.T) {
+	// L is "modifiable, protected" in TRSTATUS: its objects are still in
+	// its tasks.
+	srv, puts := copiesServer(t, map[string]string{
+		copiesTarget: copiesSupportedTargetXML,
+		copiesSource: copiesRequestXML(copiesSource, "L", copiesSourceTask),
+	}, http.StatusOK)
+
+	if err := copiesClient(srv).CopyTransportObjects(context.Background(), copiesSource, copiesTarget, true); err != nil {
+		t.Fatalf("CopyTransportObjects: %v", err)
+	}
+	if n := len(puts()); n != 2 {
+		t.Fatalf("got %d PUTs, want 2 (request and its task)", n)
+	}
+}
+
+func TestCopyTransportObjects_StopsAtFirstFailedCopy(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/sap/bc/adt/cts/transportrequests/"
+		switch {
+		case r.URL.Path == csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+		case r.Method == http.MethodGet && r.URL.Path == prefix+copiesTarget:
+			_, _ = w.Write([]byte(copiesSupportedTargetXML))
+		case r.Method == http.MethodGet && r.URL.Path == prefix+copiesSource:
+			_, _ = w.Write([]byte(copiesRequestXML(copiesSource, "D", copiesSourceTask)))
+		case r.Method == http.MethodPut:
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+			if strings.Contains(string(b), copiesSourceTask) {
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	err := copiesClient(srv).CopyTransportObjects(context.Background(), copiesSource, copiesTarget, true)
+	if err == nil || !strings.Contains(err.Error(), copiesSourceTask) {
+		t.Fatalf("want an error naming the failed task, got %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("got %d PUTs, want 2 (request copied, task failed)", len(bodies))
+	}
+}
+
 func TestCopyTransportObjects_UnsupportedSystemSendsNoPUT(t *testing.T) {
 	srv, puts := copiesServer(t, map[string]string{
 		// ECC: the worklist shape, without any add-related relation.

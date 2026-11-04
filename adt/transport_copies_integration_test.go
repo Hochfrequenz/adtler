@@ -4,6 +4,8 @@ package adt_test
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -35,6 +37,11 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 		t.Run(sys.Name, func(t *testing.T) {
 			c := sys.Client
 
+			// The expected branch comes from the system's release, not from
+			// the gate under test: a gate that wrongly refused would
+			// otherwise pass as "unsupported".
+			want := expectAddObjectsSupport(t, c)
+
 			source := createDisposableTransport(t, c, "K", "adtler #267 copy source")
 			target := createDisposableTransport(t, c, "T", "adtler #267 transport of copies")
 
@@ -42,6 +49,9 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			err := c.CopyTransportObjects(ctx, source, target, true)
 			if adt.ClassifyError(err) == adt.ErrorNotSupported {
 				t.Logf("[1] CopyTransportObjects refused (not supported): %v", err)
+				if want == addObjectsSupported {
+					t.Fatalf("[1] refused on a release that has the action")
+				}
 				if err := c.AddPackageToTransport(ctx, testPackage, target, false); adt.ClassifyError(err) != adt.ErrorNotSupported {
 					t.Fatalf("[1] AddPackageToTransport: want ErrorNotSupported on the same system, got %v", err)
 				}
@@ -56,6 +66,9 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("[1] CopyTransportObjects with an empty source: %v", err)
+			}
+			if want == addObjectsUnsupported {
+				t.Fatalf("[1] accepted on a release that lacks the action")
 			}
 
 			// 2. Record a program in the source request.
@@ -90,6 +103,44 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			}
 			t.Logf("[4] package content added to the transport of copies")
 		})
+	}
+}
+
+type addObjectsExpectation int
+
+const (
+	addObjectsEither addObjectsExpectation = iota
+	addObjectsSupported
+	addObjectsUnsupported
+)
+
+// expectAddObjectsSupport derives from the SAP_BASIS release whether the
+// transport organizer must offer addobjectsfrompackage. SAP_BASIS 750 has
+// neither action in IF_CTS_ADT_TM_CONSTANTS and SAP_BASIS 816 has both. The
+// handler dates the package action "2105", which on-premise first ships
+// with SAP_BASIS 756, so 754 and older must refuse, 756 and newer must
+// accept, and 755 is left open.
+func expectAddObjectsSupport(t *testing.T, c adt.Client) addObjectsExpectation {
+	t.Helper()
+	res, err := c.RunQuery(context.Background(), "SELECT release FROM cvers WHERE component = 'SAP_BASIS'", 1)
+	if err != nil {
+		t.Fatalf("CVERS query for SAP_BASIS: %v", err)
+	}
+	if len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		t.Fatalf("CVERS has no SAP_BASIS row")
+	}
+	release, err := strconv.Atoi(strings.TrimSpace(res.Rows[0][0]))
+	if err != nil {
+		t.Fatalf("SAP_BASIS release is not numeric: %v", err)
+	}
+	t.Logf("SAP_BASIS %d", release)
+	switch {
+	case release >= 756:
+		return addObjectsSupported
+	case release <= 754:
+		return addObjectsUnsupported
+	default:
+		return addObjectsEither
 	}
 }
 
