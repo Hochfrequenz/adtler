@@ -116,11 +116,12 @@ const (
 )
 
 // expectAddObjectsSupport derives from the SAP_BASIS release whether the
-// transport organizer must offer addobjectsfrompackage. SAP_BASIS 750 has
-// neither action in IF_CTS_ADT_TM_CONSTANTS and SAP_BASIS 816 has both. The
-// handler dates the package action "2105", which on-premise first ships
-// with SAP_BASIS 756, so 754 and older must refuse, 756 and newer must
-// accept, and 755 is left open.
+// transport organizer must offer addobjectsfrompackage. Only two releases
+// were measured: SAP_BASIS 750 has neither action in
+// IF_CTS_ADT_TM_CONSTANTS and SAP_BASIS 816 has both. The thresholds in
+// between are inferred: the handler dates the package action "2105", which
+// on-premise first ships with SAP_BASIS 756, so 754 and older must refuse,
+// 756 and newer must accept, and 755 is left open.
 func expectAddObjectsSupport(t *testing.T, c adt.Client) addObjectsExpectation {
 	t.Helper()
 	res, err := c.RunQuery(context.Background(), "SELECT release FROM cvers WHERE component = 'SAP_BASIS'", 1)

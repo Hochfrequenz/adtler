@@ -39,11 +39,11 @@ const transportOrganizerType = "application/vnd.sap.adt.transportorganizer.v1+xm
 //
 // SAP's handler calls TR_COPY_COMM, which copies only the entries recorded
 // directly under the number it is given, and records a CORR MERG entry for
-// it in the target. While a request is modifiable its objects sit in its
-// tasks, so for a modifiable source this copies the request and each of its
-// tasks. A released source already carries its tasks' objects at request
-// level and is copied as one. sourceRequest may also be a task, which is
-// copied alone; targetRequest should be a request.
+// it in the target. Until a request is released its objects sit in its
+// tasks, so for an unreleased source this copies the request and each of
+// its tasks. A released source already carries its tasks' objects at
+// request level and is copied as one. Both sourceRequest and targetRequest
+// are meant to be requests; a task has not been tried as either.
 //
 // The copies are separate PUTs. If one fails, the error names its source
 // and the target keeps what the earlier ones copied.
@@ -106,8 +106,7 @@ func (c *httpClient) CopyTransportObjects(ctx context.Context, sourceRequest, ta
 }
 
 // copySources returns the numbers whose entries make up sourceRequest: the
-// request itself, followed by its tasks unless it is released. A task as
-// source has no tasks of its own and is copied alone.
+// request itself, followed by its tasks unless it is released.
 func (c *httpClient) copySources(ctx context.Context, sourceRequest string) ([]string, error) {
 	data, err := c.readTransportXML(ctx, sourceRequest, transportOrganizerType)
 	if err != nil {
@@ -232,9 +231,11 @@ func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetReques
 }
 
 // isReleasedTRStatus reports whether a TRSTATUS value marks a released
-// request: R (released) or N (released, import protected). D (modifiable),
-// L (modifiable, protected) and O (release started) still hold entries in
-// their tasks, so their tasks are copied too.
+// request: R (released) or N (released, import protected). The tasks of D
+// (modifiable) and L (modifiable, protected) still hold the objects, so
+// they are copied too. O (release started) is treated the same way: its
+// tasks are already released and their objects merged into the request, so
+// copying them again is redundant but harmless.
 func isReleasedTRStatus(status string) bool {
 	return status == "R" || status == "N"
 }

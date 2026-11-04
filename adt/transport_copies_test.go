@@ -200,6 +200,13 @@ func TestCopyTransportObjects_ProtectedSourceCopiesTasks(t *testing.T) {
 }
 
 func TestCopyTransportObjects_StopsAtFirstFailedCopy(t *testing.T) {
+	// Two tasks, the first of which fails: a loop that carried on would
+	// send a third PUT for the second task.
+	const secondTask = "AAAK900202"
+	sourceXML := strings.Replace(copiesRequestXML(copiesSource, "D", copiesSourceTask),
+		"</tm:request>",
+		`<tm:task tm:number="`+secondTask+`" tm:parent="`+copiesSource+`" tm:owner="USERA" tm:status="D"/></tm:request>`, 1)
+
 	var mu sync.Mutex
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +217,7 @@ func TestCopyTransportObjects_StopsAtFirstFailedCopy(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == prefix+copiesTarget:
 			_, _ = w.Write([]byte(copiesSupportedTargetXML))
 		case r.Method == http.MethodGet && r.URL.Path == prefix+copiesSource:
-			_, _ = w.Write([]byte(copiesRequestXML(copiesSource, "D", copiesSourceTask)))
+			_, _ = w.Write([]byte(sourceXML))
 		case r.Method == http.MethodPut:
 			b, _ := io.ReadAll(r.Body)
 			mu.Lock()
@@ -232,7 +239,7 @@ func TestCopyTransportObjects_StopsAtFirstFailedCopy(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(bodies) != 2 {
-		t.Fatalf("got %d PUTs, want 2 (request copied, task failed)", len(bodies))
+		t.Fatalf("got %d PUTs, want 2 (request copied, first task failed, second never sent)", len(bodies))
 	}
 }
 
