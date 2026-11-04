@@ -434,7 +434,9 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 // in via a BTP app), extract their username from the JWT and pass it here.
 //
 // status filters by request state, as a TRSTATUS value: TransportStatusModifiable
-// ("D") for open requests, TransportStatusReleased ("R") for released ones. ""
+// ("D") for open requests, TransportStatusReleased ("R") for released ones.
+// A filter names one value: "R" does not include requests released with
+// import protection (TransportStatusReleasedProtected, "N"). ""
 // omits the filter; which requests SAP then returns differs by release (on
 // SAP_BASIS 750 only modifiable ones, on 816 modifiable and released ones).
 //

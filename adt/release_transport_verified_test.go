@@ -13,7 +13,10 @@ import (
 
 // releaseTransportServer mocks a synchronous release followed by a status read.
 // postReleaseStatus is the tm:status attribute returned by the status GET; pass
-// "" to make the status read fail (no <request> element).
+// "" to make the status read fail (no <request> element), or
+// releaseStatusOmitted to return the request without a tm:status attribute.
+const releaseStatusOmitted = "<omitted>"
+
 func releaseTransportServer(t *testing.T, transport, postReleaseStatus string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,9 +36,13 @@ func releaseTransportServer(t *testing.T, transport, postReleaseStatus string) *
 				_, _ = w.Write([]byte(`<?xml version="1.0"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm"/>`))
 				return
 			}
+			statusAttr := ` tm:status="` + postReleaseStatus + `"`
+			if postReleaseStatus == releaseStatusOmitted {
+				statusAttr = ""
+			}
 			_, _ = w.Write([]byte(`<?xml version="1.0"?>
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
-  <tm:request tm:number="` + transport + `" tm:desc="d" tm:status="` + postReleaseStatus + `"/>
+  <tm:request tm:number="` + transport + `" tm:desc="d"` + statusAttr + `/>
 </tm:root>`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -58,6 +65,7 @@ func TestReleaseTransport_Verified(t *testing.T) {
 		// #270: O means the release started but has not finished.
 		{"release started (status O)", adt.TransportStatusReleaseStarted, false, adt.TransportStatusReleaseStarted},
 		{"status read fails -> optimistic released", "", true, ""},
+		{"status read has no status -> optimistic released", releaseStatusOmitted, true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

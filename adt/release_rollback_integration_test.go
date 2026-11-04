@@ -87,7 +87,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		if r, releaseErr := client.ReleaseTransportWithTasks(context.Background(), t1); releaseErr != nil {
 			t.Logf("cleanup: ReleaseTransportWithTasks(%s) failed: %v", t1, releaseErr)
 		} else if !r.Released {
-			t.Logf("cleanup: %s still modifiable after release (ECC silent-release-failure) — release via SE09 or the next run will find the fixture locked", t1)
+			t.Logf("cleanup: %s not released after release (status %q; D/L = ECC silent-release-failure, O = still releasing) — release via SE09 or the next run will find the fixture locked", t1, r.Status)
 		}
 	})
 
@@ -147,7 +147,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	const manualReleasePollInterval = 10 * time.Second
 	const manualReleasePollAttempts = 6 // ~60s
 	for i := 0; !t1Free && i < manualReleasePollAttempts; i++ {
-		t.Logf("[2] T1 (%s) still modifiable after ADT release — release it manually now if you want Phase 3/4 to run for real; polling for up to %s", t1, manualReleasePollInterval*manualReleasePollAttempts)
+		t.Logf("[2] T1 (%s) not released after ADT release — release it manually now if you want Phase 3/4 to run for real; polling for up to %s", t1, manualReleasePollInterval*manualReleasePollAttempts)
 		time.Sleep(manualReleasePollInterval)
 		info, infoErr := client.GetTransportInfo(ctx, t1)
 		if infoErr != nil {
@@ -226,7 +226,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		if r, releaseErr := client.ReleaseTransportWithTasks(bgCtx, t2); releaseErr != nil {
 			t.Logf("cleanup: ReleaseTransportWithTasks(%s) failed: %v", t2, releaseErr)
 		} else if !r.Released {
-			t.Logf("cleanup: %s still modifiable after release (ECC silent-release-failure) — release via SE09 or the next run will find the fixture locked", t2)
+			t.Logf("cleanup: %s not released after release (status %q; D/L = ECC silent-release-failure, O = still releasing) — release via SE09 or the next run will find the fixture locked", t2, r.Status)
 		} else {
 			t.Logf("cleanup: released T2 (%s)", t2)
 		}
