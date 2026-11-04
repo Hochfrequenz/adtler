@@ -597,9 +597,13 @@ func TestExportCustomizing_ClientOnlyKey(t *testing.T) {
 	defer cancel()
 
 	const maxCandidates = 200
+	// NOT EXISTS instead of GROUP BY over DD03L: the aggregation exceeds the
+	// time budget on the ECC system, the per-table subquery uses the primary key.
 	candidates := discoverTables(t, ctx, client, customizingTablesSQL(
-		"a~TABNAME", "a~AS4VERS = '0000'",
-		"GROUP BY a~TABNAME HAVING COUNT(*) = 1 AND MAX( b~FIELDNAME ) = 'MANDT' ORDER BY a~TABNAME"), maxCandidates)
+		"a~TABNAME", "a~AS4VERS = '0000' AND b~FIELDNAME = 'MANDT'"+
+			" AND NOT EXISTS ( SELECT * FROM DD03L AS c WHERE c~TABNAME = a~TABNAME"+
+			" AND c~KEYFLAG = 'X' AND c~AS4LOCAL = 'A' AND c~FIELDNAME <> 'MANDT' )",
+		"ORDER BY a~TABNAME"), maxCandidates)
 
 	var table string
 	checked := 0
