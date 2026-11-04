@@ -194,6 +194,9 @@ func (r *ClientRegistry) ReleaseTransportWithTasks(ctx context.Context, transpor
 func (r *ClientRegistry) RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error) {
 	return r.activeClient().RollbackTransport(ctx, transportNumber)
 }
+func (r *ClientRegistry) RollbackTransportWithOptions(ctx context.Context, transportNumber string, opts RollbackOptions) (*RollbackResult, error) {
+	return r.activeClient().RollbackTransportWithOptions(ctx, transportNumber, opts)
+}
 func (r *ClientRegistry) GetTransportInfo(ctx context.Context, transportNumber string) (*TransportRequest, error) {
 	return r.activeClient().GetTransportInfo(ctx, transportNumber)
 }

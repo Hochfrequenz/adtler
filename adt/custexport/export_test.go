@@ -169,6 +169,9 @@ func (m *mockClient) ReleaseTransport(context.Context, string) (*adt.ReleaseResu
 func (m *mockClient) RollbackTransport(context.Context, string) (*adt.RollbackResult, error) {
 	panic("not implemented")
 }
+func (m *mockClient) RollbackTransportWithOptions(context.Context, string, adt.RollbackOptions) (*adt.RollbackResult, error) {
+	panic("not implemented")
+}
 func (m *mockClient) ReleaseTransportWithTasks(context.Context, string) (*adt.ReleaseResult, error) {
 	panic("not implemented")
 }
