@@ -194,6 +194,108 @@ func discoverPaginationTable(t *testing.T, client adt.Client) (string, int) {
 	return "", 0
 }
 
+// TestCustexportPagination_ClientOnlyKey_Integration guards #229 on a live
+// system: a table whose only key is the client cannot be paginated. A full
+// page used to end the table as exported; it has to fail instead, and a short
+// page has to export normally. The test discovers a customizing table with
+// that key and exactly one row, so page size 1 fills the page and page size 2
+// does not. It logs counts only, never a table name or table contents.
+//
+// Run with:
+//
+//	SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" \
+//	  go test -tags=integration -v -run TestCustexportPagination_ClientOnlyKey_Integration ./adt/...
+func TestCustexportPagination_ClientOnlyKey_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			table := discoverClientOnlyKeyTable(t, sys.Client)
+			// RunExport logs the name of a table whose writer fails.
+			log.SetOutput(io.Discard)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+			export := func(pageSize int) *custexport.ExportSummary {
+				t.Helper()
+				summary, err := custexport.RunExport(context.Background(), sys.Client, custexport.ExportConfig{
+					OutputDir: t.TempDir(),
+					Tables:    []string{table},
+					PageSize:  pageSize,
+					Workers:   1,
+				})
+				if err != nil {
+					t.Fatalf("RunExport with page size %d failed: %s", pageSize, redact(err.Error(), sys.Config.Host, table))
+				}
+				return summary
+			}
+
+			full := export(1)
+			if len(full.Errors) != 1 || full.ExportedTables != 0 {
+				t.Errorf("page size 1: want the table failed, got %d exported, %d errors", full.ExportedTables, len(full.Errors))
+			} else if !strings.Contains(full.Errors[0].Error, "no key besides the client") {
+				// Not the message itself: it names the table.
+				t.Errorf("page size 1: the table failed for another reason (%T)", full.Errors[0].Err)
+			}
+
+			short := export(2)
+			if len(short.Errors) != 0 || short.ExportedTables != 1 || short.TotalRows != 1 {
+				t.Errorf("page size 2: want 1 table with 1 row exported, got %d tables, %d rows, %d errors",
+					short.ExportedTables, short.TotalRows, len(short.Errors))
+			}
+		})
+	}
+}
+
+// discoverClientOnlyKeyTable returns a customizing table whose only key is the
+// client and which holds exactly one row, or skips the test.
+func discoverClientOnlyKeyTable(t *testing.T, client adt.Client) string {
+	t.Helper()
+	const (
+		maxCandidates = 200
+		searchBudget  = 3 * time.Minute
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), searchBudget)
+	defer cancel()
+
+	// NOT EXISTS instead of GROUP BY over DD03L: the aggregation exceeds the
+	// budget on ERP 6.0, the per-table subquery uses the primary key.
+	candidates, err := client.RunQuery(ctx,
+		"SELECT a~TABNAME FROM DD02L AS a INNER JOIN DD03L AS b ON a~TABNAME = b~TABNAME"+
+			" WHERE a~TABCLASS = 'TRANSP' AND a~CONTFLAG IN ('C','G') AND a~AS4LOCAL = 'A' AND a~AS4VERS = '0000'"+
+			" AND b~FIELDNAME = 'MANDT' AND b~KEYFLAG = 'X' AND b~AS4LOCAL = 'A'"+
+			" AND NOT EXISTS ( SELECT * FROM DD03L AS c WHERE c~TABNAME = a~TABNAME"+
+			" AND c~KEYFLAG = 'X' AND c~AS4LOCAL = 'A' AND c~FIELDNAME <> 'MANDT' )"+
+			" ORDER BY a~TABNAME", maxCandidates)
+	if err != nil {
+		if ctx.Err() != nil {
+			t.Skip("candidate search exceeded its time budget")
+		}
+		t.Fatalf("candidate query failed")
+	}
+
+	checked := 0
+	for _, row := range candidates.Rows {
+		if ctx.Err() != nil {
+			break
+		}
+		if len(row) == 0 || strings.TrimSpace(row[0]) == "" {
+			continue
+		}
+		name := strings.TrimSpace(row[0])
+		checked++
+		count, err := client.RunQuery(ctx, "SELECT COUNT(*) FROM "+name, 1)
+		if err != nil || len(count.Rows) != 1 || len(count.Rows[0]) != 1 {
+			continue
+		}
+		if strings.TrimSpace(count.Rows[0][0]) == "1" {
+			t.Logf("%d candidate tables with the client as their only key, %d counted", len(candidates.Rows), checked)
+			return name
+		}
+	}
+	t.Skipf("no customizing table with the client as its only key and exactly one row found (%d candidates, %d counted)",
+		len(candidates.Rows), checked)
+	return ""
+}
+
 func ceilDiv(a, b int) int { return (a + b - 1) / b }
 
 // smallestFactor returns the smallest divisor of n that is at least 2; for a
