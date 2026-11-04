@@ -603,10 +603,10 @@ func (c *httpClient) RemoveFromTransport(ctx context.Context, taskNumber, parent
 	}
 
 	body, err := xml.Marshal(adtxml.TMRoot{
-		NSTM:       "http://www.sap.com/cts/adt/tm",
+		NSTM:       nsTM,
 		UserAction: "removeobject",
 		Number:     taskNumber,
-		Request: adtxml.TMRequest{
+		Request: &adtxml.TMRequest{
 			Number: parentTransport,
 			Objects: []adtxml.TMAbapObject{{
 				PgmID:    pgmID,
@@ -714,8 +714,9 @@ func (c *httpClient) readTransportXML(ctx context.Context, transportNumber, acce
 // system's transport organizer endpoint supports removing an object from a
 // transport request at all. Removing an object from a transport was added to
 // SAP's ADT only in AS ABAP 7.53; on older systems (ECC) the endpoint does
-// not exist and the PUT the library would send there is silently absorbed by
-// a legacy "change owner" handler instead (confusing empty-user failure). The
+// not exist and the PUT the library would send there reaches a legacy
+// "change owner" handler instead, which fails for lack of a target user and
+// changes nothing (a confusing empty-user error). The
 // zero value, RemoveObjectSupportUnknown, is deliberate: it is what every
 // freshly constructed *httpClient starts with, before any transport has been
 // read.
@@ -874,10 +875,12 @@ func (c *httpClient) cacheRemoveObjectSupport(data []byte) {
 
 // ensureRemoveObjectSupported is RemoveFromTransport's gate: it blocks the
 // PUT only when this system's capability is confirmed
-// RemoveObjectSupportUnsupported. On a pre-7.53 system that PUT is not
-// rejected by SAP — it is silently reinterpreted by a legacy handler as a
-// change-owner request with a missing target user, which is why not sending
-// it is the point, not merely producing a clearer error (see issue #125).
+// RemoveObjectSupportUnsupported. On a pre-7.53 system SAP does not reject
+// that PUT as unknown: its handler reads no body and treats every PUT as a
+// change-owner request. Without a target user that fails and changes
+// nothing, but the error it returns is about the owner, not about removal.
+// Not sending the PUT gives the caller an accurate answer instead
+// (see issue #125).
 //
 // If the capability is still unknown, this triggers exactly one read of
 // parentTransport to populate it — readTransportXML derives and caches the

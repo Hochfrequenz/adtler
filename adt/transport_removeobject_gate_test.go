@@ -18,11 +18,11 @@ import (
 // back as ECC's worklist shape (eccWorklistXML — no removeobject, no
 // addobject anywhere), RemoveFromTransport must return an error without
 // ever issuing the PUT. The handler fails the test itself if a PUT reaches
-// it, which is the actual point of the gate: on a pre-7.53 system that PUT
-// is not rejected by SAP, it is silently reinterpreted by a legacy
-// change-owner handler with a missing target user (see issue #125). A gate
-// that only produced a clearer error message on the same PUT would not
-// close that hole.
+// it, which is the actual point of the gate: on a pre-7.53 system SAP does
+// not reject that PUT as unknown, it hands it to a legacy change-owner
+// handler, which fails for lack of a target user (see issue #125). Nothing
+// changes, but the error is about the owner; not sending the PUT is what
+// lets the caller get an accurate answer.
 func TestRemoveFromTransport_ECCUnsupported_NeverSendsPUT(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

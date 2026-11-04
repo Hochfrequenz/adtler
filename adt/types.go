@@ -229,6 +229,11 @@ const (
 	// on a genuine <exc:exception> Type. RemoveFromTransport never sends a
 	// request in this case, so there is no SAP-side error to relay.
 	ExceptionTypeRemoveObjectUnsupported = "ADT_TM_REMOVEOBJECT_UNSUPPORTED"
+	// ExceptionTypeAddObjectsUnsupported is synthesised locally, like
+	// ExceptionTypeRemoveObjectUnsupported, by the capability gate of
+	// CopyTransportObjects and AddPackageToTransport: the target request does
+	// not advertise the addobjectsfrompackage relation, so no write was sent.
+	ExceptionTypeAddObjectsUnsupported = "ADT_TM_ADDOBJECTS_UNSUPPORTED"
 	// ExceptionTypeParameterNotFound is raised (HTTP 400) when a request
 	// parameter the ADT handler expects is absent from the request it
 	// received. It is overloaded across unrelated parameters (a missing

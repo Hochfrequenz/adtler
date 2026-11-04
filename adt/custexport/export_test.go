@@ -91,6 +91,12 @@ func (m *mockClient) AddToTransport(context.Context, string, string) error {
 func (m *mockClient) RemoveFromTransport(context.Context, string, string, string, string, string, string, string) error {
 	panic("not implemented")
 }
+func (m *mockClient) CopyTransportObjects(context.Context, string, string, bool) error {
+	panic("not implemented")
+}
+func (m *mockClient) AddPackageToTransport(context.Context, string, string, bool) error {
+	panic("not implemented")
+}
 func (m *mockClient) GetTransportInfo(context.Context, string) (*adt.TransportRequest, error) {
 	panic("not implemented")
 }

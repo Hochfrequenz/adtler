@@ -162,6 +162,8 @@ type TransportClient interface {
 	GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error)
 	AddToTransport(ctx context.Context, objectURI, transport string) error
 	RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error
+	CopyTransportObjects(ctx context.Context, sourceRequest, targetRequest string, withDocumentation bool) error
+	AddPackageToTransport(ctx context.Context, packageName, targetRequest string, includeSubpackages bool) error
 	GetTransportInfo(ctx context.Context, transportNumber string) (*TransportRequest, error)
 	GetTransportObjects(ctx context.Context, transportNumber string) ([]TransportObject, error)
 	GetTransportTasks(ctx context.Context, transportNumber string) ([]string, error)
