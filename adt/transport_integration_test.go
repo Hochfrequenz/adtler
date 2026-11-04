@@ -5,6 +5,8 @@ package adt_test
 import (
 	"context"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 func TestCheckTransport_Integration(t *testing.T) {
@@ -87,6 +89,50 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 				if i < 3 {
 					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.Status, tr.Description)
 				}
+			}
+		})
+	}
+}
+
+// TestGetTransportRequests_ReleasedFilter_Integration guards #270: the
+// released filter must find released requests, and those requests must carry
+// TransportStatusReleased (or its import-protected variant). While the
+// constant was "L" (modifiable, protected), ECC answered the filter with
+// modifiable requests only, and no request on either system carried "L".
+//
+// The test lists without a user: on ECC the configured user may own no
+// released request, while the system as a whole has many. It does not demand
+// that every returned request is released, because the S/4 tree path does not
+// apply the status filter yet (#242).
+func TestGetTransportRequests_ReleasedFilter_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+			filter := adt.TransportStatusReleased
+			requests, err := sys.Client.GetTransportRequests(ctx, "", filter)
+			if err != nil {
+				t.Fatalf("GetTransportRequests(%q) failed: %v", filter, err)
+			}
+			statuses := map[string]int{}
+			released := 0
+			for _, tr := range requests {
+				statuses[tr.Status]++
+				if adt.IsReleasedStatus(tr.Status) {
+					released++
+				}
+			}
+			t.Logf("filter %q: %d request(s), statuses %v", filter, len(requests), statuses)
+			if len(requests) == 0 {
+				t.Skip("no request visible for the released filter on this system")
+			}
+			if released == 0 {
+				t.Fatalf("filter %q returned %d request(s), none of them released (statuses %v)",
+					filter, len(requests), statuses)
+			}
+			if released < len(requests) {
+				t.Logf("%d of %d request(s) are not released: the status filter is not applied (#242)",
+					len(requests)-released, len(requests))
 			}
 		})
 	}

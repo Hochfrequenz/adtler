@@ -172,11 +172,18 @@ func (c *httpClient) DeleteTransport(ctx context.Context, transportNumber string
 // ReleaseResult reports the outcome of a transport release.
 type ReleaseResult struct {
 	Transport string `json:"transport"`
-	// Released is true when the request is confirmed no longer modifiable
-	// after the release. It is false — with a nil error — when the release
-	// endpoint reported success but the request stayed modifiable, the
-	// "silent failure" some systems (notably ECC) exhibit.
+	// Released is true when the post-release status read shows a released
+	// request (IsReleasedStatus), or when that read failed (see
+	// ReleaseTransport). It is false — with a nil error — when the release
+	// endpoint reported success but the request is not released: still
+	// modifiable ("D" or "L"), the "silent failure" some systems (notably
+	// ECC) exhibit, or with its release started but not finished ("O").
 	Released bool `json:"released"`
+	// Status is the TRSTATUS value the post-release read returned, or ""
+	// when that read failed. With Released false it tells the two cases
+	// apart: TransportStatusReleaseStarted means SAP is still releasing the
+	// request, so re-read its status later instead of releasing it again.
+	Status string `json:"status,omitempty"`
 }
 
 // ReleaseTransport releases a transport request or task, then confirms the
@@ -187,14 +194,17 @@ type ReleaseResult struct {
 // The release endpoint reports success whenever it returns 2xx and its
 // release report carries no error — but some systems (notably ECC) return
 // 200 while leaving the request modifiable. This method detects that by
-// checking the post-release status: a request still in the modifiable ("D")
-// state is reported as Released=false (with a nil error) so callers can fall
-// back to another release mechanism. A genuine release error is returned
-// unchanged.
+// checking the post-release status: only a released status ("R" or "N", see
+// IsReleasedStatus) is reported as Released=true. A request that stayed
+// modifiable ("D" or "L") is reported as Released=false (with a nil error)
+// so callers can fall back to another release mechanism; so is one whose
+// release has started but not finished ("O"), which ReleaseResult.Status
+// distinguishes. A genuine release error is returned unchanged.
 //
-// If the post-release status read fails, the release is assumed to have
-// succeeded (Released=true) — the optimistic behavior callers had before
-// verification existed. This mirrors ActivateObjects (adt/activate.go).
+// If the post-release status read fails, or returns no status, the release
+// is assumed to have succeeded (Released=true) — the optimistic behavior
+// callers had before verification existed. This mirrors ActivateObjects
+// (adt/activate.go).
 func (c *httpClient) ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return c.releaseTransportVerified(ctx, transportNumber, false)
 }
@@ -211,10 +221,15 @@ func (c *httpClient) releaseTransportVerified(ctx context.Context, transportNumb
 		return nil, err
 	}
 
-	if info, infoErr := c.GetTransportInfo(ctx, transportNumber); infoErr == nil && info != nil && info.Status == TransportStatusModifiable {
-		return &ReleaseResult{Transport: transportNumber, Released: false}, nil
+	info, infoErr := c.GetTransportInfo(ctx, transportNumber)
+	if infoErr != nil || info == nil || info.Status == "" {
+		return &ReleaseResult{Transport: transportNumber, Released: true}, nil
 	}
-	return &ReleaseResult{Transport: transportNumber, Released: true}, nil
+	return &ReleaseResult{
+		Transport: transportNumber,
+		Released:  IsReleasedStatus(info.Status),
+		Status:    info.Status,
+	}, nil
 }
 
 func (c *httpClient) releaseTransport(ctx context.Context, transportNumber string, releaseTasks bool) error {
@@ -418,7 +433,10 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 // If you want a specific developer's requests (e.g. the person currently logged
 // in via a BTP app), extract their username from the JWT and pass it here.
 //
-// status filters by request state: "D" = modifiable (open), "L" = released, "" = all.
+// status filters by request state, as a TRSTATUS value: TransportStatusModifiable
+// ("D") for open requests, TransportStatusReleased ("R") for released ones. ""
+// omits the filter; which requests SAP then returns differs by release (on
+// SAP_BASIS 750 only modifiable ones, on 816 modifiable and released ones).
 //
 // The returned slice includes requests from both workbench and customizing groups.
 func (c *httpClient) GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error) {
@@ -478,7 +496,7 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 var transportUserRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,40}$`)
 
 // transportStatusRe matches a valid CTS transport status: a single uppercase
-// letter (D = modifiable, L = released, A = accepted, …).
+// letter (a TRSTATUS value such as D = modifiable or R = released).
 var transportStatusRe = regexp.MustCompile(`^[A-Z]$`)
 
 // getTransportRequestsViaQuery is the fallback for GetTransportRequests on

@@ -114,7 +114,7 @@ func TestGetTransportRequests(t *testing.T) {
       <tm:request tm:number="AAAK900123" tm:owner="DEVELOPER" tm:desc="Feature transport" tm:status="D"/>
     </tm:modifiable>
     <tm:released tm:status="Released">
-      <tm:request tm:number="AAAK900124" tm:owner="DEVELOPER" tm:desc="Released transport" tm:status="L"/>
+      <tm:request tm:number="AAAK900124" tm:owner="DEVELOPER" tm:desc="Released transport" tm:status="R"/>
     </tm:released>
   </tm:workbench>
   <tm:customizing tm:category="Customizing">

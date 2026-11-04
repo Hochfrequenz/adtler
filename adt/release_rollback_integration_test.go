@@ -157,9 +157,8 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		// intermediate non-modifiable state ("O", release started/cofile export
 		// in progress) where the object is still locked, so "!= D" alone is not
 		// enough to prove Phase 3 can proceed. "R" is this system's actual
-		// terminal status (observed live); TestReleaseTransport_Integration
-		// already treats "L" or "R" as released for the same reason.
-		if info.Status == adt.TransportStatusReleased || info.Status == "R" {
+		// terminal status (observed live), "N" its import-protected variant.
+		if adt.IsReleasedStatus(info.Status) {
 			t1Free = true
 			t.Logf("[2] T1 released (manually, observed after %d poll(s), status=%q)", i+1, info.Status)
 		} else {

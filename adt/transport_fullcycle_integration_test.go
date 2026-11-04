@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"testing"
 	"time"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 // extractTransportFromError parses a transport number from SAP error messages
@@ -79,7 +81,7 @@ func TestReleaseTransport_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetTransportInfo: %v", err)
 		}
-		if info.Status == "L" || info.Status == "R" {
+		if adt.IsReleasedStatus(info.Status) {
 			t.Logf("verified: %s status=%s (released)", trNumber, info.Status)
 			released = true
 			break
@@ -309,7 +311,7 @@ func TestTransportFullCycle_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetTransportInfo after release: %v", err)
 		}
-		if info.Status == "L" || info.Status == "R" {
+		if adt.IsReleasedStatus(info.Status) {
 			t.Logf("[7] verified: %s status=%s (released)", trNumber, info.Status)
 			released = true
 			break
