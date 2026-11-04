@@ -52,6 +52,7 @@ var rollbackSourceTypes = map[string]bool{
 const (
 	rollbackReasonCreatedKept       = "created by this transport; left in place (DeleteCreatedObjects is off)"
 	rollbackReasonCreatedRestoreErr = "created by this transport; not deleted because a restore in this rollback failed and the unrestored object may still use it"
+	rollbackReasonCreatedSubObjects = "created by this transport; not deleted because the transport has sub-object (LIMU) entries that were not rolled back and may still use it"
 )
 
 // RollbackTransport is RollbackTransportWithOptions with zero options: it
@@ -77,19 +78,28 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 // reported as failed, not as created. Deletion covers the same source types
 // as the restore; a DDIC object the transport created stays Skipped.
 //
-// The rule rests on the version history only. An object that existed before
-// the transport but never got a version outside it, such as a local ($TMP)
-// object without versions that was then moved into a transportable package
-// under this request, looks created. Deleting it destroys its pre-transport
-// state, which is one reason deletion is opt-in.
+// Before deleting, the object's TADIR source system must be the request's
+// system (the first three characters of the request number). An object
+// imported from elsewhere — a second development system, an add-on, a
+// modified SAP object — gets no version on import by default, so a change in
+// this request leaves a history that looks created; it stays in Created. So
+// does an object whose source system cannot be read. What the rule still
+// cannot see is an object that existed in this system before the transport
+// without any version outside it, such as a local ($TMP) object without
+// versions that was then moved into a transportable package under this
+// request. Deleting it destroys its pre-transport state, which is one reason
+// deletion is opt-in.
 //
 // Deletion runs after every restore, so restored code no longer references
-// the objects about to be deleted, and only when no restore failed: an object
-// whose restore failed may still use a created one. Created objects that use
-// each other are deleted in rounds until a round deletes nothing; what is
-// left is reported as failed with the last error SAP gave. The deletion is
-// recorded in the rolled-back request (as corrNr), the same request the
-// restored source is written to.
+// the objects about to be deleted, and only when every part of the transport
+// was rolled back: nothing is deleted when a restore failed or when the
+// transport has sub-object (LIMU) entries, which are skipped (#134), since
+// the code left unrestored may still use a created object. Created objects
+// that use each other are deleted in rounds until a round deletes nothing;
+// what is left is reported as failed with the last error SAP gave. An object
+// SAP reports as not found is counted as deleted. The deletion is recorded in
+// the rolled-back request (as corrNr), the same request the restored source
+// is written to.
 //
 // A transport recorded at sub-object granularity (e.g. a LIMU/METH row for a
 // method, rather than the R3TR class that owns it) matches neither the R3TR
@@ -128,9 +138,13 @@ func (c *httpClient) RollbackTransportWithOptions(ctx context.Context, transport
 
 	result := &RollbackResult{}
 	var created []createdObject
-	var rejected error // the 401 that ended processing, if any
+	var rejected error  // the 401 that ended processing, if any
+	subObjects := false // a LIMU entry was skipped, so part of the transport was not rolled back
 	for _, obj := range objects {
 		if obj.PgmID != "R3TR" {
+			if obj.PgmID == "LIMU" {
+				subObjects = true
+			}
 			result.Skipped = append(result.Skipped, RollbackEntry{
 				Type: obj.Type, Name: obj.Name, Reason: "not R3TR",
 			})
@@ -186,8 +200,11 @@ func (c *httpClient) RollbackTransportWithOptions(ctx context.Context, transport
 		}
 	case len(result.Failed) > 0:
 		result.Created = createdEntries(created, rollbackReasonCreatedRestoreErr)
+	case subObjects:
+		result.Created = createdEntries(created, rollbackReasonCreatedSubObjects)
 	default:
-		c.deleteCreatedObjects(ctx, created, transport, result)
+		local := c.keepLocalOrigin(ctx, created, transport, result)
+		c.deleteCreatedObjects(ctx, local, transport, result)
 	}
 	return result, nil
 }
@@ -195,9 +212,66 @@ func (c *httpClient) RollbackTransportWithOptions(ctx context.Context, transport
 // createdObject is an object RollbackTransportWithOptions found created by the
 // transport, with the error of its last delete attempt.
 type createdObject struct {
-	entry   RollbackEntry
-	uri     string
-	lastErr error
+	entry      RollbackEntry
+	uri        string
+	lastErr    error
+	notRetried bool // a 401 stopped the rollback before this object's next attempt
+}
+
+// keepLocalOrigin returns the objects of objs whose TADIR source system is
+// the system the request belongs to, which is the first three characters of
+// the request number. Every other object goes to result.Created, never to
+// deletion: an object imported from another system (a second development
+// system, an add-on, a modified SAP object) gets no version on import by
+// default, so a change to it in this request leaves a history that looks
+// created. An object whose origin cannot be read is not deleted either.
+// After a 401 nothing more is sent (#222) and every object not yet confirmed
+// is reported as failed.
+func (c *httpClient) keepLocalOrigin(ctx context.Context, objs []createdObject, request string, result *RollbackResult) []createdObject {
+	sid := ""
+	if len(request) >= 3 {
+		sid = strings.ToUpper(request[:3])
+	}
+	var local []createdObject
+	var rejected error
+	for _, o := range objs {
+		if rejected != nil {
+			o.entry.Reason = "created by this transport; not deleted: " + rejected.Error()
+			result.Failed = append(result.Failed, o.entry)
+			continue
+		}
+		src, err := c.tadirSourceSystem(ctx, o.entry.Type, o.entry.Name)
+		switch {
+		case isUnauthorized(err):
+			rejected = err
+			o.entry.Reason = "created by this transport; not deleted: " + err.Error()
+			result.Failed = append(result.Failed, o.entry)
+		case err != nil:
+			o.entry.Reason = "created by this transport by its version history; not deleted because its original system could not be read: " + err.Error()
+			result.Created = append(result.Created, o.entry)
+		case sid == "" || src != sid:
+			o.entry.Reason = "version history shows only this transport, but the object originates in system " + src + ", not in the request's system; not deleted"
+			result.Created = append(result.Created, o.entry)
+		default:
+			local = append(local, o)
+		}
+	}
+	return local
+}
+
+// tadirSourceSystem reads the source system (TADIR-SRCSYSTEM) of the R3TR
+// object objType/name.
+func (c *httpClient) tadirSourceSystem(ctx context.Context, objType, name string) (string, error) {
+	qr, err := c.RunQuery(ctx, fmt.Sprintf(
+		"SELECT SRCSYSTEM FROM TADIR WHERE PGMID = 'R3TR' AND OBJECT = '%s' AND OBJ_NAME = '%s'",
+		EscapeValue(objType), EscapeValue(name)), 1)
+	if err != nil {
+		return "", err
+	}
+	if len(qr.Rows) == 0 || len(qr.Rows[0]) == 0 {
+		return "", fmt.Errorf("no TADIR entry")
+	}
+	return strings.ToUpper(strings.TrimSpace(qr.Rows[0][0])), nil
 }
 
 func createdEntries(objs []createdObject, reason string) []RollbackEntry {
@@ -222,10 +296,16 @@ func (c *httpClient) deleteCreatedObjects(ctx context.Context, objs []createdObj
 		var next []createdObject
 		for _, o := range pending {
 			if rejected != nil {
+				o.notRetried = true
 				next = append(next, o)
 				continue
 			}
-			if err := c.DeleteObject(ctx, o.uri, "", request); err != nil {
+			err := c.DeleteObject(ctx, o.uri, "", request)
+			if ClassifyError(err) == ErrorNotFound {
+				// Already gone: the state the deletion was to reach.
+				err = nil
+			}
+			if err != nil {
 				if isUnauthorized(err) {
 					rejected = err
 				}
@@ -242,9 +322,12 @@ func (c *httpClient) deleteCreatedObjects(ctx context.Context, objs []createdObj
 		}
 	}
 	for _, o := range pending {
-		if o.lastErr != nil {
+		switch {
+		case o.lastErr != nil && o.notRetried:
+			o.entry.Reason = "created by this transport; delete: " + o.lastErr.Error() + "; not retried: " + rejected.Error()
+		case o.lastErr != nil:
 			o.entry.Reason = "created by this transport; delete: " + o.lastErr.Error()
-		} else {
+		default:
 			o.entry.Reason = "created by this transport; delete not attempted: " + rejected.Error()
 		}
 		result.Failed = append(result.Failed, o.entry)

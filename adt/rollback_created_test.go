@@ -2,6 +2,7 @@ package adt
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -20,6 +21,8 @@ const (
 	createdTestChanged = "ZCHANGED"
 	createdTestNewA    = "ZNEW_A"
 	createdTestNewB    = "ZNEW_B"
+
+	createdTestLockAction = "LOCK"
 )
 
 func TestCreatedByTransport(t *testing.T) {
@@ -52,9 +55,15 @@ func TestCreatedByTransport(t *testing.T) {
 // program, 0 meaning 200.
 type createdTestServer struct {
 	programs     []string
+	extraEntries string // raw tm:abap_object elements appended to the transport
 	histories    map[string][]string
 	activateFail bool
 	deleteStatus func(name string, attempt int) int
+	// srcSystem maps a program to its TADIR source system; a program not
+	// listed originates in the request's system AAA. queryStatus, when not
+	// 0, is the status of every TADIR query.
+	srcSystem   map[string]string
+	queryStatus int
 
 	mu       sync.Mutex
 	calls    []string
@@ -84,6 +93,7 @@ func (s *createdTestServer) handler(t *testing.T) http.HandlerFunc {
 			for _, p := range s.programs {
 				b.WriteString(`<tm:abap_object tm:pgmid="R3TR" tm:type="PROG" tm:name="` + p + `"/>`)
 			}
+			b.WriteString(s.extraEntries)
 			b.WriteString(`<tm:task tm:number="` + createdTestTask + `"/></tm:request></tm:root>`)
 			_, _ = w.Write([]byte(b.String()))
 		case strings.HasSuffix(path, "/source/main/versions"):
@@ -97,7 +107,7 @@ func (s *createdTestServer) handler(t *testing.T) http.HandlerFunc {
 			_, _ = w.Write([]byte(b.String()))
 		case strings.HasPrefix(path, "/versions/"):
 			_, _ = w.Write([]byte("REPORT zold."))
-		case r.URL.Query().Get("_action") == "LOCK":
+		case r.URL.Query().Get("_action") == createdTestLockAction:
 			s.record("lock " + name)
 			_, _ = w.Write([]byte("lock-handle"))
 		case r.URL.Query().Get("_action") == "UNLOCK":
@@ -112,6 +122,23 @@ func (s *createdTestServer) handler(t *testing.T) http.HandlerFunc {
 			if s.activateFail {
 				_, _ = w.Write([]byte(`<chkl:messages xmlns:chkl="http://www.sap.com/abapxml/checklist"><msg type="E"><shortText><txt>broken</txt></shortText></msg></chkl:messages>`))
 			}
+		case path == "/sap/bc/adt/datapreview/freestyle":
+			s.record("query")
+			if s.queryStatus != 0 {
+				w.WriteHeader(s.queryStatus)
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			sql := string(body)
+			obj := sql[strings.Index(sql, "OBJ_NAME = '")+len("OBJ_NAME = '"):]
+			obj = obj[:strings.IndexByte(obj, '\'')]
+			src, ok := s.srcSystem[obj]
+			if !ok {
+				src = "AAA"
+			}
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">` +
+				`<dataPreview:totalRows>1</dataPreview:totalRows><dataPreview:columns><dataPreview:metadata dataPreview:name="SRCSYSTEM" dataPreview:type="C"/>` +
+				`<dataPreview:dataSet><dataPreview:data>` + src + `</dataPreview:data></dataPreview:dataSet></dataPreview:columns></dataPreview:tableData>`))
 		case path == "/sap/bc/adt/activation/inactiveobjects":
 			_, _ = w.Write([]byte(`<root/>`))
 		case strings.HasPrefix(path, createdTestProgURI) && r.Method == http.MethodGet:
@@ -338,6 +365,109 @@ func TestRollbackTransportWithOptions_401DuringDeleteStopsSending(t *testing.T) 
 	result := s.run(t, RollbackOptions{DeleteCreatedObjects: true})
 	if d := s.deleteCalls(); !reflect.DeepEqual(d, []string{"delete " + createdTestNewA}) {
 		t.Errorf("DELETE calls = %v, want exactly one before the 401 stopped the rollback", d)
+	}
+	if len(result.Failed) != 2 {
+		t.Fatalf("Failed = %v, want both programs", result.Failed)
+	}
+	for _, f := range result.Failed {
+		if !strings.Contains(f.Reason, "401") {
+			t.Errorf("%s: reason %q does not name the 401", f.Name, f.Reason)
+		}
+	}
+}
+
+func TestRollbackTransportWithOptions_ImportedObjectIsNotDeleted(t *testing.T) {
+	s := &createdTestServer{
+		programs:  []string{createdTestNewA, createdTestNewB},
+		histories: map[string][]string{createdTestNewA: {createdTestTask}, createdTestNewB: {createdTestTask}},
+		// A came in by import: no version on import, so its history shows
+		// only this request, but it originates in another system.
+		srcSystem: map[string]string{createdTestNewA: "BBB"},
+	}
+	result := s.run(t, RollbackOptions{DeleteCreatedObjects: true})
+	if d := s.deleteCalls(); !reflect.DeepEqual(d, []string{"delete " + createdTestNewB}) {
+		t.Errorf("DELETE calls = %v, want only %s", d, createdTestNewB)
+	}
+	if got := names(result.Created); !reflect.DeepEqual(got, []string{createdTestNewA}) {
+		t.Errorf("Created = %v, want [%s]", got, createdTestNewA)
+	}
+	if got := names(result.Deleted); !reflect.DeepEqual(got, []string{createdTestNewB}) {
+		t.Errorf("Deleted = %v, want [%s]", got, createdTestNewB)
+	}
+}
+
+func TestRollbackTransportWithOptions_UnreadableOriginIsNotDeleted(t *testing.T) {
+	s := &createdTestServer{
+		programs:    []string{createdTestNewA},
+		histories:   map[string][]string{createdTestNewA: {createdTestTask}},
+		queryStatus: http.StatusForbidden,
+	}
+	result := s.run(t, RollbackOptions{DeleteCreatedObjects: true})
+	if d := s.deleteCalls(); len(d) != 0 {
+		t.Errorf("DELETE sent although the origin could not be read: %v", d)
+	}
+	if got := names(result.Created); !reflect.DeepEqual(got, []string{createdTestNewA}) {
+		t.Errorf("Created = %v, want [%s]", got, createdTestNewA)
+	}
+}
+
+func TestRollbackTransportWithOptions_SubObjectEntriesBlockDeletion(t *testing.T) {
+	s := &createdTestServer{
+		programs:  []string{createdTestNewA},
+		histories: map[string][]string{createdTestNewA: {createdTestTask}},
+		// A method of an existing class, changed in the same request, is not
+		// rolled back (#134) and may use the created program.
+		extraEntries: `<tm:abap_object tm:pgmid="LIMU" tm:type="METH" tm:name="ZCL_EXISTING                  DO_IT"/>`,
+	}
+	result := s.run(t, RollbackOptions{DeleteCreatedObjects: true})
+	if d := s.deleteCalls(); len(d) != 0 {
+		t.Errorf("DELETE sent although a sub-object entry was not rolled back: %v", d)
+	}
+	if len(result.Created) != 1 || result.Created[0].Reason != rollbackReasonCreatedSubObjects {
+		t.Errorf("Created = %v, want %s with reason %q", result.Created, createdTestNewA, rollbackReasonCreatedSubObjects)
+	}
+}
+
+func TestRollbackTransportWithOptions_AlreadyGoneCountsAsDeleted(t *testing.T) {
+	s := &createdTestServer{
+		programs:     []string{createdTestNewA},
+		histories:    map[string][]string{createdTestNewA: {createdTestTask}},
+		deleteStatus: func(string, int) int { return http.StatusNotFound },
+	}
+	result := s.run(t, RollbackOptions{DeleteCreatedObjects: true})
+	if got := names(result.Deleted); !reflect.DeepEqual(got, []string{createdTestNewA}) {
+		t.Errorf("Deleted = %v, want [%s]; failed=%v", got, createdTestNewA, result.Failed)
+	}
+}
+
+func TestRollbackTransportWithOptions_401DuringRestoreDeletesNothing(t *testing.T) {
+	s := &createdTestServer{
+		programs: []string{createdTestNewA, createdTestChanged},
+		histories: map[string][]string{
+			createdTestChanged: {createdTestTask, "AAAK900001"},
+			createdTestNewA:    {createdTestTask},
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("_action") == createdTestLockAction {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		s.handler(t)(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	client := NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	result, err := client.RollbackTransportWithOptions(context.Background(), createdTestRequest, RollbackOptions{DeleteCreatedObjects: true})
+	if err != nil {
+		t.Fatalf("RollbackTransportWithOptions: %v", err)
+	}
+	if d := s.deleteCalls(); len(d) != 0 {
+		t.Errorf("DELETE sent after a 401: %v", d)
+	}
+	for _, c := range s.calls {
+		if c == "query" {
+			t.Errorf("TADIR query sent after a 401")
+		}
 	}
 	if len(result.Failed) != 2 {
 		t.Fatalf("Failed = %v, want both programs", result.Failed)

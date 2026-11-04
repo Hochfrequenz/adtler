@@ -175,7 +175,7 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 </feed>`))
 		case r.URL.Path == "/older-version":
 			_, _ = w.Write([]byte("REPORT ZTEST.\n"))
-		case r.URL.Path == object && r.URL.Query().Get("_action") == "LOCK":
+		case r.URL.Path == object && r.URL.Query().Get("_action") == createdTestLockAction:
 			calls = append(calls, "lock")
 			_, _ = w.Write([]byte("lock-handle"))
 		case r.URL.Path == object+"/source/main" && r.Method == http.MethodGet:

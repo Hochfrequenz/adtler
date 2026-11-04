@@ -327,7 +327,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[6] RollbackTransportWithOptions: %v", err)
 	}
-	logRollback(t, "[6]", result)
+	logRollback(t, "[6]", t2, result)
 	if !rollbackLists(result.Restored, objName) {
 		t.Errorf("[6] changed program not in Restored")
 	}

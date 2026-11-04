@@ -232,9 +232,11 @@ use that yet.
 `RollbackTransportWithOptions` with `DeleteCreatedObjects` deletes the source
 objects a request created
 ([#268](https://github.com/Hochfrequenz/adtler/issues/268)). adtler has no way
-to bring a deleted object back, so an object that existed before the request
-but has no version outside it (a local object without versions, later moved
-into the request) is lost for good. That is why the option is off by default:
+to bring a deleted object back. It deletes only objects whose version history
+shows nothing but this request and whose TADIR source system is the request's
+own, so an imported object is kept; but an object that existed in this system
+before the request without a version outside it (a local object without
+versions, later moved into the request) is lost for good. That is why the option is off by default:
 `RollbackTransport` reports such objects in `Created` and leaves them in place.
 
 **Deleting a package works since #150.** `DeleteObject` used to send the ETag it

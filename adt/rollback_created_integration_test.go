@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -58,7 +59,7 @@ func TestRollbackTransport_CreatedObject_Integration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("[2] RollbackTransport: %v", err)
 			}
-			logRollback(t, "[2]", result)
+			logRollback(t, "[2]", request, result)
 			if !rollbackLists(result.Created, objName) {
 				t.Errorf("[2] program not in Created")
 			}
@@ -75,7 +76,7 @@ func TestRollbackTransport_CreatedObject_Integration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("[3] RollbackTransportWithOptions: %v", err)
 			}
-			logRollback(t, "[3]", result)
+			logRollback(t, "[3]", request, result)
 			if !rollbackLists(result.Deleted, objName) {
 				t.Errorf("[3] program not in Deleted")
 			}
@@ -126,11 +127,17 @@ func rollbackLists(entries []adt.RollbackEntry, name string) bool {
 	return false
 }
 
-func logRollback(t *testing.T, step string, r *adt.RollbackResult) {
+// logRollback logs the partition sizes and the reasons of failed and created
+// entries, with request replaced by a placeholder so the log can be posted.
+func logRollback(t *testing.T, step, request string, r *adt.RollbackResult) {
 	t.Helper()
 	t.Logf("%s restored=%d skipped=%d failed=%d created=%d deleted=%d",
 		step, len(r.Restored), len(r.Skipped), len(r.Failed), len(r.Created), len(r.Deleted))
+	redact := func(s string) string { return strings.ReplaceAll(s, request, "<request>") }
 	for _, f := range r.Failed {
-		t.Logf("%s failed: %s — %s", step, f.Type, f.Reason)
+		t.Logf("%s failed: %s — %s", step, f.Type, redact(f.Reason))
+	}
+	for _, c := range r.Created {
+		t.Logf("%s created: %s — %s", step, c.Type, redact(c.Reason))
 	}
 }
