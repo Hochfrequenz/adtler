@@ -70,7 +70,10 @@ func newHTTPSvcPackageServer(svcBody string, propsStatus int) *httpSvcPackageSer
 			s.propsURI.Store(r.URL.Query().Get("uri"))
 			s.propsFacet.Store(r.URL.Query().Get("facet"))
 			s.propsAccept.Store(r.Header.Get("Accept"))
-			if propsStatus != http.StatusOK {
+			// A 406 server answers only the wildcard offer, like ADT for a media
+			// type it does not produce.
+			wildcardRetry := propsStatus == http.StatusNotAcceptable && r.Header.Get("Accept") == "*/*"
+			if propsStatus != http.StatusOK && !wildcardRetry {
 				w.WriteHeader(propsStatus)
 				return
 			}
@@ -152,6 +155,26 @@ func TestGetObjectInfo_HTTPService_LookupFailureKeepsTheObject(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.propsGets); got != 1 {
 		t.Errorf("object properties requested %d times, want 1", got)
+	}
+}
+
+// TestGetObjectInfo_HTTPService_LookupRetriesOnNotAcceptable keeps a release
+// that renames the object-properties media type from emptying the package
+// again: a 406 is a wrong offer, so the lookup asks once more with */*.
+func TestGetObjectInfo_HTTPService_LookupRetriesOnNotAcceptable(t *testing.T) {
+	srv := newHTTPSvcPackageServer(httpSvcXML, http.StatusNotAcceptable)
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), httpSvcURI)
+	if err != nil {
+		t.Fatalf("GetObjectInfo: unexpected error: %v", err)
+	}
+	if info.PackageName != httpSvcPackage {
+		t.Errorf("package: got %q, want %q from the */* retry", info.PackageName, httpSvcPackage)
+	}
+	if got := atomic.LoadInt32(&srv.propsGets); got != 2 {
+		t.Errorf("object properties requested %d times, want 2 (specific offer, then */*)", got)
 	}
 }
 

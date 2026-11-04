@@ -385,7 +385,8 @@ that is correct, not a gap.
 (SAP_BASIS 816) an HTTP service's object document has no `packageRef` and links to no document
 that has one, so `GetObjectInfo` asks
 `/sap/bc/adt/repository/informationsystem/objectproperties/values?uri=…&facet=package`, keyed
-by the service's own URI, and reports the package from there. Like the function-group lookup,
+by the service's own URI, and reports the package from there (retrying once with `*/*` on a
+406, like every object read). Like the function-group lookup,
 it costs no request when the document names a package, and a failed lookup returns the
 service with an empty `PackageName`. A 401 is the exception: it is returned as an error.
 

@@ -294,8 +294,8 @@ func (c *httpClient) packageFromObjectProperties(ctx context.Context, objectURI 
 	params := url.Values{}
 	params.Set("uri", objectURI)
 	params.Set("facet", "package")
-	resp, err := c.doRead(ctx, "/sap/bc/adt/repository/informationsystem/objectproperties/values?"+params.Encode(),
-		map[string]string{"Accept": "application/vnd.sap.adt.repository.objproperties.result.v1+xml"})
+	resp, err := c.readWithAcceptFallback(ctx, "/sap/bc/adt/repository/informationsystem/objectproperties/values?"+params.Encode(),
+		"application/vnd.sap.adt.repository.objproperties.result.v1+xml")
 	if err == nil {
 		defer func() { _ = resp.Body.Close() }()
 		err = checkResponse(resp)
