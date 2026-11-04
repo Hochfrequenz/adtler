@@ -265,3 +265,46 @@ func TestDeleteObject_RetryRecognisesPackageURIForms(t *testing.T) {
 		})
 	}
 }
+
+// TestDeleteObject_RetriesETagReadWithAnyMediaTypeOn406 is the regression test
+// for adtler#257. An object kind this client has no Accept entry for gets
+// "application/xml", which ADT answers 406. The ETag read must ask once more
+// with */*, as GetObjectInfo and FetchETag do, and the DELETE must carry the
+// ETag of that second read. Before the fix the 406 ended the call and no
+// DELETE was sent.
+func TestDeleteObject_RetriesETagReadWithAnyMediaTypeOn406(t *testing.T) {
+	const uri = "/sap/bc/adt/enhancements/enhoxh/zexample"
+	var accepts []string
+	var ifMatch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet:
+			accepts = append(accepts, r.Header.Get("Accept"))
+			if r.Header.Get("Accept") != acceptAnything {
+				w.WriteHeader(http.StatusNotAcceptable)
+				_, _ = w.Write([]byte(`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><type id="ExceptionResourceNotAcceptable"/><message lang="EN">Not acceptable</message></exc:exception>`))
+				return
+			}
+			w.Header().Set("ETag", "etag-any")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete:
+			ifMatch = r.Header.Get("If-Match")
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+
+	if err := client.DeleteObject(context.Background(), uri, "", ""); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	if len(accepts) != 2 || accepts[0] == acceptAnything || accepts[1] != acceptAnything {
+		t.Errorf("ETag reads: got Accept headers %q, want a specific offer and then */*", accepts)
+	}
+	if ifMatch != "etag-any" {
+		t.Errorf("DELETE If-Match: got %q, want the ETag of the */* read", ifMatch)
+	}
+}
