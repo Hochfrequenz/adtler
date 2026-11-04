@@ -184,10 +184,10 @@ func fetchTableKeys(ctx context.Context, client adt.Client, table string) ([]str
 // data types (key name to type, may be nil).
 //
 // A table ends on the first page with fewer rows than pageSize (an empty page
-// included). A full page that cannot be continued, because a key column is
-// missing from the result or because the next page would start where the
-// previous one did, is an error: the export never reports such a table as
-// complete (#218).
+// included). A full page that cannot be continued, because the table has no
+// key besides the client (#229), because a key column is missing from the
+// result or because the next page would start where the previous one did, is
+// an error: the export never reports such a table as complete (#218).
 func exportTable(ctx context.Context, client adt.Client, table string, keys []string, keyTypes map[string]string, pageSize int) (*TableExportResult, error) {
 	nonMandtKeys := adt.FilterNonMandtKeys(keys)
 
@@ -235,9 +235,18 @@ func exportTable(ctx context.Context, client adt.Client, table string, keys []st
 
 		allRows = append(allRows, result.Rows...)
 
-		// Stop if we got fewer rows than pageSize (last page) or no pagination keys.
-		if len(result.Rows) < pageSize || len(paginateKeys) == 0 {
+		// Stop if we got fewer rows than pageSize (last page).
+		if len(result.Rows) < pageSize {
 			break
+		}
+
+		// A table without a key besides the client has nothing to continue
+		// after, and a full page cannot be told apart from a table that holds
+		// exactly one page. Fail it rather than report what may be only its
+		// first page as complete (#229).
+		if len(paginateKeys) == 0 {
+			return nil, fmt.Errorf("export %s page %d: the table has no key besides the client to paginate on and returned a full page (page size %d); the table may hold more rows, raise the page size to export it",
+				table, pages, pageSize)
 		}
 
 		// Extract last row's non-MANDT key values for pagination. A page that
