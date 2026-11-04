@@ -387,7 +387,7 @@ that has one, so `GetObjectInfo` asks
 `/sap/bc/adt/repository/informationsystem/objectproperties/values?uri=…&facet=package`, keyed
 by the service's own URI, and reports the package from there. Like the function-group lookup,
 it costs no request when the document names a package, and a failed lookup returns the
-service with an empty `PackageName`.
+service with an empty `PackageName`. A 401 is the exception: it is returned as an error.
 
 **A service binding has no source at all.** It is configuration; its object
 document is the only thing to read, and `…/source/main` is a genuine 404.

@@ -288,18 +288,22 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 // (adtler#260).
 //
 // Best effort, like packageOfFunctionGroup: a failed lookup returns "", unless
-// the caller's context is done.
+// the caller's context is done or SAP answered 401, which is final and must
+// not pass for a service without a package.
 func (c *httpClient) packageFromObjectProperties(ctx context.Context, objectURI string) (string, error) {
 	params := url.Values{}
 	params.Set("uri", objectURI)
 	params.Set("facet", "package")
 	resp, err := c.doRead(ctx, "/sap/bc/adt/repository/informationsystem/objectproperties/values?"+params.Encode(),
 		map[string]string{"Accept": "application/vnd.sap.adt.repository.objproperties.result.v1+xml"})
-	if err != nil {
-		return "", ctx.Err()
+	if err == nil {
+		defer func() { _ = resp.Body.Close() }()
+		err = checkResponse(resp)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if checkResponse(resp) != nil {
+	if isUnauthorized(err) {
+		return "", err
+	}
+	if err != nil {
 		return "", ctx.Err()
 	}
 	var props struct {

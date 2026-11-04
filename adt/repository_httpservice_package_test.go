@@ -62,7 +62,7 @@ func newHTTPSvcPackageServer(svcBody string, propsStatus int) *httpSvcPackageSer
 		switch r.URL.Path {
 		case csrfEndpoint:
 			w.Header().Set("X-CSRF-Token", "token")
-		case "/sap/bc/adt/ucon/httpservices//abc/srv", "/sap/bc/adt/ucon/httpservices/%2fabc%2fsrv":
+		case "/sap/bc/adt/ucon/httpservices//abc/srv": // r.URL.Path is httpSvcURI decoded
 			w.Header().Set("Content-Type", "application/vnd.sap.adt.uconn.http.v1+xml")
 			_, _ = w.Write([]byte(svcBody))
 		case objPropsPath:
@@ -152,6 +152,23 @@ func TestGetObjectInfo_HTTPService_LookupFailureKeepsTheObject(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.propsGets); got != 1 {
 		t.Errorf("object properties requested %d times, want 1", got)
+	}
+}
+
+// TestGetObjectInfo_HTTPService_UnauthorizedLookupIsReported keeps a 401 from
+// looking like a service without a package: the credential is no longer
+// accepted, and the caller has to learn that rather than see an empty package.
+func TestGetObjectInfo_HTTPService_UnauthorizedLookupIsReported(t *testing.T) {
+	srv := newHTTPSvcPackageServer(httpSvcXML, http.StatusUnauthorized)
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), httpSvcURI)
+	if adt.ClassifyError(err) != adt.ErrorUnauthorized {
+		t.Fatalf("GetObjectInfo: got info %v, error %v, want an unauthorized error", info, err)
+	}
+	if got := atomic.LoadInt32(&srv.propsGets); got != 1 {
+		t.Errorf("object properties requested %d times, want 1 — a 401 is final under Basic auth", got)
 	}
 }
 
