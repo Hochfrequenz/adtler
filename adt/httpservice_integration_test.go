@@ -24,6 +24,8 @@ import (
 //
 // The handler class is discovered: the test borrows the one of an existing
 // HTTP service. It is never called; the service gets no ICF node.
+//
+// It also covers adtler#260: GetObjectInfo on the new service reports $TMP.
 func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
@@ -78,6 +80,16 @@ func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 			}
 			if svc.HandlerClass != handler || svc.Name != name || svc.URL == "" {
 				t.Errorf("[%s] read back name=%q handler matches=%v url set=%v", sys.Name, svc.Name, svc.HandlerClass == handler, svc.URL != "")
+			}
+
+			// adtler#260: the service document names no package, so this one
+			// comes from the object-properties lookup.
+			info, err := sys.Client.GetObjectInfo(ctx, uri)
+			if err != nil {
+				t.Fatalf("[%s] GetObjectInfo: %s", sys.Name, redactErr(err))
+			}
+			if info.PackageName != "$TMP" {
+				t.Errorf("[%s] GetObjectInfo package = %q, want $TMP", sys.Name, info.PackageName)
 			}
 
 			res, err := sys.Client.ActivateObjects(ctx, []string{uri})
