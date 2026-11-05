@@ -54,18 +54,20 @@ func TestReleaseTransport_Verified(t *testing.T) {
 	cases := []struct {
 		name              string
 		postReleaseStatus string
-		wantReleased      bool
-		wantStatus        string
+		wantState         adt.TransportState
+		wantRaw           string
 	}{
-		{"released (status R)", adt.TransportStatusReleased, true, adt.TransportStatusReleased},
-		{"released, import protected (status N)", adt.TransportStatusReleasedProtected, true, adt.TransportStatusReleasedProtected},
-		{"silent fail (status D)", adt.TransportStatusModifiable, false, adt.TransportStatusModifiable},
+		{"released (status R)", adt.TransportStatusReleased, adt.TransportStateReleased, adt.TransportStatusReleased},
+		{"released, import protected (status N)", adt.TransportStatusReleasedProtected, adt.TransportStateReleased, adt.TransportStatusReleasedProtected},
+		{"silent fail (status D)", adt.TransportStatusModifiable, adt.TransportStateModifiable, adt.TransportStatusModifiable},
 		// #270: L is modifiable (protected), not released.
-		{"still modifiable, protected (status L)", adt.TransportStatusModifiableProtected, false, adt.TransportStatusModifiableProtected},
+		{"still modifiable, protected (status L)", adt.TransportStatusModifiableProtected, adt.TransportStateModifiable, adt.TransportStatusModifiableProtected},
 		// #270: O means the release started but has not finished.
-		{"release started (status O)", adt.TransportStatusReleaseStarted, false, adt.TransportStatusReleaseStarted},
-		{"status read fails -> optimistic released", "", true, ""},
-		{"status read has no status -> optimistic released", releaseStatusOmitted, true, ""},
+		{"release started (status O)", adt.TransportStatusReleaseStarted, adt.TransportStateReleaseInProgress, adt.TransportStatusReleaseStarted},
+		// #274: an unconfirmed release is unknown, never released.
+		{"unknown status letter", "X", adt.TransportStateUnknown, "X"},
+		{"status read fails", "", adt.TransportStateUnknown, ""},
+		{"status read has no status", releaseStatusOmitted, adt.TransportStateUnknown, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,11 +85,11 @@ func TestReleaseTransport_Verified(t *testing.T) {
 			if res.Transport != transport {
 				t.Errorf("Transport = %q, want %q", res.Transport, transport)
 			}
-			if res.Released != tc.wantReleased {
-				t.Errorf("Released = %v, want %v", res.Released, tc.wantReleased)
+			if res.State != tc.wantState {
+				t.Errorf("State = %v, want %v", res.State, tc.wantState)
 			}
-			if res.Status != tc.wantStatus {
-				t.Errorf("Status = %q, want %q", res.Status, tc.wantStatus)
+			if res.RawStatus != tc.wantRaw {
+				t.Errorf("RawStatus = %q, want %q", res.RawStatus, tc.wantRaw)
 			}
 		})
 	}
@@ -100,13 +102,12 @@ func TestReleaseTransport_Verified(t *testing.T) {
 // nesting requests under <tm:workbench>/<tm:modifiable>. Before Task 5,
 // parseTransportInfo only bound a request as a direct child of the root, so
 // it never found AAAK902952 in that shape and GetTransportInfo always
-// errored on ECC; ReleaseTransport treats a failed status read as "assume
-// released" (see its doc comment), so the silent-failure detection this
-// method exists for never fired on the one system it targets. With
-// parseTransportInfo fixed, the status read succeeds, finds AAAK902952 still
-// at status "D" (modifiable — see eccWorklistXML), and this test asserts the
-// caller now gets Released: false instead of the false-positive Released:
-// true.
+// errored on ECC; ReleaseTransport then treated a failed status read as
+// "assume released", so the silent-failure detection this method exists for
+// never fired on the one system it targets. With parseTransportInfo fixed,
+// the status read succeeds, finds AAAK902952 still at status "D"
+// (modifiable — see eccWorklistXML), and this test asserts the caller gets
+// TransportStateModifiable.
 func TestReleaseTransport_ECCWorklistStatusRead_ReportsModifiable(t *testing.T) {
 	const transport = "AAAK902952"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,9 +143,9 @@ func TestReleaseTransport_ECCWorklistStatusRead_ReportsModifiable(t *testing.T) 
 	if res.Transport != transport {
 		t.Errorf("Transport = %q, want %q", res.Transport, transport)
 	}
-	if res.Released {
-		t.Errorf("Released = true, want false: eccWorklistXML shows %s still at status %q (modifiable)",
-			transport, adt.TransportStatusModifiable)
+	if res.State != adt.TransportStateModifiable {
+		t.Errorf("State = %v, want modifiable: eccWorklistXML shows %s still at status %q",
+			res.State, transport, adt.TransportStatusModifiable)
 	}
 }
 
@@ -170,20 +171,5 @@ func TestReleaseTransport_ReleaseErrorPropagates(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected nil result on error, got %+v", res)
-	}
-}
-
-func TestIsReleasedStatus(t *testing.T) {
-	for status, want := range map[string]bool{
-		adt.TransportStatusReleased:            true,
-		adt.TransportStatusReleasedProtected:   true,
-		adt.TransportStatusModifiable:          false,
-		adt.TransportStatusModifiableProtected: false,
-		adt.TransportStatusReleaseStarted:      false,
-		"":                                     false,
-	} {
-		if got := adt.IsReleasedStatus(status); got != want {
-			t.Errorf("IsReleasedStatus(%q) = %v, want %v", status, got, want)
-		}
 	}
 }

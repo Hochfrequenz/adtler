@@ -14,8 +14,8 @@ import (
 
 // Tests in this file exercise ReleaseTransportWithTasks (including its
 // post-release status check, which reports ECC's silent release failure as
-// ReleaseResult.Released == false) and RollbackTransport against a real SAP
-// system. They create their own disposable transports and
+// ReleaseResult.State == TransportStateModifiable) and RollbackTransport
+// against a real SAP system. They create their own disposable transports and
 // objects and must not touch any pre-existing fixtures.
 //
 // Run with: go test -tags='integration transport' -v -run 'TestReleaseTransportWithTasks|TestRollbackTransport' ./adt/...
@@ -59,9 +59,10 @@ func TestReleaseTransportWithTasks_Integration(t *testing.T) {
 	if result.Transport != trNumber {
 		t.Errorf("result.Transport: got %q, want %q", result.Transport, trNumber)
 	}
-	// Released=false on ECC is the documented silent-fail case. It is NOT a
-	// test failure — the function's job is to detect it, not to fix it.
-	t.Logf("transport %s: released=%v", trNumber, result.Released)
+	// TransportStateModifiable on ECC is the documented silent-fail case. It
+	// is NOT a test failure — the function's job is to detect it, not to fix
+	// it.
+	t.Logf("transport %s: state=%v raw=%q", trNumber, result.State, result.RawStatus)
 }
 
 func TestRollbackTransport_Integration(t *testing.T) {
@@ -86,8 +87,8 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	t.Cleanup(func() {
 		if r, releaseErr := client.ReleaseTransportWithTasks(context.Background(), t1); releaseErr != nil {
 			t.Logf("cleanup: ReleaseTransportWithTasks(%s) failed: %v", t1, releaseErr)
-		} else if !r.Released {
-			t.Logf("cleanup: %s not released after release (status %q; D/L = ECC silent-release-failure, O = still releasing) — release via SE09 or the next run will find the fixture locked", t1, r.Status)
+		} else if r.State != adt.TransportStateReleased {
+			t.Logf("cleanup: %s not released after release (state %v; modifiable = ECC silent-release-failure, release_in_progress = still releasing) — release via SE09 or the next run will find the fixture locked", t1, r.State)
 		}
 	})
 
@@ -127,13 +128,13 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	// has a documented silent-failure mode where the request stays modifiable
 	// despite that 2xx (see the ReleaseTransport doc in transport.go).
 	// ReleaseTransportWithTasks re-reads the status and reports that case as
-	// Released == false; act on it instead of racing into Phase 3 against an
-	// object still locked in T1.
+	// TransportStateModifiable; act on any state other than released instead
+	// of racing into Phase 3 against an object still locked in T1.
 	releaseResult, err := client.ReleaseTransportWithTasks(ctx, t1)
 	if err != nil {
 		t.Fatalf("[2] ReleaseTransportWithTasks T1: %v", err)
 	}
-	t1Free := releaseResult.Released
+	t1Free := releaseResult.State == adt.TransportStateReleased
 	if t1Free {
 		t.Logf("[2] T1 released")
 	}
@@ -158,11 +159,11 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		// in progress) where the object is still locked, so "!= D" alone is not
 		// enough to prove Phase 3 can proceed. "R" is this system's actual
 		// terminal status (observed live), "N" its import-protected variant.
-		if adt.IsReleasedStatus(info.Status) {
+		if info.State == adt.TransportStateReleased {
 			t1Free = true
-			t.Logf("[2] T1 released (manually, observed after %d poll(s), status=%q)", i+1, info.Status)
+			t.Logf("[2] T1 released (manually, observed after %d poll(s), status=%q)", i+1, info.RawStatus)
 		} else {
-			t.Logf("[2] T1 status=%q (not yet released), continuing to poll", info.Status)
+			t.Logf("[2] T1 status=%q (not yet released), continuing to poll", info.RawStatus)
 		}
 	}
 
@@ -170,8 +171,9 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		// The object still needs freeing from T1 for Phase 3, so try
 		// RemoveFromTransport as the only other ADT-only path before giving up.
 		// This is not the #149 fallback-swallows-a-never-worked-request pattern:
-		// we only reach here after a positive, typed signal (Released == false,
-		// confirmed by polling) that release genuinely didn't happen, and if
+		// we only reach here when the release result was not
+		// TransportStateReleased and polling did not observe a release either,
+		// and if
 		// RemoveFromTransport also can't run, we t.Skip — visibly, not a silent
 		// pass.
 		tasks, taskErr := client.GetTransportTasks(ctx, t1)
@@ -225,8 +227,8 @@ func TestRollbackTransport_Integration(t *testing.T) {
 		}
 		if r, releaseErr := client.ReleaseTransportWithTasks(bgCtx, t2); releaseErr != nil {
 			t.Logf("cleanup: ReleaseTransportWithTasks(%s) failed: %v", t2, releaseErr)
-		} else if !r.Released {
-			t.Logf("cleanup: %s not released after release (status %q; D/L = ECC silent-release-failure, O = still releasing) — release via SE09 or the next run will find the fixture locked", t2, r.Status)
+		} else if r.State != adt.TransportStateReleased {
+			t.Logf("cleanup: %s not released after release (state %v; modifiable = ECC silent-release-failure, release_in_progress = still releasing) — release via SE09 or the next run will find the fixture locked", t2, r.State)
 		} else {
 			t.Logf("cleanup: released T2 (%s)", t2)
 		}

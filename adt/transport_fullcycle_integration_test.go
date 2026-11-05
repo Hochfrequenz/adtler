@@ -52,8 +52,8 @@ func TestCreateTransport_Integration(t *testing.T) {
 	} else {
 		t.Logf("description: %q", info.Description)
 	}
-	if info.Status != "D" {
-		t.Errorf("expected status D, got %q", info.Status)
+	if info.State != adt.TransportStateModifiable {
+		t.Errorf("expected state modifiable, got %v (raw %q)", info.State, info.RawStatus)
 	}
 }
 
@@ -81,12 +81,12 @@ func TestReleaseTransport_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetTransportInfo: %v", err)
 		}
-		if adt.IsReleasedStatus(info.Status) {
-			t.Logf("verified: %s status=%s (released)", trNumber, info.Status)
+		if info.State == adt.TransportStateReleased {
+			t.Logf("verified: %s status=%s (released)", trNumber, info.RawStatus)
 			released = true
 			break
 		}
-		t.Logf("status=%q, waiting for release to complete...", info.Status)
+		t.Logf("status=%q, waiting for release to complete...", info.RawStatus)
 		time.Sleep(10 * time.Second)
 	}
 	if !released {
@@ -311,12 +311,12 @@ func TestTransportFullCycle_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetTransportInfo after release: %v", err)
 		}
-		if adt.IsReleasedStatus(info.Status) {
-			t.Logf("[7] verified: %s status=%s (released)", trNumber, info.Status)
+		if info.State == adt.TransportStateReleased {
+			t.Logf("[7] verified: %s status=%s (released)", trNumber, info.RawStatus)
 			released = true
 			break
 		}
-		t.Logf("[7] status=%q, waiting...", info.Status)
+		t.Logf("[7] status=%q, waiting...", info.RawStatus)
 		time.Sleep(10 * time.Second)
 	}
 	if !released {

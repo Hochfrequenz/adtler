@@ -117,11 +117,12 @@ func (c *httpClient) copySources(ctx context.Context, sourceRequest string) ([]s
 		return nil, fmt.Errorf("read source %s: %w", sourceRequest, err)
 	}
 	sources := []string{sourceRequest}
-	// The tasks of D (modifiable) and L (modifiable, protected) still hold
-	// the objects, so they are copied too. O (release started) is treated the
-	// same way: its tasks are already released and their objects merged into
-	// the request, so copying them again is redundant but harmless.
-	if IsReleasedStatus(info.Status) {
+	// The tasks of a modifiable request still hold the objects, so they are
+	// copied too. A request whose release is in progress (or whose state is
+	// unknown) is treated the same way: its tasks are already released and
+	// their objects merged into the request, so copying them again is
+	// redundant but harmless.
+	if info.State == TransportStateReleased {
 		return sources, nil
 	}
 	tasks, err := parseTransportTaskNumbers(data, sourceRequest)

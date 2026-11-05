@@ -24,7 +24,7 @@ func TestCheckTransport_Integration(t *testing.T) {
 		if i >= 5 {
 			break
 		}
-		t.Logf("  %s (%s) — %s", r.Number, r.Status, r.Description)
+		t.Logf("  %s (%s) — %s", r.Number, r.RawStatus, r.Description)
 	}
 
 	if result.Result == "" {
@@ -39,7 +39,7 @@ func TestGetTransportRequests_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	transports, err := client.GetTransportRequests(ctx, "", "D")
+	transports, err := listModifiableRequests(ctx, client)
 	if err != nil {
 		t.Fatalf("GetTransportRequests failed: %v", err)
 	}
@@ -55,11 +55,11 @@ func TestGetTransportRequests_Integration(t *testing.T) {
 		if tr.Owner == "" {
 			t.Errorf("transport [%d]: Owner is empty", i)
 		}
-		if tr.Status == "" {
-			t.Errorf("transport [%d]: Status is empty", i)
+		if tr.State != adt.TransportStateModifiable {
+			t.Errorf("transport [%d]: State is %v (raw %q), want modifiable", i, tr.State, tr.RawStatus)
 		}
 		if i < 5 {
-			t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.Status, tr.Description)
+			t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.RawStatus, tr.Description)
 		}
 	}
 }
@@ -74,7 +74,7 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
 
-			transports, err := sys.Client.GetTransportRequests(ctx, "", "D")
+			transports, err := listModifiableRequests(ctx, sys.Client)
 			if err != nil {
 				t.Fatalf("GetTransportRequests failed: %v", err)
 			}
@@ -87,53 +87,84 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 					t.Errorf("transport [%d]: Number is empty", i)
 				}
 				if i < 3 {
-					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.Status, tr.Description)
+					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.RawStatus, tr.Description)
 				}
 			}
 		})
 	}
 }
 
-// TestGetTransportRequests_ReleasedFilter_Integration guards #270: the
-// released filter must find released requests, and those requests must carry
-// TransportStatusReleased (or its import-protected variant). While the
-// constant was "L" (modifiable, protected), ECC answered the filter with
-// modifiable requests only, and no request on either system carried "L".
+// TestGetTransportRequests_StateFilter_Integration guards #270 and #274: each
+// filter must return requests, and only requests in the state it names.
 //
-// The test lists without a user: on ECC the configured user may own no
-// released request, while the system as a whole has many. It does not demand
-// that every returned request is released, because the S/4 tree path does not
-// apply the status filter yet (#242).
-func TestGetTransportRequests_ReleasedFilter_Integration(t *testing.T) {
+// Before #274 the client passed the filter to SAP as a single TRSTATUS letter
+// and did not check the answer. The S/4 transport organizer tree ignores that
+// parameter and returned the same released requests for every filter, so the
+// modifiable case failed there. On ECC the released list came from the E070
+// fallback, which asked for "R" only and so missed requests released with
+// import protection ("N").
+//
+// The test reads the first page of every user's requests: on ECC the
+// configured user may own no released request, while the system as a whole
+// has many. It logs counts per state only, never request numbers.
+func TestGetTransportRequests_StateFilter_Integration(t *testing.T) {
+	cases := []struct {
+		filter adt.TransportFilter
+		want   adt.TransportState
+	}{
+		{adt.TransportFilterModifiable, adt.TransportStateModifiable},
+		{adt.TransportFilterReleased, adt.TransportStateReleased},
+	}
 	for _, sys := range eachSystem(t) {
 		sys := sys
-		t.Run(sys.Name, func(t *testing.T) {
-			ctx := context.Background()
-			filter := adt.TransportStatusReleased
-			requests, err := sys.Client.GetTransportRequests(ctx, "", filter)
-			if err != nil {
-				t.Fatalf("GetTransportRequests(%q) failed: %v", filter, err)
-			}
-			statuses := map[string]int{}
-			released := 0
-			for _, tr := range requests {
-				statuses[tr.Status]++
-				if adt.IsReleasedStatus(tr.Status) {
-					released++
+		for _, tc := range cases {
+			t.Run(sys.Name+"/"+tc.filter.String(), func(t *testing.T) {
+				ctx := context.Background()
+				page, err := sys.Client.GetTransportRequests(ctx, adt.TransportListOptions{
+					User: adt.TransportAllUsers, Filter: tc.filter, Limit: adt.MaxTransportPageSize,
+				})
+				if err != nil {
+					t.Fatalf("GetTransportRequests(%v) failed: %v", tc.filter, err)
 				}
-			}
-			t.Logf("filter %q: %d request(s), statuses %v", filter, len(requests), statuses)
-			if len(requests) == 0 {
-				t.Skip("no request visible for the released filter on this system")
-			}
-			if released == 0 {
-				t.Fatalf("filter %q returned %d request(s), none of them released (statuses %v)",
-					filter, len(requests), statuses)
-			}
-			if released < len(requests) {
-				t.Logf("%d of %d request(s) are not released: the status filter is not applied (#242)",
-					len(requests)-released, len(requests))
-			}
-		})
+				states := map[string]int{}
+				for _, tr := range page.Requests {
+					states[tr.State.String()+"/"+tr.RawStatus]++
+				}
+				t.Logf("filter %v: %d request(s) on the first page, more: %v, state/raw counts %v",
+					tc.filter, len(page.Requests), page.Next != "", states)
+				if len(page.Requests) == 0 {
+					t.Skipf("no request visible for the %v filter on this system", tc.filter)
+				}
+				seen := map[string]bool{}
+				for _, tr := range page.Requests {
+					seen[tr.Number] = true
+					if tr.State != tc.want {
+						t.Fatalf("filter %v returned a request in state %v (raw %q); want only %v",
+							tc.filter, tr.State, tr.RawStatus, tc.want)
+					}
+				}
+				if page.Next == "" {
+					return
+				}
+				// The second page continues after the first: same state, no
+				// request repeated. Every user's released requests include
+				// SAP-delivered ones, whose numbers are not of the <SID>K9 form.
+				next, err := sys.Client.GetTransportRequests(ctx, adt.TransportListOptions{
+					User: adt.TransportAllUsers, Filter: tc.filter, Limit: adt.MaxTransportPageSize, After: page.Next,
+				})
+				if err != nil {
+					t.Fatalf("second page of %v failed: %v", tc.filter, err)
+				}
+				t.Logf("filter %v: %d request(s) on the second page", tc.filter, len(next.Requests))
+				for _, tr := range next.Requests {
+					if seen[tr.Number] {
+						t.Fatalf("the second page repeats a request of the first")
+					}
+					if tr.State != tc.want {
+						t.Fatalf("second page of %v holds a request in state %v (raw %q)", tc.filter, tr.State, tr.RawStatus)
+					}
+				}
+			})
+		}
 	}
 }

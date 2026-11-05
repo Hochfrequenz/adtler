@@ -352,7 +352,8 @@ func TestGetTransportInfo_ECCWorklist_SelectsMatchingRequest(t *testing.T) {
 		Number:      "AAAK902952",
 		Owner:       "TESTUSER1",
 		Description: "Lock reproducer probe (throwaway, delete after)",
-		Status:      adt.TransportStatusModifiable,
+		State:       adt.TransportStateModifiable,
+		RawStatus:   adt.TransportStatusModifiable,
 	}
 	if *info != *want {
 		t.Errorf("got %+v, want %+v", *info, *want)
@@ -396,8 +397,8 @@ func TestGetTransportInfo_S4SingleRequest_StillPasses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.Number != "BBBK904438" || info.Owner != "TESTUSER3" || info.Status != adt.TransportStatusModifiable {
-		t.Errorf("got %+v, want Number=BBBK904438 Owner=TESTUSER3 Status=D", info)
+	if info.Number != "BBBK904438" || info.Owner != "TESTUSER3" || info.State != adt.TransportStateModifiable {
+		t.Errorf("got %+v, want Number=BBBK904438 Owner=TESTUSER3 State=modifiable", info)
 	}
 }
 

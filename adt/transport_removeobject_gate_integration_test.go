@@ -88,7 +88,7 @@ func TestRemoveFromTransport_Gate_Integration(t *testing.T) {
 			// what populates it — RemoveFromTransport must not be the call that
 			// discovers it, or an unclassified system would be probed by the
 			// write itself.
-			reqs, err := client.GetTransportRequests(ctx, "", adt.TransportStatusModifiable)
+			reqs, err := listModifiableRequests(ctx, client)
 			if err != nil {
 				t.Fatalf("GetTransportRequests: %v", err)
 			}

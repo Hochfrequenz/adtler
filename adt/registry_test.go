@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -256,7 +257,9 @@ func TestRegistryDelegatesAllMethods(t *testing.T) {
 		}
 	})
 	t.Run("GetTransportRequests", func(t *testing.T) {
-		if _, err := registry.GetTransportRequests(ctx, "USER", "D"); err != nil {
+		// The mock answers the E070 query with an empty body; delegation is
+		// what this checks, so a partial page is fine.
+		if _, err := registry.GetTransportRequests(ctx, adt.TransportListOptions{User: "USER"}); err != nil && !errors.Is(err, adt.ErrTransportListPartial) {
 			t.Fatalf("GetTransportRequests: %v", err)
 		}
 	})
