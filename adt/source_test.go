@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -623,13 +624,14 @@ func assertSetSourceRetriesAndSucceeds(t *testing.T, objectURI, source string, f
 
 // #443: OO classes/interfaces reject header lock delivery with 403
 // ExceptionResourceNoAccess ("currently editing"); the write must retry with
-// ?lockHandle= query delivery. Verified live on S/4.
+// ?lockHandle= query delivery. Verified live on S/4. Classes no longer take
+// the header attempt at all (#281), so an interface carries this test.
 func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
 	assertSetSourceRetriesAndSucceeds(t,
-		"/sap/bc/adt/oo/classes/zcl_oo_retry",
-		"CLASS zcl_oo_retry DEFINITION PUBLIC.\nENDCLASS.",
+		"/sap/bc/adt/oo/interfaces/zif_oo_retry",
+		"INTERFACE zif_oo_retry PUBLIC.\nENDINTERFACE.",
 		http.StatusForbidden,
-		`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZCL_OO_RETRY</message></exc:exception>`,
+		`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZIF_OO_RETRY</message></exc:exception>`,
 		`"oo-new"`,
 	)
 }
@@ -679,8 +681,178 @@ func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
 // on R/3 a query retry would mask the real error as a 423. Guards the decision
 // to match isCurrentlyEditing on Type only (#443 review).
 func TestSetSource_NoRetryOnBare403(t *testing.T) {
-	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/classes/zcl_oo_bare403", "LOCKH1", "Forbidden") {
+	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/interfaces/zif_oo_bare403", "LOCKH1", "Forbidden") {
 		t.Error("bare 403 (empty Type) wrongly triggered the query-delivery retry")
+	}
+}
+
+const (
+	classURI281 = "/sap/bc/adt/oo/classes/zcl_281"
+	request281  = "AAAK900281"
+	lockH281    = "LOCKH1"
+)
+
+// classWrite281 is one PUT the #281 stub saw: how the lock handle came and
+// what corrNr and If-Match it carried.
+type classWrite281 struct {
+	query, header   bool
+	corrNr, ifMatch string
+}
+
+// driveClassWrite281 runs SetSource for a class against a stub that answers
+// each PUT with respond(write) and returns the PUTs in order.
+func driveClassWrite281(t *testing.T, transport string, respond func(classWrite281) (int, string)) ([]classWrite281, string, error) {
+	t.Helper()
+	var writes []classWrite281
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != http.MethodPut || r.URL.Path != classURI281+"/source/main" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		cw := classWrite281{
+			query:   r.URL.Query().Get("lockHandle") == lockH281,
+			header:  r.Header.Get("X-SAP-Lock-Handle") == lockH281,
+			corrNr:  r.URL.Query().Get("corrNr"),
+			ifMatch: r.Header.Get("If-Match"),
+		}
+		writes = append(writes, cw)
+		status, body := respond(cw)
+		if status == http.StatusOK {
+			w.Header().Set("ETag", `"new"`)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	etag, err := client.SetSource(context.Background(), classURI281, "CLASS zcl_281 DEFINITION PUBLIC.\nENDCLASS.", lockH281, transport, `"old"`)
+	return writes, etag, err
+}
+
+const (
+	notValid281  = `<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">Transport request AAAK900281 is not valid for object ZCL_281!</message></exc:exception>`
+	notLocked281 = `<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceInvalidLockHandle"/><message lang="EN">Resource CLASS ZCL_281 is not locked (invalid lock handle: LOCKH1)</message></exc:exception>`
+)
+
+// #281: a class write into a request delivers the lock handle as
+// ?lockHandle= first, keeping corrNr and If-Match. On ECC the header form
+// fails with 403 "Transport request … is not valid for object" whenever the
+// request does not hold the class yet, and that failure also ends the lock,
+// so a later query retry answers 423 instead (#280). The stub refuses any
+// header-delivered handle with that 403, so the old order fails here.
+func TestSetSource_ClassIntoRequestDeliversLockHandleAsQueryFirst(t *testing.T) {
+	writes, etag, err := driveClassWrite281(t, request281, func(cw classWrite281) (int, string) {
+		if !cw.query {
+			return http.StatusForbidden, notValid281
+		}
+		return http.StatusOK, ""
+	})
+	if err != nil {
+		t.Fatalf("SetSource: %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes: got %d, want 1 (no header attempt before the query delivery)", len(writes))
+	}
+	w := writes[0]
+	if !w.query || w.header {
+		t.Errorf("delivery: query=%v header=%v, want query only", w.query, w.header)
+	}
+	if w.corrNr != request281 {
+		t.Errorf("corrNr: got %q, want %q", w.corrNr, request281)
+	}
+	if w.ifMatch != `"old"` {
+		t.Errorf("If-Match: got %q, want %q", w.ifMatch, `"old"`)
+	}
+	if etag != `"new"` {
+		t.Errorf("ETag: got %q, want %q", etag, `"new"`)
+	}
+}
+
+// #281: a 423 to the query form means the lock is gone (on ECC a GET between
+// LockObject and SetSource ends it). The header form still writes into a
+// request that already holds the class, as it did before #281, so it is
+// tried next and its result returned.
+func TestSetSource_ClassIntoRequestFallsBackToHeaderOn423(t *testing.T) {
+	writes, etag, err := driveClassWrite281(t, request281, func(cw classWrite281) (int, string) {
+		if cw.query {
+			return http.StatusLocked, notLocked281
+		}
+		return http.StatusOK, ""
+	})
+	if err != nil {
+		t.Fatalf("SetSource: %v", err)
+	}
+	if len(writes) != 2 || !writes[0].query || !writes[1].header || writes[1].query {
+		t.Fatalf("writes: got %+v, want query then header", writes)
+	}
+	if writes[1].corrNr != request281 {
+		t.Errorf("header write corrNr: got %q, want %q", writes[1].corrNr, request281)
+	}
+	if etag != `"new"` {
+		t.Errorf("ETag: got %q, want %q", etag, `"new"`)
+	}
+}
+
+// #281: when the header fallback fails too, its error is the one returned,
+// and the query form is not tried again. (A 403 also makes doMutate repeat
+// the same write once with a fresh CSRF token, so writes are checked by
+// delivery, not counted.)
+func TestSetSource_ClassIntoRequestReturnsHeaderErrorAfter423(t *testing.T) {
+	writes, _, err := driveClassWrite281(t, request281, func(cw classWrite281) (int, string) {
+		if cw.query {
+			return http.StatusLocked, notLocked281
+		}
+		return http.StatusForbidden, notValid281
+	})
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("err: got %v, want the header write's 403", err)
+	}
+	if len(writes) < 2 || !writes[0].query {
+		t.Fatalf("writes: got %+v, want query first", writes)
+	}
+	for i, w := range writes[1:] {
+		if !w.header || w.query {
+			t.Errorf("write %d after the 423: got %+v, want header delivery only", i+1, w)
+		}
+	}
+}
+
+// #281: other query-form failures are returned as they are; the header form
+// is only a fallback for a lock that is gone.
+func TestSetSource_ClassIntoRequestNoHeaderFallbackOnOtherErrors(t *testing.T) {
+	writes, _, err := driveClassWrite281(t, request281, func(classWrite281) (int, string) {
+		return http.StatusForbidden, notValid281
+	})
+	if err == nil {
+		t.Fatal("expected the 403 to surface")
+	}
+	for i, w := range writes {
+		if w.header {
+			t.Errorf("write %d used header delivery: %+v", i, w)
+		}
+	}
+}
+
+// #281: without a corrNr a class write keeps the header-first order. On ECC
+// the header form writes even after a GET between LockObject and SetSource
+// ended the lock, which the query form would refuse with 423.
+func TestSetSource_ClassWithoutRequestKeepsHeaderFirst(t *testing.T) {
+	writes, _, err := driveClassWrite281(t, "", func(classWrite281) (int, string) {
+		return http.StatusOK, ""
+	})
+	if err != nil {
+		t.Fatalf("SetSource: %v", err)
+	}
+	if len(writes) != 1 || !writes[0].header || writes[0].query {
+		t.Fatalf("writes: got %+v, want one header-delivered write", writes)
 	}
 }
 
