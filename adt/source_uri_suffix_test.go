@@ -162,6 +162,9 @@ func TestSourceMethods_AcceptSourceURI(t *testing.T) {
 			want: []string{
 				"GET " + suffixTestClassURI + "/includes/definitions/versions",
 				"GET " + suffixTestClassURI + "/includes/implementations/versions",
+				"GET " + suffixTestClassURI + "/includes/macros/versions",
+				"GET " + suffixTestClassURI + "/includes/main/versions",
+				"GET " + suffixTestClassURI + "/includes/testclasses/versions",
 			},
 		},
 		{

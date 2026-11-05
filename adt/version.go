@@ -16,11 +16,22 @@ type VersionInfo struct {
 	Transport     string `json:"transport"` // transport number (empty for local)
 	TransportDesc string `json:"transport_description"`
 	ContentURI    string `json:"content_uri"`       // URI to fetch the source of this version
-	Include       string `json:"include,omitempty"` // class include: "definitions" or "implementations" (empty for non-class objects)
+	Include       string `json:"include,omitempty"` // class include: "main", "definitions", "implementations", "macros" or "testclasses" (empty for non-class objects)
 }
 
-// classIncludes lists the includes whose version history is fetched for classes.
-var classIncludes = []string{"definitions", "implementations"}
+// classIncludeMain names the global class source (sections and method
+// implementations) in VersionInfo.Include. It is the one class include that
+// is written through /source/main rather than /includes/{include}.
+const classIncludeMain = "main"
+
+// classIncludes lists the includes whose version history is fetched for
+// classes, global source first. A method, section or class-definition change
+// (LIMU METH, CPUB, CPRI, CPRO, CLSD) is versioned under "main"; the others
+// are the local includes (CCDEF, CCIMP, CCMAC, CCAU). Measured on SAP_BASIS
+// 750 and 816: includes/main/versions answers 200 and carries the requests
+// that changed methods, while testclasses answers 404 for a class without
+// local test classes.
+var classIncludes = []string{classIncludeMain, "definitions", "implementations", "macros", "testclasses"}
 
 // isClassURI returns true if the URI points to an OO class object.
 func isClassURI(objectURI string) bool {
@@ -28,9 +39,11 @@ func isClassURI(objectURI string) bool {
 }
 
 // GetVersionHistory returns the version history of an ABAP source object.
-// For classes (CLAS/OC), it fetches version history for each include
-// (definitions and implementations) separately, since classes do not support
-// /source/main/versions. For all other object types, it uses
+// For classes (CLAS/OC), it fetches version history for each include in
+// classIncludes separately, since classes do not support
+// /source/main/versions, and sets VersionInfo.Include on every entry. A local
+// include that answers 404 has no history and contributes nothing; the
+// global source ("main") must answer. For all other object types, it uses
 // /source/main/versions.
 func (c *httpClient) GetVersionHistory(ctx context.Context, objectURI string) ([]VersionInfo, error) {
 	objectURI = bareObjectURI(objectURI)
@@ -45,6 +58,9 @@ func (c *httpClient) getClassVersionHistory(ctx context.Context, objectURI strin
 	for _, include := range classIncludes {
 		path := objectURI + "/includes/" + include + "/versions"
 		versions, err := c.getVersionFeed(ctx, path, include)
+		if include != classIncludeMain && ClassifyError(err) == ErrorNotFound {
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("GetVersionHistory %s: %w", include, err)
 		}

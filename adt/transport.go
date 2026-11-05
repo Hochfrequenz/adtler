@@ -1180,10 +1180,9 @@ func (c *httpClient) GetTransportInfo(ctx context.Context, transportNumber strin
 // (e.g. LIMU/METH) granularity — a property of what SAP wrote into the
 // transport itself, not of which path read it back or which system family it
 // came from (see getTransportObjectsViaQuery's doc comment for a live,
-// row-for-row comparison of both paths against the same request). A
-// transport recorded at sub-object granularity yields a list RollbackTransport
-// skips in full, reporting an all-skipped result with a nil error rather than
-// an error — see https://github.com/Hochfrequenz/adtler/issues/134.
+// row-for-row comparison of both paths against the same request). The list
+// is returned as recorded; RollbackTransport maps sub-object entries to the
+// objects that carry them itself (#134).
 func (c *httpClient) GetTransportObjects(ctx context.Context, transportNumber string) ([]TransportObject, error) {
 	data, err := c.readTransportXML(ctx, transportNumber, "application/vnd.sap.adt.transportorganizer.v1+xml, application/xml")
 	if err != nil {

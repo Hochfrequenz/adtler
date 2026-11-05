@@ -38,8 +38,8 @@ type RollbackOptions struct {
 	DeleteCreatedObjects bool
 }
 
-// rollbackSourceTypes is the set of object types RollbackTransport restores
-// source for. DDIC types (TABL, DTEL, ...) are intentionally excluded and
+// rollbackSourceTypes is the set of R3TR object types RollbackTransport
+// restores source for. DDIC types (TABL, DTEL, ...) are intentionally excluded and
 // skipped — they have no source to roll back the same way.
 var rollbackSourceTypes = map[string]bool{
 	"PROG": true,
@@ -52,7 +52,8 @@ var rollbackSourceTypes = map[string]bool{
 const (
 	rollbackReasonCreatedKept       = "created by this transport; left in place (DeleteCreatedObjects is off)"
 	rollbackReasonCreatedRestoreErr = "created by this transport; not deleted because a restore in this rollback failed and the unrestored object may still use it"
-	rollbackReasonCreatedSubObjects = "created by this transport; not deleted because the transport has sub-object (LIMU) entries that were not rolled back and may still use it"
+	rollbackReasonCreatedSubObjects = "created by this transport; not deleted because part of the transport was not rolled back (a sub-object entry without source, or a created function module or function group include) and may still use it"
+	rollbackReasonCreatedSubObject  = "created by this transport; left in place (a rollback deletes only TADIR objects, not function modules or function group includes)"
 )
 
 // RollbackTransport is RollbackTransportWithOptions with zero options: it
@@ -65,7 +66,24 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 // its version immediately before the transport. For each R3TR
 // PROG/CLAS/INTF/FUGR object it reads the version history, finds the
 // pre-transport version, and writes that source back (lock → set → activate).
-// Non-source objects (TABL, DTEL, …) and non-R3TR entries are skipped.
+// Non-source objects (TABL, DTEL, …) are skipped.
+//
+// A transport usually records only the parts of an object it changed: a
+// LIMU METH entry for a method rather than R3TR CLAS for the class, which is
+// what a released workbench request normally holds (#134). Such an entry is
+// mapped to the unit of source that has its own version history (see
+// resolveRollbackTarget): a method or section to its class, a program part
+// to the main program, standalone include or function group include, a
+// function module to itself. Each unit is restored once however many entries
+// lead to it, and is reported under that unit's type and name. A sub-object
+// without source (screen, GUI status, text pool) is Skipped; a CORR entry, a
+// release marker rather than an object, is left out of the result.
+//
+// A class is restored include by include: the global source (sections and
+// methods) from the history of its main include, and each local include
+// from its own, written back to that include. An include the transport did
+// not touch is left alone. Rolling back one method therefore restores the
+// whole global class source to its state before the transport.
 //
 // An object counts as created by the transport when its version history is
 // not empty and every entry in it carries the request or one of its tasks
@@ -92,8 +110,9 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 //
 // Deletion runs after every restore, so restored code no longer references
 // the objects about to be deleted, and only when every part of the transport
-// was rolled back: nothing is deleted when a restore failed or when the
-// transport has sub-object (LIMU) entries, which are skipped (#134), since
+// was rolled back: nothing is deleted when a restore failed, when a
+// sub-object entry was skipped, or when the transport created a function
+// module or function group include (which a rollback never deletes), since
 // the code left unrestored may still use a created object. Created objects
 // that use each other are deleted in rounds until a round deletes nothing;
 // what is left is reported as failed with the last error SAP gave. An object
@@ -101,23 +120,12 @@ func (c *httpClient) RollbackTransport(ctx context.Context, transport string) (*
 // the rolled-back request (as corrNr), the same request the restored source
 // is written to.
 //
-// A transport recorded at sub-object granularity (e.g. a LIMU/METH row for a
-// method, rather than the R3TR class that owns it) matches neither the R3TR
-// filter nor rollbackSourceTypes, so every one of its entries is Skipped and
-// the call returns an all-skipped RollbackResult with a nil error — not a
-// signal that nothing needed restoring. Whether a transport is recorded this
-// way is a property of what SAP wrote into it, not of which system family
-// produced it or which path read it back (a live comparison of the ADT XML
-// path and the E071 query path on the same S/4 request found them agreeing on
-// granularity row-for-row — see getTransportObjectsViaQuery's doc comment).
-// Mapping sub-object types to their carrying R3TR object was considered and
-// deferred: see https://github.com/Hochfrequenz/adtler/issues/134.
-//
 // This is destructive: it overwrites current source with historical versions.
 //
 // Once SAP answers a request with 401, nothing more is sent (#222): reading the
-// task numbers returns the error, and every object not yet processed is
-// reported as failed with that error, without a request of its own.
+// task numbers returns the error, and every entry not yet resolved and every
+// object not yet processed is reported as failed with that error, without a
+// request of its own.
 func (c *httpClient) RollbackTransportWithOptions(ctx context.Context, transport string, opts RollbackOptions) (*RollbackResult, error) {
 	objects, err := c.GetTransportObjects(ctx, transport)
 	if err != nil {
@@ -137,39 +145,18 @@ func (c *httpClient) RollbackTransportWithOptions(ctx context.Context, transport
 	}
 
 	result := &RollbackResult{}
+	targets, partial, rejected := c.rollbackTargets(ctx, objects, result)
+
 	var created []createdObject
-	var rejected error  // the 401 that ended processing, if any
-	subObjects := false // a LIMU entry was skipped, so part of the transport was not rolled back
-	for _, obj := range objects {
-		if obj.PgmID != "R3TR" {
-			if obj.PgmID == "LIMU" {
-				subObjects = true
-			}
-			result.Skipped = append(result.Skipped, RollbackEntry{
-				Type: obj.Type, Name: obj.Name, Reason: "not R3TR",
-			})
-			continue
-		}
-		if !rollbackSourceTypes[obj.Type] {
-			result.Skipped = append(result.Skipped, RollbackEntry{
-				Type: obj.Type, Name: obj.Name, Reason: "non-source object type",
-			})
-			continue
-		}
-		objectURI, err := ObjectURI(obj.Type, obj.Name)
-		if err != nil {
-			result.Skipped = append(result.Skipped, RollbackEntry{
-				Type: obj.Type, Name: obj.Name, Reason: err.Error(),
-			})
-			continue
-		}
+	for _, tg := range targets {
+		obj := tg.entry
 		if rejected != nil {
 			result.Failed = append(result.Failed, RollbackEntry{
 				Type: obj.Type, Name: obj.Name, Reason: "not attempted: " + rejected.Error(),
 			})
 			continue
 		}
-		isCreated, err := c.rollbackOrClassify(ctx, objectURI, transports)
+		isCreated, err := c.rollbackOrClassify(ctx, tg.uri, transports)
 		switch {
 		case err != nil:
 			if isUnauthorized(err) {
@@ -178,30 +165,34 @@ func (c *httpClient) RollbackTransportWithOptions(ctx context.Context, transport
 			result.Failed = append(result.Failed, RollbackEntry{
 				Type: obj.Type, Name: obj.Name, Reason: err.Error(),
 			})
+		case isCreated && !tg.tadir:
+			// A function module or function group include is not deleted by
+			// a rollback, so it stays as it is, and so does everything it
+			// may use.
+			partial = true
+			result.Created = append(result.Created, RollbackEntry{
+				Type: obj.Type, Name: obj.Name, Reason: rollbackReasonCreatedSubObject,
+			})
 		case isCreated:
-			created = append(created, createdObject{
-				entry: RollbackEntry{Type: obj.Type, Name: obj.Name}, uri: objectURI,
-			})
+			created = append(created, createdObject{entry: obj, uri: tg.uri})
 		default:
-			result.Restored = append(result.Restored, RollbackEntry{
-				Type: obj.Type, Name: obj.Name,
-			})
+			result.Restored = append(result.Restored, obj)
 		}
 	}
 
 	switch {
 	case len(created) == 0:
 	case !opts.DeleteCreatedObjects:
-		result.Created = createdEntries(created, rollbackReasonCreatedKept)
+		result.Created = append(result.Created, createdEntries(created, rollbackReasonCreatedKept)...)
 	case rejected != nil:
 		for _, o := range created {
 			o.entry.Reason = "created by this transport; not deleted: " + rejected.Error()
 			result.Failed = append(result.Failed, o.entry)
 		}
 	case len(result.Failed) > 0:
-		result.Created = createdEntries(created, rollbackReasonCreatedRestoreErr)
-	case subObjects:
-		result.Created = createdEntries(created, rollbackReasonCreatedSubObjects)
+		result.Created = append(result.Created, createdEntries(created, rollbackReasonCreatedRestoreErr)...)
+	case partial:
+		result.Created = append(result.Created, createdEntries(created, rollbackReasonCreatedSubObjects)...)
 	default:
 		local := c.keepLocalOrigin(ctx, created, transport, result)
 		c.deleteCreatedObjects(ctx, local, transport, result)
@@ -414,22 +405,88 @@ func (c *httpClient) rollbackOrClassify(ctx context.Context, objectURI string, t
 	if createdByTransport(versions, transports) {
 		return true, nil
 	}
-	restoreURI, err := findPreTransportVersion(versions, transports)
+	writes, err := planRestore(versions, transports)
 	if err != nil {
 		return false, err
 	}
-	return false, c.restoreVersion(ctx, objectURI, restoreURI, transports[0])
+	return false, c.restoreVersion(ctx, objectURI, writes, transports[0])
 }
 
-// restoreVersion writes the source at restoreURI back to objectURI under
-// request and activates it.
+// sourceWrite is one source a restore writes back: the version at contentURI,
+// into the class include named include, or into the object's main source
+// when include is "" or classIncludeMain.
+type sourceWrite struct {
+	include    string
+	contentURI string
+}
+
+// planRestore picks the version to write back for each part of the object
+// the transport changed.
+//
+// A class keeps a separate history per include (VersionInfo.Include), so
+// each include is matched on its own and written back to itself: the
+// pre-transport version of one include is never the previous state of
+// another. An include the transport did not touch is left alone. If an
+// include the transport touched has no earlier version (the transport
+// created it, e.g. the first local test class), nothing is written, because
+// writing back the other includes alone would leave a class that may not
+// compile.
+func planRestore(versions []VersionInfo, transports []string) ([]sourceWrite, error) {
+	byInclude := make(map[string][]VersionInfo)
+	var order []string
+	for _, v := range versions {
+		if _, ok := byInclude[v.Include]; !ok {
+			order = append(order, v.Include)
+		}
+		byInclude[v.Include] = append(byInclude[v.Include], v)
+	}
+	var writes []sourceWrite
+	for _, include := range order {
+		history := byInclude[include]
+		if !historyHasTransport(history, transports) {
+			continue
+		}
+		contentURI, err := findPreTransportVersion(history, transports)
+		if err != nil {
+			if include != "" {
+				return nil, fmt.Errorf("include %s: %w", include, err)
+			}
+			return nil, err
+		}
+		writes = append(writes, sourceWrite{include: include, contentURI: contentURI})
+	}
+	if len(writes) == 0 {
+		return nil, fmt.Errorf("transport %s not found in version history", transports[0])
+	}
+	return writes, nil
+}
+
+// historyHasTransport reports whether any entry of versions carries the
+// request or one of its tasks.
+func historyHasTransport(versions []VersionInfo, transports []string) bool {
+	for _, v := range versions {
+		for _, t := range transports {
+			if strings.EqualFold(v.Transport, t) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// restoreVersion writes each version in writes back to objectURI under
+// request, then activates the object once.
 //
 // After a 401 it sends nothing more, not even the release of its lock: the
 // release would carry the rejected credential as well (#222).
-func (c *httpClient) restoreVersion(ctx context.Context, objectURI, restoreURI, request string) error {
-	oldSource, err := c.GetVersionSource(ctx, restoreURI)
-	if err != nil {
-		return fmt.Errorf("get version source: %w", err)
+func (c *httpClient) restoreVersion(ctx context.Context, objectURI string, writes []sourceWrite, request string) error {
+	sources := make([]string, len(writes))
+	for i, w := range writes {
+		src, err := c.GetVersionSource(ctx, w.contentURI)
+		if err != nil {
+			return fmt.Errorf("get version source%s: %w", includeSuffix(w.include), err)
+		}
+		sources[i] = src
 	}
 
 	lockHandle, err := c.LockObject(ctx, objectURI)
@@ -437,17 +494,14 @@ func (c *httpClient) restoreVersion(ctx context.Context, objectURI, restoreURI, 
 		return fmt.Errorf("lock: %w", err)
 	}
 
-	current, err := c.GetSource(ctx, objectURI)
-	if err != nil {
-		c.unlockUnlessUnauthorized(ctx, objectURI, lockHandle, err)
-		return fmt.Errorf("get current source: %w", err)
-	}
-
-	// request is the request number, not a task; pass it as corrNr so both R/3
-	// and S/4 accept the write (S/4 rejects SetSource when corrNr is absent).
-	if _, err := c.SetSource(ctx, objectURI, oldSource, lockHandle, request, current.ETag); err != nil {
-		c.unlockUnlessUnauthorized(ctx, objectURI, lockHandle, err)
-		return fmt.Errorf("set source: %w", err)
+	for i, w := range writes {
+		if err := c.writeSource(ctx, objectURI, w.include, sources[i], lockHandle, request); err != nil {
+			c.unlockUnlessUnauthorized(ctx, objectURI, lockHandle, err)
+			if i > 0 {
+				return fmt.Errorf("%w (earlier includes were written back but not activated)", err)
+			}
+			return err
+		}
 	}
 	// Unlock before activation: on S/4, the ESRDIRE session lock left by
 	// SetSource blocks ActivateObjects if not released first. Only a 401
@@ -471,6 +525,35 @@ func (c *httpClient) restoreVersion(ctx context.Context, objectURI, restoreURI, 
 	return nil
 }
 
+// writeSource writes source into the main source of objectURI, or into its
+// class include include, under the held lock.
+func (c *httpClient) writeSource(ctx context.Context, objectURI, include, source, lockHandle, request string) error {
+	if include != "" && include != classIncludeMain {
+		// A held lock replaces If-Match for includes (see SetIncludeSource).
+		if _, err := c.SetIncludeSource(ctx, objectURI, include, source, lockHandle, request, ""); err != nil {
+			return fmt.Errorf("set source%s: %w", includeSuffix(include), err)
+		}
+		return nil
+	}
+	current, err := c.GetSource(ctx, objectURI)
+	if err != nil {
+		return fmt.Errorf("get current source: %w", err)
+	}
+	// request is the request number, not a task; pass it as corrNr so both R/3
+	// and S/4 accept the write (S/4 rejects SetSource when corrNr is absent).
+	if _, err := c.SetSource(ctx, objectURI, source, lockHandle, request, current.ETag); err != nil {
+		return fmt.Errorf("set source: %w", err)
+	}
+	return nil
+}
+
+func includeSuffix(include string) string {
+	if include == "" {
+		return ""
+	}
+	return " (include " + include + ")"
+}
+
 // unlockUnlessUnauthorized releases lockHandle after cause made a step fail,
 // as best effort, unless cause is a 401: the release would carry the rejected
 // credential too (#222).
@@ -478,4 +561,46 @@ func (c *httpClient) unlockUnlessUnauthorized(ctx context.Context, objectURI, lo
 	if !isUnauthorized(cause) {
 		_ = c.UnlockObject(ctx, objectURI, lockHandle)
 	}
+}
+
+// rollbackTargets resolves the transport's entries to the units of source the
+// rollback restores (see resolveRollbackTarget), in transport order and each
+// once. Entries without such a unit go to result.Skipped, failed lookups to
+// result.Failed. CORR entries (release markers) are left out. partial reports
+// that a LIMU entry was skipped or failed, so part of the transport will not
+// be rolled back. A 401 ends the lookups (#222) and is returned as rejected;
+// the entries not yet looked up go to result.Failed.
+func (c *httpClient) rollbackTargets(ctx context.Context, objects []TransportObject, result *RollbackResult) (targets []rollbackTarget, partial bool, rejected error) {
+	seen := make(map[string]bool)
+	for _, obj := range objects {
+		if obj.PgmID == pgmIDCorr {
+			continue
+		}
+		if rejected != nil {
+			result.Failed = append(result.Failed, RollbackEntry{
+				Type: obj.Type, Name: obj.Name, Reason: "not attempted: " + rejected.Error(),
+			})
+			continue
+		}
+		tg, reason, ok, err := c.resolveRollbackTarget(ctx, obj)
+		switch {
+		case err != nil:
+			if isUnauthorized(err) {
+				rejected = err
+			}
+			partial = partial || obj.PgmID == pgmIDLIMU
+			result.Failed = append(result.Failed, RollbackEntry{
+				Type: obj.Type, Name: obj.Name, Reason: "resolving the object that carries this entry: " + err.Error(),
+			})
+		case !ok:
+			partial = partial || obj.PgmID == pgmIDLIMU
+			result.Skipped = append(result.Skipped, RollbackEntry{
+				Type: obj.Type, Name: obj.Name, Reason: reason,
+			})
+		case !seen[strings.ToLower(tg.uri)]:
+			seen[strings.ToLower(tg.uri)] = true
+			targets = append(targets, tg)
+		}
+	}
+	return targets, partial, rejected
 }

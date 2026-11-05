@@ -20,6 +20,12 @@ const (
 	objTypeDDLS = "DDLS"
 )
 
+// Object type constants for the OO types.
+const (
+	objTypeCLAS = "CLAS"
+	objTypeINTF = "INTF"
+)
+
 // objTypeHTTP is an HTTP service (R3TR HTTP, handler interface
 // IF_HTTP_SERVICE_EXTENSION). Measured on SAP S/4HANA 2025 on-premise
 // (SAP_BASIS 816, S4CORE 109) on 2026-11-01; SAP ERP 6.0 (SAP_BASIS 750) has no
@@ -115,12 +121,12 @@ func marshalCreateBody(objectType, name, packageName, description, handlerClass 
 			NSProgram: "http://www.sap.com/adt/programs/programs", NSCore: nsADTCore,
 			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
 		})
-	case "CLAS":
+	case objTypeCLAS:
 		body, err = xml.Marshal(adtxml.CreateClass{
 			NSClass: "http://www.sap.com/adt/oo/classes", NSCore: nsADTCore,
 			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
 		})
-	case "INTF":
+	case objTypeINTF:
 		body, err = xml.Marshal(adtxml.CreateInterface{
 			NSIntf: "http://www.sap.com/adt/oo/interfaces", NSCore: nsADTCore,
 			Type: info.adtType, Description: description, Name: name, PackageRef: pkgRef,
