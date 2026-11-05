@@ -129,7 +129,9 @@ func TestGetTransportRequests(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	transports, err := client.GetTransportRequests(context.Background(), "", "D")
+	// The mock answers both status reads of TransportFilterAll with the same
+	// tree; the merge must not list a request twice.
+	transports, err := client.GetTransportRequests(context.Background(), "", adt.TransportFilterAll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -559,7 +561,7 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	transports, err := client.GetTransportRequests(context.Background(), "USERE", "D")
+	transports, err := client.GetTransportRequests(context.Background(), "USERE", adt.TransportFilterModifiable)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -572,8 +574,8 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if transports[0].Owner != "USERE" {
 		t.Errorf("transport[0].Owner: got %q, want USERE", transports[0].Owner)
 	}
-	if transports[0].Status != "D" {
-		t.Errorf("transport[0].Status: got %q, want D", transports[0].Status)
+	if transports[0].RawStatus != "D" || transports[0].State != adt.TransportStateModifiable {
+		t.Errorf("transport[0]: got RawStatus %q, State %v; want D, modifiable", transports[0].RawStatus, transports[0].State)
 	}
 	// Description is empty in the fallback path (single-table E070 query; no JOIN
 	// because the ADT data preview endpoint rejects JOINs on some S/4HANA releases).
@@ -583,8 +585,8 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if !strings.Contains(gotDatapreviewSQL, "AS4USER = 'USERE'") {
 		t.Errorf("fallback SQL must filter by user, got: %s", gotDatapreviewSQL)
 	}
-	if !strings.Contains(gotDatapreviewSQL, "TRSTATUS = 'D'") {
-		t.Errorf("fallback SQL must filter by status, got: %s", gotDatapreviewSQL)
+	if !strings.Contains(gotDatapreviewSQL, "TRSTATUS IN ('D', 'L')") {
+		t.Errorf("fallback SQL must filter by every letter of the modifiable state, got: %s", gotDatapreviewSQL)
 	}
 }
 
@@ -607,7 +609,7 @@ func TestGetTransportRequests_RejectsInvalidUserInFallback(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	_, err := client.GetTransportRequests(context.Background(), "US'ERE", "D")
+	_, err := client.GetTransportRequests(context.Background(), "US'ERE", adt.TransportFilterModifiable)
 	if err == nil {
 		t.Fatal("expected error for user containing single quote, got nil")
 	}
@@ -642,7 +644,7 @@ func TestGetTransportRequests_SkipsFallbackWhenADTReturnsResults(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	transports, err := client.GetTransportRequests(context.Background(), "", "D")
+	transports, err := client.GetTransportRequests(context.Background(), "", adt.TransportFilterModifiable)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

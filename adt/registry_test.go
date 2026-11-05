@@ -256,7 +256,7 @@ func TestRegistryDelegatesAllMethods(t *testing.T) {
 		}
 	})
 	t.Run("GetTransportRequests", func(t *testing.T) {
-		if _, err := registry.GetTransportRequests(ctx, "USER", "D"); err != nil {
+		if _, err := registry.GetTransportRequests(ctx, "USER", adt.TransportFilterModifiable); err != nil {
 			t.Fatalf("GetTransportRequests: %v", err)
 		}
 	})

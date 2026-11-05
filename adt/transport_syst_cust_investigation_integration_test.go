@@ -174,7 +174,7 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 			}
 
 			// ADT standard endpoint: current behavior.
-			transports, err := sys.c.GetTransportRequests(ctx, "", "D")
+			transports, err := sys.c.GetTransportRequests(ctx, "", TransportFilterModifiable)
 			if err != nil {
 				t.Logf("GetTransportRequests failed: %v", err)
 			} else {
@@ -187,7 +187,7 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 						t.Logf("  ... and %d more", len(transports)-5)
 						break
 					}
-					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.Status, tr.Description)
+					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.RawStatus, tr.Description)
 				}
 			}
 		})

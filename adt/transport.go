@@ -66,7 +66,8 @@ func (c *httpClient) CheckTransport(ctx context.Context, pgmID, object, objectNa
 		result.Requests = append(result.Requests, TransportRequest{
 			Number:      req.Header.TrKorr,
 			Description: req.Header.Text,
-			Status:      req.Header.TrStatus,
+			State:       TransportStateOf(req.Header.TrStatus),
+			RawStatus:   req.Header.TrStatus,
 		})
 	}
 	return result, nil
@@ -172,39 +173,37 @@ func (c *httpClient) DeleteTransport(ctx context.Context, transportNumber string
 // ReleaseResult reports the outcome of a transport release.
 type ReleaseResult struct {
 	Transport string `json:"transport"`
-	// Released is true when the post-release status read shows a released
-	// request (IsReleasedStatus), or when that read failed (see
-	// ReleaseTransport). It is false — with a nil error — when the release
-	// endpoint reported success but the request is not released: still
-	// modifiable ("D" or "L"), the "silent failure" some systems (notably
-	// ECC) exhibit, or with its release started but not finished ("O").
-	Released bool `json:"released"`
-	// Status is the TRSTATUS value the post-release read returned, or ""
-	// when that read failed. With Released false it tells the two cases
-	// apart: TransportStatusReleaseStarted means SAP is still releasing the
-	// request, so re-read its status later instead of releasing it again.
-	Status string `json:"status,omitempty"`
+	// State is the request's state as read back after the release:
+	//
+	//   - TransportStateReleased: the release went through.
+	//   - TransportStateModifiable: the release endpoint reported success but
+	//     the request is still modifiable — the "silent failure" some systems
+	//     (notably ECC) exhibit. Fall back to another release mechanism.
+	//   - TransportStateReleaseInProgress: SAP is still releasing the
+	//     request. Re-read its status later; do not release it again.
+	//   - TransportStateUnknown: the release endpoint reported success, but
+	//     the status read failed, returned no status, or returned a letter
+	//     this client does not know (RawStatus tells these apart). The
+	//     release is not confirmed; do not release it again blindly.
+	State TransportState `json:"state"`
+	// RawStatus is the TRSTATUS value the post-release read returned, or ""
+	// when that read failed. Kept for diagnosis.
+	RawStatus string `json:"raw_status,omitempty"`
 }
 
 // ReleaseTransport releases a transport request or task, then confirms the
-// outcome by re-reading the request status.
+// outcome by re-reading the request status into ReleaseResult.State.
 //
 // If the request has unreleased tasks, it returns an error listing them.
 //
 // The release endpoint reports success whenever it returns 2xx and its
 // release report carries no error — but some systems (notably ECC) return
-// 200 while leaving the request modifiable. This method detects that by
-// checking the post-release status: only a released status ("R" or "N", see
-// IsReleasedStatus) is reported as Released=true. A request that stayed
-// modifiable ("D" or "L") is reported as Released=false (with a nil error)
-// so callers can fall back to another release mechanism; so is one whose
-// release has started but not finished ("O"), which ReleaseResult.Status
-// distinguishes. A genuine release error is returned unchanged.
-//
-// If the post-release status read fails, or returns no status, the release
-// is assumed to have succeeded (Released=true) — the optimistic behavior
-// callers had before verification existed. This mirrors ActivateObjects
-// (adt/activate.go).
+// 200 while leaving the request modifiable. This method therefore never
+// reports a release it has not seen: only a status read showing a released
+// request yields TransportStateReleased. A request that stayed modifiable
+// comes back as TransportStateModifiable with a nil error, so callers can fall
+// back to another release mechanism. A genuine release error is returned
+// unchanged.
 func (c *httpClient) ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return c.releaseTransportVerified(ctx, transportNumber, false)
 }
@@ -221,15 +220,14 @@ func (c *httpClient) releaseTransportVerified(ctx context.Context, transportNumb
 		return nil, err
 	}
 
-	info, infoErr := c.GetTransportInfo(ctx, transportNumber)
-	if infoErr != nil || info == nil || info.Status == "" {
-		return &ReleaseResult{Transport: transportNumber, Released: true}, nil
+	// A failed read leaves State at TransportStateUnknown: the release is
+	// then reported as unconfirmed, never as done.
+	result := &ReleaseResult{Transport: transportNumber}
+	if info, err := c.GetTransportInfo(ctx, transportNumber); err == nil && info != nil {
+		result.State = info.State
+		result.RawStatus = info.RawStatus
 	}
-	return &ReleaseResult{
-		Transport: transportNumber,
-		Released:  IsReleasedStatus(info.Status),
-		Status:    info.Status,
-	}, nil
+	return result, nil
 }
 
 func (c *httpClient) releaseTransport(ctx context.Context, transportNumber string, releaseTasks bool) error {
@@ -425,7 +423,7 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 	return checkReleaseResponse(transportNumber, data)
 }
 
-// GetTransportRequests lists CTS transport requests filtered by owner and status.
+// GetTransportRequests lists CTS transport requests filtered by owner and state.
 //
 // user is the SAP username (e.g. "MMUSTERMANN") whose requests to return.
 // Pass an empty string to omit the filter — but note that SAP CTS then scopes
@@ -433,26 +431,66 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 // If you want a specific developer's requests (e.g. the person currently logged
 // in via a BTP app), extract their username from the JWT and pass it here.
 //
-// status filters by request state, as a TRSTATUS value: TransportStatusModifiable
-// ("D") for open requests, TransportStatusReleased ("R") for released ones.
-// A filter names one value: "R" does not include requests released with
-// import protection (TransportStatusReleasedProtected, "N"). ""
-// omits the filter; which requests SAP then returns differs by release (on
-// SAP_BASIS 750 only modifiable ones, on 816 modifiable and released ones).
+// filter selects requests by TransportState. It is applied here, on the
+// client, after SAP answered: SAP's own status parameter names a single
+// TRSTATUS letter, which misses the protected variants ("L", "N"), and the
+// S/4 transport organizer tree ignores it altogether. The parameter is still
+// sent, because ECC returns released requests only when asked for "R":
+// TransportFilterModifiable asks for "D", TransportFilterReleased for "R",
+// and TransportFilterAll asks once for each and merges the answers. A request
+// in TransportStateReleaseInProgress or TransportStateUnknown passes
+// TransportFilterAll only.
 //
-// The returned slice includes requests from both workbench and customizing groups.
-func (c *httpClient) GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error) {
+// The returned slice includes requests from both workbench and customizing
+// groups. When no request of the tree passes the filter, the requests are
+// read from E070 instead (see getTransportRequestsViaQuery).
+func (c *httpClient) GetTransportRequests(ctx context.Context, user string, filter TransportFilter) ([]TransportRequest, error) {
+	var statuses []string
+	switch filter {
+	case TransportFilterAll:
+		statuses = []string{TransportStatusModifiable, TransportStatusReleased}
+	case TransportFilterModifiable:
+		statuses = []string{TransportStatusModifiable}
+	case TransportFilterReleased:
+		statuses = []string{TransportStatusReleased}
+	default:
+		return nil, fmt.Errorf("GetTransportRequests: invalid filter %v", filter)
+	}
+
+	var result []TransportRequest
+	seen := map[string]bool{}
+	for _, status := range statuses {
+		requests, err := c.getTransportRequestsTree(ctx, user, status)
+		if err != nil {
+			return nil, err
+		}
+		for _, tr := range requests {
+			if !seen[tr.Number] && filter.matches(tr.State) {
+				seen[tr.Number] = true
+				result = append(result, tr)
+			}
+		}
+	}
+
+	// S/4HANA systems using KORRDEV=SYST/CUST have transports silently filtered
+	// by the ADT endpoint, which only surfaces KORRDEV=K requests. Fall back to
+	// querying E070 directly when nothing passed the filter.
+	if len(result) == 0 {
+		return c.getTransportRequestsViaQuery(ctx, user, filter)
+	}
+	return result, nil
+}
+
+// getTransportRequestsTree reads the ADT transport organizer tree once, with
+// status as SAP's status parameter, and returns every request of both groups
+// and both buckets, unfiltered.
+func (c *httpClient) getTransportRequestsTree(ctx context.Context, user, status string) ([]TransportRequest, error) {
 	params := url.Values{}
 	if user != "" {
 		params.Set("user", user)
 	}
-	if status != "" {
-		params.Set("status", status)
-	}
-	path := "/sap/bc/adt/cts/transportrequests"
-	if len(params) > 0 {
-		path += "?" + params.Encode()
-	}
+	params.Set("status", status)
+	path := "/sap/bc/adt/cts/transportrequests?" + params.Encode()
 
 	resp, err := c.doRead(ctx, path, map[string]string{"Accept": "application/vnd.sap.adt.transportorganizertree.v1+xml"})
 	if err != nil {
@@ -479,16 +517,9 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 	result := make([]TransportRequest, len(all))
 	for i, r := range all {
 		result[i] = TransportRequest{
-			Number: r.Number, Owner: r.Owner,
-			Description: r.Description, Status: r.Status,
+			Number: r.Number, Owner: r.Owner, Description: r.Description,
+			State: TransportStateOf(r.Status), RawStatus: r.Status,
 		}
-	}
-
-	// S/4HANA systems using KORRDEV=SYST/CUST have transports silently filtered
-	// by the ADT endpoint, which only surfaces KORRDEV=K requests. Fall back to
-	// querying E070/E07T directly when the ADT response is empty.
-	if len(result) == 0 {
-		return c.getTransportRequestsViaQuery(ctx, user, status)
 	}
 	return result, nil
 }
@@ -497,20 +528,21 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, user, status stri
 // clause literal. SAP usernames are at most 40 chars: alphanumeric, _, -, ..
 var transportUserRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,40}$`)
 
-// transportStatusRe matches a valid CTS transport status: a single uppercase
-// letter (a TRSTATUS value such as D = modifiable or R = released).
-var transportStatusRe = regexp.MustCompile(`^[A-Z]$`)
+// transportFilterStatuses lists, for the E070 fallback, the TRSTATUS letters
+// of the states a filter passes. TransportFilterAll has no entry: no
+// condition.
+var transportFilterStatuses = map[TransportFilter][]string{
+	TransportFilterModifiable: {TransportStatusModifiable, TransportStatusModifiableProtected},
+	TransportFilterReleased:   {TransportStatusReleased, TransportStatusReleasedProtected},
+}
 
 // getTransportRequestsViaQuery is the fallback for GetTransportRequests on
 // S/4HANA systems where KORRDEV=SYST/CUST prevents the ADT transport organizer
 // tree endpoint from returning any results. It queries E070 directly via the
 // ADT data preview endpoint (JOINs are rejected on some S/4HANA releases).
-func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, status string) ([]TransportRequest, error) {
+func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user string, filter TransportFilter) ([]TransportRequest, error) {
 	if user != "" && !transportUserRe.MatchString(user) {
 		return nil, fmt.Errorf("GetTransportRequests: user %q contains characters not allowed in a transport query", user)
-	}
-	if status != "" && !transportStatusRe.MatchString(status) {
-		return nil, fmt.Errorf("GetTransportRequests: status must be a single uppercase letter, got %q", status)
 	}
 
 	// Exclude tasks (STRKORR is set on tasks; top-level requests have STRKORR = '').
@@ -518,8 +550,8 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 	if user != "" {
 		where = append(where, "AS4USER = '"+user+"'")
 	}
-	if status != "" {
-		where = append(where, "TRSTATUS = '"+status+"'")
+	if statuses := transportFilterStatuses[filter]; len(statuses) > 0 {
+		where = append(where, "TRSTATUS IN ('"+strings.Join(statuses, "', '")+"')")
 	}
 
 	// Single-table query: the ADT data preview endpoint rejects JOINs on some
@@ -540,12 +572,14 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user, sta
 
 	result := make([]TransportRequest, 0, len(qr.Rows))
 	for _, row := range qr.Rows {
+		raw := queryCell(row, idx["TRSTATUS"])
 		tr := TransportRequest{
-			Number: queryCell(row, idx["TRKORR"]),
-			Owner:  queryCell(row, idx["AS4USER"]),
-			Status: queryCell(row, idx["TRSTATUS"]),
+			Number:    queryCell(row, idx["TRKORR"]),
+			Owner:     queryCell(row, idx["AS4USER"]),
+			State:     TransportStateOf(raw),
+			RawStatus: raw,
 		}
-		if tr.Number != "" {
+		if tr.Number != "" && filter.matches(tr.State) {
 			result = append(result, tr)
 		}
 	}
@@ -1273,7 +1307,8 @@ func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest,
 			Number:      req.Number,
 			Owner:       req.Owner,
 			Description: req.Description,
-			Status:      req.Status,
+			State:       TransportStateOf(req.Status),
+			RawStatus:   req.Status,
 		}
 	}
 

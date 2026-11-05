@@ -126,13 +126,18 @@ type TransportRequest struct {
 	Number      string
 	Owner       string
 	Description string
-	Status      string // TRSTATUS value, see the TransportStatus* constants
+	// State is what callers check: modifiable, release in progress or
+	// released. It is derived from RawStatus by TransportStateOf.
+	State TransportState
+	// RawStatus is SAP's TRSTATUS value (see the TransportStatus* constants),
+	// kept for diagnosis and for the protection variants that State folds
+	// together ("L" and "N").
+	RawStatus string
 }
 
-// Transport request status codes (TransportRequest.Status), the values of
-// SAP's TRSTATUS domain. Use IsReleasedStatus rather than comparing against
-// TransportStatusReleased alone: a request released with import protection
-// carries TransportStatusReleasedProtected instead.
+// Raw transport request status codes (TransportRequest.RawStatus), the values
+// of SAP's TRSTATUS domain. Callers decide on TransportRequest.State instead;
+// TransportStateOf maps these letters onto it.
 const (
 	TransportStatusModifiable          = "D" // modifiable
 	TransportStatusModifiableProtected = "L" // modifiable, protected — not released
@@ -144,8 +149,120 @@ const (
 // IsReleasedStatus reports whether a TRSTATUS value marks a released request:
 // TransportStatusReleased ("R") or TransportStatusReleasedProtected ("N").
 // TransportStatusReleaseStarted ("O") is not released yet.
+//
+// Deprecated: use TransportStateOf(status) == TransportStateReleased, or
+// check TransportRequest.State directly.
 func IsReleasedStatus(status string) bool {
-	return status == TransportStatusReleased || status == TransportStatusReleasedProtected
+	return TransportStateOf(status) == TransportStateReleased
+}
+
+// TransportState is the state of a transport request, abstracted from SAP's
+// TRSTATUS letters: "released", for example, is two letters ("R" and "N").
+type TransportState int
+
+// Transport request states. The zero value is TransportStateUnknown, so a
+// request whose status was never read, or carried a letter this client does
+// not know, is never mistaken for a released one.
+const (
+	// TransportStateUnknown: no status, or a TRSTATUS letter not listed below.
+	TransportStateUnknown TransportState = iota
+	// TransportStateModifiable: TRSTATUS "D" or "L" (protected).
+	TransportStateModifiable
+	// TransportStateReleaseInProgress: TRSTATUS "O", the release has started
+	// and not finished. Re-read the status later; do not release again.
+	TransportStateReleaseInProgress
+	// TransportStateReleased: TRSTATUS "R" or "N" (with import protection).
+	TransportStateReleased
+)
+
+// TransportStateOf maps a TRSTATUS letter onto its TransportState. It is the
+// only place that knows the letters; an empty or unknown letter maps to
+// TransportStateUnknown.
+func TransportStateOf(rawStatus string) TransportState {
+	switch rawStatus {
+	case TransportStatusModifiable, TransportStatusModifiableProtected:
+		return TransportStateModifiable
+	case TransportStatusReleaseStarted:
+		return TransportStateReleaseInProgress
+	case TransportStatusReleased, TransportStatusReleasedProtected:
+		return TransportStateReleased
+	default:
+		return TransportStateUnknown
+	}
+}
+
+var transportStateNames = [...]string{
+	TransportStateUnknown:           "unknown",
+	TransportStateModifiable:        "modifiable",
+	TransportStateReleaseInProgress: "release_in_progress",
+	TransportStateReleased:          "released",
+}
+
+// String returns the state's name: "unknown", "modifiable",
+// "release_in_progress" or "released".
+func (s TransportState) String() string {
+	if s < 0 || int(s) >= len(transportStateNames) {
+		return transportStateNames[TransportStateUnknown]
+	}
+	return transportStateNames[s]
+}
+
+// MarshalText encodes the state as its name, so JSON carries "released"
+// rather than a number.
+func (s TransportState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText decodes a name written by MarshalText. An unrecognised name
+// is an error rather than TransportStateUnknown, so a typo does not pass as a
+// valid state.
+func (s *TransportState) UnmarshalText(text []byte) error {
+	for i, name := range transportStateNames {
+		if name == string(text) {
+			*s = TransportState(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown transport state %q", text)
+}
+
+// TransportFilter selects which requests GetTransportRequests returns, by
+// TransportState. The zero value is TransportFilterAll.
+type TransportFilter int
+
+const (
+	// TransportFilterAll returns requests in every state.
+	TransportFilterAll TransportFilter = iota
+	// TransportFilterModifiable returns TransportStateModifiable requests.
+	TransportFilterModifiable
+	// TransportFilterReleased returns TransportStateReleased requests.
+	TransportFilterReleased
+)
+
+// matches reports whether a request in state s passes the filter.
+func (f TransportFilter) matches(s TransportState) bool {
+	switch f {
+	case TransportFilterModifiable:
+		return s == TransportStateModifiable
+	case TransportFilterReleased:
+		return s == TransportStateReleased
+	default:
+		return true
+	}
+}
+
+// String returns the filter's name: "all", "modifiable" or "released".
+func (f TransportFilter) String() string {
+	switch f {
+	case TransportFilterAll:
+		return "all"
+	case TransportFilterModifiable:
+		return "modifiable"
+	case TransportFilterReleased:
+		return "released"
+	default:
+		return fmt.Sprintf("TransportFilter(%d)", int(f))
+	}
 }
 
 // TransportCheckResult is returned by CheckTransport.

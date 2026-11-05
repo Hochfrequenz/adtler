@@ -155,8 +155,8 @@ func (r *ClientRegistry) DeleteTransport(ctx context.Context, transportNumber st
 func (r *ClientRegistry) ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error) {
 	return r.activeClient().ReleaseTransport(ctx, transportNumber)
 }
-func (r *ClientRegistry) GetTransportRequests(ctx context.Context, user, status string) ([]TransportRequest, error) {
-	return r.activeClient().GetTransportRequests(ctx, user, status)
+func (r *ClientRegistry) GetTransportRequests(ctx context.Context, user string, filter TransportFilter) ([]TransportRequest, error) {
+	return r.activeClient().GetTransportRequests(ctx, user, filter)
 }
 func (r *ClientRegistry) Rename(ctx context.Context, sourceURI, newName, transport string) (*RenameResult, error) {
 	return r.activeClient().Rename(ctx, sourceURI, newName, transport)
