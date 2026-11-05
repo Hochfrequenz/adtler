@@ -82,7 +82,7 @@ func (m *mockClient) BatchSyntaxCheck(context.Context, []string) []adt.ObjectSyn
 func (m *mockClient) RunUnitTests(context.Context, string, int) (*adt.TestResult, error) {
 	panic("not implemented")
 }
-func (m *mockClient) GetTransportRequests(context.Context, string, adt.TransportFilter) ([]adt.TransportRequest, error) {
+func (m *mockClient) GetTransportRequests(context.Context, adt.TransportListOptions) (*adt.TransportRequestPage, error) {
 	panic("not implemented")
 }
 func (m *mockClient) AddToTransport(context.Context, string, string) error {

@@ -39,7 +39,7 @@ func TestGetTransportRequests_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	transports, err := client.GetTransportRequests(ctx, "", adt.TransportFilterModifiable)
+	transports, err := listModifiableRequests(ctx, client)
 	if err != nil {
 		t.Fatalf("GetTransportRequests failed: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
 
-			transports, err := sys.Client.GetTransportRequests(ctx, "", adt.TransportFilterModifiable)
+			transports, err := listModifiableRequests(ctx, sys.Client)
 			if err != nil {
 				t.Fatalf("GetTransportRequests failed: %v", err)
 			}
@@ -94,38 +94,6 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 	}
 }
 
-// TestGetTransportRequests_AllFilter_Integration checks that
-// TransportFilterAll, merged from the tree and E070, lists no request twice.
-// It logs counts per state only.
-//
-// TestGetTransportRequests_Complete_Integration checks that nothing is lost
-// in the merge.
-func TestGetTransportRequests_AllFilter_Integration(t *testing.T) {
-	for _, sys := range eachSystem(t) {
-		sys := sys
-		t.Run(sys.Name, func(t *testing.T) {
-			ctx := context.Background()
-			requests, err := sys.Client.GetTransportRequests(ctx, "", adt.TransportFilterAll)
-			if err != nil {
-				t.Fatalf("GetTransportRequests(all) failed: %v", err)
-			}
-			seen := map[string]bool{}
-			counts := map[string]int{}
-			for _, tr := range requests {
-				if seen[tr.Number] {
-					t.Errorf("a request appears twice in the merged list (state %v)", tr.State)
-				}
-				seen[tr.Number] = true
-				counts[tr.State.String()+"/"+tr.RawStatus]++
-			}
-			t.Logf("filter all: %d request(s), state/raw counts %v", len(requests), counts)
-			if len(requests) == 0 {
-				t.Skip("no request visible for the all filter on this system")
-			}
-		})
-	}
-}
-
 // TestGetTransportRequests_StateFilter_Integration guards #270 and #274: each
 // filter must return requests, and only requests in the state it names.
 //
@@ -136,9 +104,9 @@ func TestGetTransportRequests_AllFilter_Integration(t *testing.T) {
 // fallback, which asked for "R" only and so missed requests released with
 // import protection ("N").
 //
-// The test lists every user's requests: on ECC the configured user may own
-// no released request, while the system as a whole has many. It logs counts
-// per state only, never request numbers.
+// The test reads the first page of every user's requests: on ECC the
+// configured user may own no released request, while the system as a whole
+// has many. It logs counts per state only, never request numbers.
 func TestGetTransportRequests_StateFilter_Integration(t *testing.T) {
 	cases := []struct {
 		filter adt.TransportFilter
@@ -152,22 +120,48 @@ func TestGetTransportRequests_StateFilter_Integration(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(sys.Name+"/"+tc.filter.String(), func(t *testing.T) {
 				ctx := context.Background()
-				requests, err := sys.Client.GetTransportRequests(ctx, adt.TransportAllUsers, tc.filter)
+				page, err := sys.Client.GetTransportRequests(ctx, adt.TransportListOptions{
+					User: adt.TransportAllUsers, Filter: tc.filter, Limit: adt.MaxTransportPageSize,
+				})
 				if err != nil {
 					t.Fatalf("GetTransportRequests(%v) failed: %v", tc.filter, err)
 				}
 				states := map[string]int{}
-				for _, tr := range requests {
+				for _, tr := range page.Requests {
 					states[tr.State.String()+"/"+tr.RawStatus]++
 				}
-				t.Logf("filter %v: %d request(s), state/raw counts %v", tc.filter, len(requests), states)
-				if len(requests) == 0 {
+				t.Logf("filter %v: %d request(s) on the first page, more: %v, state/raw counts %v",
+					tc.filter, len(page.Requests), page.Next != "", states)
+				if len(page.Requests) == 0 {
 					t.Skipf("no request visible for the %v filter on this system", tc.filter)
 				}
-				for _, tr := range requests {
+				seen := map[string]bool{}
+				for _, tr := range page.Requests {
+					seen[tr.Number] = true
 					if tr.State != tc.want {
 						t.Fatalf("filter %v returned a request in state %v (raw %q); want only %v",
 							tc.filter, tr.State, tr.RawStatus, tc.want)
+					}
+				}
+				if page.Next == "" {
+					return
+				}
+				// The second page continues after the first: same state, no
+				// request repeated. Every user's released requests include
+				// SAP-delivered ones, whose numbers are not of the <SID>K9 form.
+				next, err := sys.Client.GetTransportRequests(ctx, adt.TransportListOptions{
+					User: adt.TransportAllUsers, Filter: tc.filter, Limit: adt.MaxTransportPageSize, After: page.Next,
+				})
+				if err != nil {
+					t.Fatalf("second page of %v failed: %v", tc.filter, err)
+				}
+				t.Logf("filter %v: %d request(s) on the second page", tc.filter, len(next.Requests))
+				for _, tr := range next.Requests {
+					if seen[tr.Number] {
+						t.Fatalf("the second page repeats a request of the first")
+					}
+					if tr.State != tc.want {
+						t.Fatalf("second page of %v holds a request in state %v (raw %q)", tc.filter, tr.State, tr.RawStatus)
 					}
 				}
 			})

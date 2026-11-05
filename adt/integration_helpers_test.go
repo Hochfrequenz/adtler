@@ -288,3 +288,15 @@ func setupDisposableReport(t *testing.T, client adt.Client, name, initialSource 
 
 	return objectURI
 }
+
+// listModifiableRequests lists the logon user's modifiable transport requests,
+// newest first, up to adt.MaxTransportPageSize of them.
+func listModifiableRequests(ctx context.Context, c adt.Client) ([]adt.TransportRequest, error) {
+	page, err := c.GetTransportRequests(ctx, adt.TransportListOptions{
+		Filter: adt.TransportFilterModifiable, Limit: adt.MaxTransportPageSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return page.Requests, nil
+}

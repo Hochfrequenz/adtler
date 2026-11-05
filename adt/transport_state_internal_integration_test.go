@@ -4,6 +4,7 @@ package adt
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -11,9 +12,11 @@ import (
 // TestGetTransportRequestsViaQuery_Integration runs the E070 read of
 // GetTransportRequests directly, on every configured system, for each filter
 // that adds a TRSTATUS condition (#274), and checks that every row it returns
-// is in the filter's state.
+// is in the filter's state. It also runs the DESCENDING sort on both
+// releases, which reject the DESC abbreviation.
 //
-// It lists every user's requests and logs counts per state only.
+// It reads the first page of every user's requests and logs counts per state
+// only.
 func TestGetTransportRequestsViaQuery_Integration(t *testing.T) {
 	cases := []struct {
 		filter TransportFilter
@@ -26,19 +29,20 @@ func TestGetTransportRequestsViaQuery_Integration(t *testing.T) {
 		sys := sys
 		for _, tc := range cases {
 			t.Run(sys.name+"/"+tc.filter.String(), func(t *testing.T) {
-				requests, err := sys.c.getTransportRequestsViaQuery(context.Background(), "", tc.filter)
+				page, err := sys.c.getTransportRequestsViaQuery(context.Background(), "", tc.filter, MaxTransportPageSize, nil)
 				if err != nil {
-					t.Fatalf("E070 fallback with the %v condition failed: %v", tc.filter, err)
+					t.Fatalf("E070 read with the %v condition failed: %v", tc.filter, err)
 				}
 				counts := map[string]int{}
-				for _, tr := range requests {
+				for _, tr := range page.Requests {
 					counts[tr.State.String()+"/"+tr.RawStatus]++
 					if tr.State != tc.want {
-						t.Errorf("fallback for %v returned a request in state %v (raw %q)", tc.filter, tr.State, tr.RawStatus)
+						t.Errorf("E070 read for %v returned a request in state %v (raw %q)", tc.filter, tr.State, tr.RawStatus)
 					}
 				}
-				t.Logf("filter %v: %d request(s), state/raw counts %v", tc.filter, len(requests), counts)
-				if len(requests) == 0 {
+				t.Logf("filter %v: %d request(s), more: %v, state/raw counts %v",
+					tc.filter, len(page.Requests), page.Next != "", counts)
+				if len(page.Requests) == 0 {
 					t.Skipf("no request in state %v on this system", tc.want)
 				}
 			})
@@ -46,51 +50,68 @@ func TestGetTransportRequestsViaQuery_Integration(t *testing.T) {
 	}
 }
 
-// TestGetTransportRequests_Complete_Integration guards #242 point 1 (#274):
-// for every filter, each request E070 holds for the logon user must be in
-// GetTransportRequests' result. Before E070 was read on every call, the
-// fallback ran only when nothing passed the filter, so on S/4 the all filter
-// returned the tree's few released requests and none of the modifiable ones,
-// and on ECC none of the released ones.
+// TestGetTransportRequests_Paging_Integration walks every page of the logon
+// user's requests with a small page size and checks the pages against one
+// read of the whole list: same requests, same order (newest first), none
+// twice, none lost. A small page size makes page boundaries fall between
+// requests changed at the same date and time, so the cursor's tie-breaking
+// on the request number is exercised too.
 //
-// It logs counts only.
-func TestGetTransportRequests_Complete_Integration(t *testing.T) {
+// Before #274 there was no paging, and before E070 was read on every call the
+// list was partial (#242 point 1); the comparison catches both. It logs
+// counts only.
+func TestGetTransportRequests_Paging_Integration(t *testing.T) {
+	const pageSize = 7
 	for _, sys := range issue63Systems(t) {
 		sys := sys
 		user := strings.ToUpper(sys.c.cfg.User)
 		for _, filter := range []TransportFilter{TransportFilterAll, TransportFilterModifiable, TransportFilterReleased} {
 			t.Run(sys.name+"/"+filter.String(), func(t *testing.T) {
 				ctx := context.Background()
-				fromE070, err := sys.c.getTransportRequestsViaQuery(ctx, user, filter)
+				whole, err := sys.c.getTransportRequestsViaQuery(ctx, user, filter, MaxTransportPageSize, nil)
 				if err != nil {
 					t.Fatalf("E070 read failed: %v", err)
 				}
-				listed, err := sys.c.GetTransportRequests(ctx, "", filter)
-				if err != nil {
-					t.Fatalf("GetTransportRequests(%v) failed: %v", filter, err)
+				if whole.Next != "" {
+					t.Skipf("the logon user owns more than %d requests for the %v filter", MaxTransportPageSize, filter)
 				}
-				have := map[string]bool{}
-				described := 0
-				for _, tr := range listed {
-					have[tr.Number] = true
-					if tr.Description != "" {
-						described++
-					}
-				}
-				missing := 0
-				for _, tr := range fromE070 {
-					if !have[tr.Number] {
-						missing++
-					}
-				}
-				t.Logf("filter %v: E070 %d, listed %d (%d with description), missing %d",
-					filter, len(fromE070), len(listed), described, missing)
-				if len(fromE070) == 0 {
+				if len(whole.Requests) == 0 {
 					t.Skipf("the logon user owns no request for the %v filter", filter)
 				}
-				if missing > 0 {
-					t.Fatalf("%d of %d requests E070 holds for the logon user are missing from the %v list",
-						missing, len(fromE070), filter)
+
+				var walked []string
+				described, pages := 0, 0
+				opts := TransportListOptions{Filter: filter, Limit: pageSize}
+				for {
+					page, err := sys.c.GetTransportRequests(ctx, opts)
+					if err != nil {
+						t.Fatalf("page %d: %v", pages+1, err)
+					}
+					pages++
+					for _, tr := range page.Requests {
+						walked = append(walked, tr.Number)
+						if tr.Description != "" {
+							described++
+						}
+					}
+					if page.Next == "" {
+						break
+					}
+					if pages > len(whole.Requests) {
+						t.Fatalf("still paging after %d pages for %d requests", pages, len(whole.Requests))
+					}
+					opts.After = page.Next
+				}
+
+				want := make([]string, len(whole.Requests))
+				for i, tr := range whole.Requests {
+					want[i] = tr.Number
+				}
+				t.Logf("filter %v: %d request(s) in %d page(s), %d with description",
+					filter, len(walked), pages, described)
+				if !reflect.DeepEqual(walked, want) {
+					t.Fatalf("the pages list %d request(s), the whole read %d; they differ in content or order",
+						len(walked), len(want))
 				}
 			})
 		}

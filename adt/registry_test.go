@@ -258,8 +258,8 @@ func TestRegistryDelegatesAllMethods(t *testing.T) {
 	})
 	t.Run("GetTransportRequests", func(t *testing.T) {
 		// The mock answers the E070 query with an empty body; delegation is
-		// what this checks, so a list missing the E070 half is fine.
-		if _, err := registry.GetTransportRequests(ctx, "USER", adt.TransportFilterModifiable); err != nil && !errors.Is(err, adt.ErrTransportListIncomplete) {
+		// what this checks, so a partial page is fine.
+		if _, err := registry.GetTransportRequests(ctx, adt.TransportListOptions{User: "USER"}); err != nil && !errors.Is(err, adt.ErrTransportListPartial) {
 			t.Fatalf("GetTransportRequests: %v", err)
 		}
 	})

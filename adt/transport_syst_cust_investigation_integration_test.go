@@ -174,7 +174,11 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 			}
 
 			// ADT standard endpoint: current behavior.
-			transports, err := sys.c.GetTransportRequests(ctx, "", TransportFilterModifiable)
+			page, err := sys.c.GetTransportRequests(ctx, TransportListOptions{Filter: TransportFilterModifiable, Limit: MaxTransportPageSize})
+			var transports []TransportRequest
+			if page != nil {
+				transports = page.Requests
+			}
 			if err != nil {
 				t.Logf("GetTransportRequests failed: %v", err)
 			} else {

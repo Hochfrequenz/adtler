@@ -160,7 +160,7 @@ type TransportClient interface {
 	ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error)
 	RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error)
 	RollbackTransportWithOptions(ctx context.Context, transportNumber string, opts RollbackOptions) (*RollbackResult, error)
-	GetTransportRequests(ctx context.Context, user string, filter TransportFilter) ([]TransportRequest, error)
+	GetTransportRequests(ctx context.Context, opts TransportListOptions) (*TransportRequestPage, error)
 	AddToTransport(ctx context.Context, objectURI, transport string) error
 	RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error
 	CopyTransportObjects(ctx context.Context, sourceRequest, targetRequest string, withDocumentation bool) error

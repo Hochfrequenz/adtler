@@ -53,7 +53,7 @@ func taskSet(tasks []string) map[string]bool {
 func selectTwoTaskOwnedTransports(t *testing.T, ctx context.Context, client adt.Client) (probe1, probe2 transportObjectsProbe) {
 	t.Helper()
 
-	requests, err := client.GetTransportRequests(ctx, "", adt.TransportFilterModifiable)
+	requests, err := listModifiableRequests(ctx, client)
 	if err != nil {
 		t.Fatalf("GetTransportRequests: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestGetTransportInfo_ReturnsRequestedNumber_Integration(t *testing.T) {
 		t.Run(sys.Name, func(t *testing.T) {
 			ctx := context.Background()
 
-			requests, err := sys.Client.GetTransportRequests(ctx, "", adt.TransportFilterModifiable)
+			requests, err := listModifiableRequests(ctx, sys.Client)
 			if err != nil {
 				t.Fatalf("GetTransportRequests: %v", err)
 			}
@@ -191,7 +191,7 @@ func TestRemoveObjectSupport_Capability_Integration(t *testing.T) {
 				t.Fatalf("%s: client %T does not implement adt.TestClient", sys.Name, sys.Client)
 			}
 
-			requests, err := sys.Client.GetTransportRequests(ctx, "", adt.TransportFilterModifiable)
+			requests, err := listModifiableRequests(ctx, sys.Client)
 			if err != nil {
 				t.Fatalf("GetTransportRequests: %v", err)
 			}
