@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -99,23 +100,23 @@ func writeAndActivate(t *testing.T, c adt.Client, objectURI, source, request str
 	// SetSource ends the stateful session, and a class's lock with it.
 	src, err := c.GetSource(ctx, objectURI)
 	if err != nil {
-		t.Fatalf("GetSource for ETag: %v", err)
+		t.Fatalf("GetSource for ETag: %s", redactError(err, "", request))
 	}
 	lh, err := c.LockObject(ctx, objectURI)
 	if err != nil {
-		t.Fatalf("LockObject: %v", err)
+		t.Fatalf("LockObject: %s", redactError(err, "", request))
 	}
 	if _, err := c.SetSource(ctx, objectURI, source, lh, request, src.ETag); err != nil {
 		_ = c.UnlockObject(ctx, objectURI, lh)
-		t.Fatalf("SetSource: %v", err)
+		t.Fatalf("SetSource: %s", redactError(err, "", request))
 	}
 	_ = c.UnlockObject(ctx, objectURI, lh)
 	res, err := c.ActivateObjects(ctx, []string{objectURI})
 	if err != nil {
-		t.Fatalf("ActivateObjects: %v", err)
+		t.Fatalf("ActivateObjects: %s", redactError(err, "", request))
 	}
 	if !res.Success {
-		t.Fatalf("activation failed: %v", res.Messages)
+		t.Fatalf("activation failed: %s", redact(fmt.Sprint(res.Messages), "", request))
 	}
 }
 

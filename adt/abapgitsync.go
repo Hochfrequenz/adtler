@@ -260,5 +260,5 @@ func decodeAbapGitSyncResponse(op string, resp *http.Response, out any) error {
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("%s: %w", op, ErrAbapGitSyncNotInstalled)
 	}
-	return fmt.Errorf("%s: %w", op, parseADTError(resp.StatusCode, bytes.NewReader(body)))
+	return fmt.Errorf("%s: %w", op, parseResponseError(resp, bytes.NewReader(body)))
 }

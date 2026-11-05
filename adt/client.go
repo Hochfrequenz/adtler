@@ -1070,7 +1070,26 @@ func encodeNamespacePath(path string) string {
 // checkResponse returns an *ADTError if the response status indicates failure.
 func checkResponse(resp *http.Response) error {
 	if resp.StatusCode >= 400 {
-		return parseADTError(resp.StatusCode, resp.Body)
+		return parseResponseError(resp, resp.Body)
 	}
 	return nil
+}
+
+// parseResponseError is parseADTError for the error body of resp, with the
+// host the request went to removed from ADTError.Message. The message is
+// text SAP wrote (an error page, a plain-text body, a T100 message), and an
+// application server names itself in such texts by its host's first label
+// (#167). Properties and T100Vars are left as SAP sent them: they are
+// structured values a caller may need, and Error does not print them.
+func parseResponseError(resp *http.Response, body io.Reader) error {
+	err := parseADTError(resp.StatusCode, body)
+	if resp.Request == nil || resp.Request.URL == nil {
+		return err
+	}
+	var adtErr *ADTError
+	if errors.As(err, &adtErr) {
+		u := resp.Request.URL
+		adtErr.Message = neterr.Text(adtErr.Message, u.Scheme+"://"+u.Host)
+	}
+	return err
 }

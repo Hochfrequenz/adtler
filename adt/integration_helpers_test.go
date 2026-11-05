@@ -5,7 +5,9 @@ package adt_test
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -299,4 +301,61 @@ func listModifiableRequests(ctx context.Context, c adt.Client) ([]adt.TransportR
 		return nil, err
 	}
 	return page.Requests, nil
+}
+
+// redact removes values that must not reach a test log or a pull request.
+//
+// ADT messages echo the requested object back verbatim — a 404 for a behavior
+// definition reads "Inactive version for BDEF <NAME> does not exist" — so a
+// test that discovers a fixture at runtime and logs only counts still prints
+// the object's name the moment it fails. Pass every error text that can name
+// a discovered object through redact before printing it (#167). The client
+// already removes the host from transport errors and from ADTError.Message;
+// host is kept here as a second line of defence for text from elsewhere.
+//
+// It is shared by the whole suite; objects a test creates itself
+// (Z_ADT_MCP_*, $TMP throwaways) and SAP standard objects need no redaction.
+//
+// Matching is case-insensitive and also covers the url.PathEscape form of each
+// value: a namespaced object such as /ABC/CL_EXAMPLE reaches error text
+// percent-encoded (%2fabc%2fcl_example or %2FABC%2FCL_EXAMPLE), in either case.
+func redact(text, host, name string) string {
+	for _, r := range []struct{ secret, placeholder string }{
+		{host, "<host>"},
+		{name, "<name>"},
+	} {
+		if r.secret == "" {
+			continue
+		}
+		variants := []string{r.secret}
+		if escaped := url.PathEscape(r.secret); escaped != r.secret {
+			variants = append(variants, escaped)
+		}
+		for _, variant := range variants {
+			re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(variant))
+			text = re.ReplaceAllLiteralString(text, r.placeholder)
+		}
+	}
+	return text
+}
+
+// redactNames is redact for several names at once: it replaces host and every
+// non-empty name in text. Use it where an error can echo more than one value
+// the test discovered or SAP generated (an object and its group, a request
+// number and a target system).
+func redactNames(text, host string, names ...string) string {
+	text = redact(text, host, "")
+	for _, n := range names {
+		text = redact(text, "", n)
+	}
+	return text
+}
+
+// redactError returns the text of err with host and names redacted, or
+// "<nil>" for a nil error, so a "want error X, got %s" message stays safe.
+func redactError(err error, host string, names ...string) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return redactNames(err.Error(), host, names...)
 }

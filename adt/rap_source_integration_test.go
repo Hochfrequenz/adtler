@@ -6,46 +6,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )
-
-// redact removes values that must not reach a test log or a pull request.
-//
-// Two kinds of value leak through error text here. ADT messages echo the
-// requested object back verbatim — a 404 for a behavior definition reads
-// "Inactive version for BDEF <NAME> does not exist" — and Go's transport
-// errors embed the full request URL, which carries the internal host name and
-// port. Both are forbidden in this public repository, and the only path that
-// prints them is the failure path: exactly the output someone pastes into a
-// pull request.
-//
-// Matching is case-insensitive and also covers the url.PathEscape form of each
-// value: a namespaced object such as /ABC/CL_EXAMPLE reaches error text
-// percent-encoded (%2fabc%2fcl_example or %2FABC%2FCL_EXAMPLE), in either case.
-func redact(text, host, name string) string {
-	for _, r := range []struct{ secret, placeholder string }{
-		{host, "<host>"},
-		{name, "<name>"},
-	} {
-		if r.secret == "" {
-			continue
-		}
-		variants := []string{r.secret}
-		if escaped := url.PathEscape(r.secret); escaped != r.secret {
-			variants = append(variants, escaped)
-		}
-		for _, variant := range variants {
-			re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(variant))
-			text = re.ReplaceAllLiteralString(text, r.placeholder)
-		}
-	}
-	return text
-}
 
 // searchFixtures runs a discovery search and separates the three outcomes that
 // look alike from the outside.

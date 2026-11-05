@@ -69,7 +69,16 @@ func TestTransportErrorsDoNotNameTheHost_Integration(t *testing.T) {
 				defer cancel()
 				_, err := adt.NewClient(cfg).GetObjectInfo(ctx, "/sap/bc/adt/programs/programs/RSPARAM")
 				// The dial may be refused or time out behind a firewall; both
-				// are transport errors and both must be clean.
+				// are transport errors and both must be clean. Behind an HTTP
+				// proxy the proxy answers instead (typically 502): that is an
+				// *adt.ADTError, and its text, which the proxy wrote, must be
+				// clean as well.
+				var adtErr *adt.ADTError
+				if errors.As(err, &adtErr) {
+					t.Logf("a proxy answered with status %d; checking its text instead", adtErr.StatusCode)
+					assertTextClean(t, err.Error(), leaks)
+					return
+				}
 				assertTransportErrorClean(t, err, leaks)
 			})
 		})
@@ -91,7 +100,14 @@ func assertTransportErrorClean(t *testing.T, err error, leaks map[string]string)
 	if !errors.As(err, &ue) {
 		t.Errorf("want a *url.Error in the chain, got %T", err)
 	}
-	text := strings.ToLower(err.Error())
+	assertTextClean(t, err.Error(), leaks)
+}
+
+// assertTextClean fails for each kind of leak text names, never printing
+// the value.
+func assertTextClean(t *testing.T, text string, leaks map[string]string) {
+	t.Helper()
+	text = strings.ToLower(text)
 	for kind, value := range leaks {
 		if strings.Contains(text, strings.ToLower(value)) {
 			t.Errorf("error text names the system's %s", kind)

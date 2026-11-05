@@ -39,7 +39,8 @@ func TestRunQuery_Integration(t *testing.T) {
 			t.Errorf("row %d: expected at least 2 columns, got %d", i, len(row))
 			continue
 		}
-		t.Logf("  %s = %s", row[0], row[1])
+		// The row values (company codes and names) are the system's own
+		// data and are not logged.
 	}
 }
 

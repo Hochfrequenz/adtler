@@ -55,16 +55,16 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			// 1. Decide the branch with an empty source: nothing created yet.
 			err := c.CopyTransportObjects(ctx, source, target, true)
 			if adt.ClassifyError(err) == adt.ErrorNotSupported {
-				t.Logf("[1] CopyTransportObjects refused (not supported): %v", err)
+				t.Logf("[1] CopyTransportObjects refused (not supported): %s", redactNames(err.Error(), "", source, target))
 				if want == addObjectsSupported {
 					t.Fatalf("[1] refused on a release that has the action")
 				}
 				if err := c.AddPackageToTransport(ctx, testPackage, target, false); adt.ClassifyError(err) != adt.ErrorNotSupported {
-					t.Fatalf("[1] AddPackageToTransport: want ErrorNotSupported on the same system, got %v", err)
+					t.Fatalf("[1] AddPackageToTransport: want ErrorNotSupported on the same system, got %s", redactError(err, "", target))
 				}
 				objs, err := c.GetTransportObjects(ctx, target)
 				if err != nil {
-					t.Fatalf("[1] GetTransportObjects(target): %v", err)
+					t.Fatalf("[1] GetTransportObjects(target): %s", redact(err.Error(), "", target))
 				}
 				if len(objs) != 0 {
 					t.Fatalf("[1] target holds %d entries although both calls were refused", len(objs))
@@ -72,7 +72,7 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("[1] CopyTransportObjects with an empty source: %v", err)
+				t.Fatalf("[1] CopyTransportObjects with an empty source: %s", redactNames(err.Error(), "", source, target))
 			}
 			if want == addObjectsUnsupported {
 				t.Fatalf("[1] accepted on a release that lacks the action")
@@ -82,18 +82,18 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			objName := timestampedName("Z_TOC_")
 			objectURI := "/sap/bc/adt/programs/programs/" + objName
 			if err := c.CreateObject(ctx, "PROG", objName, testPackage, "adtler #267 transport of copies", source); err != nil {
-				t.Fatalf("[2] CreateObject: %v", err)
+				t.Fatalf("[2] CreateObject: %s", redact(err.Error(), "", source))
 			}
 			t.Cleanup(func() { cleanupTransportEntries(t, c, source) })
 			t.Cleanup(func() {
 				if err := c.DeleteObject(context.Background(), objectURI, "", source); err != nil {
-					t.Logf("[cleanup] delete program: %v (manual cleanup may be needed)", err)
+					t.Logf("[cleanup] delete program: %s (manual cleanup may be needed)", redact(err.Error(), "", source))
 				}
 			})
 
 			// 3. Copy the request into the target request.
 			if err := c.CopyTransportObjects(ctx, source, target, true); err != nil {
-				t.Fatalf("[3] CopyTransportObjects: %v", err)
+				t.Fatalf("[3] CopyTransportObjects: %s", redactNames(err.Error(), "", source, target))
 			}
 			if !transportLists(t, c, target, "PROG", objName) {
 				t.Fatalf("[3] the program is not in the target request after CopyTransportObjects")
@@ -103,7 +103,7 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			// 4. Fill a second target request from the package.
 			byPackage := createCopiesTarget(t, c, source, "adtler #267 package copy")
 			if err := c.AddPackageToTransport(ctx, testPackage, byPackage, false); err != nil {
-				t.Fatalf("[4] AddPackageToTransport: %v", err)
+				t.Fatalf("[4] AddPackageToTransport: %s", redact(err.Error(), "", byPackage))
 			}
 			if !transportLists(t, c, byPackage, "PROG", objName) {
 				t.Fatalf("[4] the program is not in the target request after AddPackageToTransport")
@@ -169,7 +169,7 @@ func createDisposableTransport(t *testing.T, c adt.Client, description string) s
 	}
 	t.Cleanup(func() {
 		if err := c.DeleteTransport(context.Background(), number); err != nil {
-			t.Logf("[cleanup] delete request %q: %v (manual cleanup may be needed)", description, err)
+			t.Logf("[cleanup] delete request %q: %s (manual cleanup may be needed)", description, redact(err.Error(), "", number))
 		}
 	})
 	return number
@@ -191,13 +191,13 @@ func createCopiesTarget(t *testing.T, c adt.Client, source, description string) 
 		// copy actions (756 and newer) but not the typed create still runs
 		// the copy test, against a workbench target.
 		if release := sapBasisRelease(t, c); release >= 816 {
-			t.Fatalf("CreateTransport(T) refused on SAP_BASIS %d, which has the typed create: %v", release, err)
+			t.Fatalf("CreateTransport(T) refused on SAP_BASIS %d, which has the typed create: %s", release, redactNames(err.Error(), "", source, target))
 		}
 		t.Logf("no transport of copies on this release; target is a workbench request")
 		return createDisposableTransport(t, c, description)
 	}
 	if err != nil {
-		t.Fatalf("CreateTransport(T, %q): %v", description, err)
+		t.Fatalf("CreateTransport(T, %q): %s", description, redactNames(err.Error(), "", source, target))
 	}
 	t.Cleanup(func() { deleteTransportAfterTest(t, c, number) })
 	if fn, _ := readE070(t, c, number); fn != "T" {
@@ -214,7 +214,7 @@ func cleanupTransportEntries(t *testing.T, c adt.Client, request string) {
 	ctx := context.Background()
 	objs, err := c.GetTransportObjects(ctx, request)
 	if err != nil {
-		t.Logf("[cleanup] read entries: %v", err)
+		t.Logf("[cleanup] read entries: %s", redact(err.Error(), "", request))
 		return
 	}
 	for _, o := range objs {
@@ -222,7 +222,7 @@ func cleanupTransportEntries(t *testing.T, c adt.Client, request string) {
 			continue
 		}
 		if err := c.RemoveFromTransport(ctx, o.Task, request, o.PgmID, o.Type, o.Name, o.WBType, o.Position); err != nil {
-			t.Logf("[cleanup] remove %s entry: %v", o.Type, err)
+			t.Logf("[cleanup] remove %s entry: %s", o.Type, redactNames(err.Error(), "", request, o.Task, o.Name))
 		}
 	}
 }
@@ -232,7 +232,7 @@ func transportLists(t *testing.T, c adt.Client, request, objType, name string) b
 	t.Helper()
 	objs, err := c.GetTransportObjects(context.Background(), request)
 	if err != nil {
-		t.Fatalf("GetTransportObjects: %v", err)
+		t.Fatalf("GetTransportObjects: %s", redact(err.Error(), "", request))
 	}
 	t.Logf("request holds %d entries", len(objs))
 	for _, o := range objs {

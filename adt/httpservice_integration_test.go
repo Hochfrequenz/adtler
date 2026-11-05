@@ -38,11 +38,14 @@ func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 			// A 401 is final under Basic auth: after one, neither the test nor
 			// its cleanup may send the credential again (repository CLAUDE.md).
 			authFailed := false
+			// handler is borrowed from a discovered service and may be a
+			// customer class, so it is redacted like the logon ID.
+			handler := ""
 			redactErr := func(err error) string {
 				if isUnauthorizedErr(err) {
 					authFailed = true
 				}
-				return redact(err.Error(), sys.Config.Host, sys.Config.User)
+				return redactNames(err.Error(), sys.Config.Host, sys.Config.User, handler)
 			}
 			cleanup := func() { deleteLeftover(t, sys.Client, &authFailed, sys.Name, name, uri, redactErr) }
 
@@ -64,7 +67,7 @@ func TestHTTPService_RoundTrip_MultiSystem_Integration(t *testing.T) {
 				return
 			}
 
-			handler := discoverHTTPHandlerClass(t, sys, redactErr)
+			handler = discoverHTTPHandlerClass(t, sys, redactErr)
 			if handler == "" {
 				t.Skipf("[%s] found no HTTP service with a handler class to borrow", sys.Name)
 			}
@@ -126,7 +129,7 @@ func discoverHTTPHandlerClass(t *testing.T, sys integrationSystem, redactErr fun
 	for _, o := range found {
 		svc, err := sys.Client.GetHTTPService(ctx, o.Name)
 		if err != nil {
-			t.Fatalf("[%s] GetHTTPService on a discovered service: %s", sys.Name, redactErr(err))
+			t.Fatalf("[%s] GetHTTPService on a discovered service: %s", sys.Name, redact(redactErr(err), "", o.Name))
 		}
 		if svc.HandlerClass != "" {
 			t.Logf("[%s] borrowing the handler class of one of %d HTTP services", sys.Name, len(found))

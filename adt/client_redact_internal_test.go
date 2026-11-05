@@ -105,3 +105,52 @@ func TestCrossOriginRedirectErrorDoesNotNameHosts(t *testing.T) {
 	_, otherPort, _ := net.SplitHostPort(strings.TrimPrefix(other.URL, "http://"))
 	assertNoHost(t, err.Error(), "127.0.0.1", "localhost", ":"+sapPort, ":"+otherPort)
 }
+
+// TestADTErrorMessageDoesNotNameTheHost: a host the server names in its own
+// error text is removed from ADTError.Message, while Properties and T100Vars
+// keep what SAP sent (#167).
+func TestADTErrorMessageDoesNotNameTheHost(t *testing.T) {
+	body := `<?xml version="1.0" encoding="utf-8"?>` +
+		`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">` +
+		`<namespace id="com.sap.adt"/><type id="ExceptionResourceFailure"/>` +
+		`<message>RFC to sapsrv01_ABC_00 (sapsrv01.corp.example) failed</message>` +
+		`<properties><entry key="T100KEY-V1">sapsrv01_ABC_00</entry></properties>` +
+		`</exc:exception>`
+	req, _ := http.NewRequest(http.MethodGet, "https://sapsrv01.corp.example:44300/sap/bc/adt/x", nil)
+	resp := &http.Response{StatusCode: http.StatusInternalServerError, Request: req}
+
+	err := parseResponseError(resp, strings.NewReader(body))
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("want *ADTError, got %T", err)
+	}
+	if want := "RFC to <host>_ABC_00 (<host>) failed"; adtErr.Message != want {
+		t.Errorf("Message = %q, want %q", adtErr.Message, want)
+	}
+	if adtErr.T100Vars[0] != "sapsrv01_ABC_00" || adtErr.Properties["T100KEY-V1"] != "sapsrv01_ABC_00" {
+		t.Errorf("structured values changed: %v / %v", adtErr.T100Vars, adtErr.Properties)
+	}
+}
+
+// TestADTErrorMessageThroughClient: the same holds for a plain-text error
+// body on a real round trip, where the address is the test server's.
+func TestADTErrorMessageThroughClient(t *testing.T) {
+	var self string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/discovery") {
+			w.Header().Set("X-CSRF-Token", "tok")
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream " + self + " unreachable"))
+	}))
+	defer srv.Close()
+	self = strings.TrimPrefix(srv.URL, "http://")
+
+	_, err := redirectClients(srv.URL)["NewClient"].GetSource(context.Background(), redirectTestSource)
+	var adtErr *ADTError
+	if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("want an ADTError 502, got %v", err)
+	}
+	assertNoHost(t, err.Error(), self, "127.0.0.1")
+}

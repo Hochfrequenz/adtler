@@ -81,9 +81,10 @@ func TestSearchPackages_Integration(t *testing.T) {
 			if len(results) == 0 {
 				t.Skip("no Z* packages found on this system — cannot assert type constraint")
 			}
-			for _, r := range results {
+			// The Z* packages are discovered: name a wrong result by position only.
+			for i, r := range results {
 				if r.Type != adt.ObjectTypePackage {
-					t.Errorf("result %q has Type %q, want %q (SearchPackages must filter to DEVC/K only)", r.Name, r.Type, adt.ObjectTypePackage)
+					t.Errorf("result %d has Type %q, want %q (SearchPackages must filter to DEVC/K only)", i, r.Type, adt.ObjectTypePackage)
 				}
 			}
 			t.Logf("[%s] SearchPackages Z*: %d results (all DEVC/K)", sys.Name, len(results))

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -156,8 +157,9 @@ func TestExportCustomizing_SmallTableSet(t *testing.T) {
 		t.Error("export_summary.json has empty 'client' field")
 	}
 
-	t.Logf("export summary: system=%s client=%s, %d tables, %d exported, %d empty, %d total rows",
-		fileSummary.System, fileSummary.Client,
+	// System (the host) and client are not logged, only that they are set.
+	t.Logf("export summary: system set=%t client set=%t, %d tables, %d exported, %d empty, %d total rows",
+		fileSummary.System != "", fileSummary.Client != "",
 		fileSummary.TotalTables, fileSummary.ExportedTables, fileSummary.EmptyTables, fileSummary.TotalRows)
 }
 
@@ -390,7 +392,7 @@ func TestExportCustomizing_IncludeTables(t *testing.T) {
 		Workers:   1,
 	})
 	if err != nil {
-		t.Fatalf("RunExport failed: %v", err)
+		t.Fatalf("RunExport failed: %s", redactTables(err.Error(), tables))
 	}
 
 	if len(summary.Errors) > 0 {
@@ -545,7 +547,7 @@ func TestExportCustomizing_LongKeyPagination(t *testing.T) {
 		Workers:   1,
 	})
 	if err != nil {
-		t.Fatalf("RunExport failed: %v", err)
+		t.Fatalf("RunExport failed: %s", redactTables(err.Error(), []string{table}))
 	}
 	if len(summary.Errors) > 0 {
 		t.Errorf("%d export errors", len(summary.Errors))
@@ -584,4 +586,17 @@ func logTableErrorKinds(t *testing.T, tableErrors []custexport.TableError) {
 			t.Logf("error %d: %T", i, te.Err)
 		}
 	}
+}
+
+// redactTables replaces every discovered table name in text with "<table>",
+// case-insensitively. The discovered tables can be customer tables, and the
+// adt_test helper redact is not visible from this package.
+func redactTables(text string, tables []string) string {
+	for _, table := range tables {
+		if table == "" {
+			continue
+		}
+		text = regexp.MustCompile("(?i)"+regexp.QuoteMeta(table)).ReplaceAllLiteralString(text, "<table>")
+	}
+	return text
 }

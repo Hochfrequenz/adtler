@@ -113,7 +113,7 @@ func TestMain(m *testing.M) {
 	fmt.Println("=== Integration test setup: ensuring fixtures exist ===")
 	created, transport, err := setupFixtures(ctx, client)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "SETUP FAILED: %v\n", err)
+		fmt.Fprintf(os.Stderr, "SETUP FAILED: %s\n", redactError(err, "", transport))
 		os.Exit(1)
 	}
 
@@ -125,7 +125,7 @@ func TestMain(m *testing.M) {
 		for i := len(created) - 1; i >= 0; i-- {
 			f := created[i]
 			if err := client.DeleteObject(ctx, f.objectURI, "", transport); err != nil {
-				fmt.Printf("  [delete failed] %s %s: %v\n", f.objType, f.name, err)
+				fmt.Printf("  [delete failed] %s %s: %s\n", f.objType, f.name, redactError(err, "", transport))
 			} else {
 				fmt.Printf("  [deleted] %s %s\n", f.objType, f.name)
 			}
@@ -133,9 +133,9 @@ func TestMain(m *testing.M) {
 		// Release transport including tasks (test cleanup).
 		if transport != "" {
 			if _, err := client.ReleaseTransportWithTasks(ctx, transport); err != nil {
-				fmt.Printf("  [transport release failed] %s: %v\n", transport, err)
+				fmt.Printf("  [transport release failed] %s\n", redactError(err, "", transport))
 			} else {
-				fmt.Printf("  [transport released] %s\n", transport)
+				fmt.Println("  [transport released]")
 			}
 		}
 	}
@@ -167,7 +167,7 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, str
 		tr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP integration test fixtures", Package: pkg})
 		if err == nil {
 			fixtureTransport = tr
-			fmt.Printf("  [transport] %s for package %s\n", tr, pkg)
+			fmt.Printf("  [transport] created for package %s\n", pkg)
 			break
 		}
 	}
@@ -198,10 +198,10 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, str
 		}
 		if createErr != nil {
 			if _, infoErr := client.GetObjectInfo(ctx, f.objectURI); infoErr == nil {
-				fmt.Printf("  [exists, create skipped] %s %s: %v\n", f.objType, f.name, createErr)
+				fmt.Printf("  [exists, create skipped] %s %s: %s\n", f.objType, f.name, redactError(createErr, "", fixtureTransport))
 				continue
 			}
-			fmt.Printf("  [unavailable] %s %s: %v\n", f.objType, f.name, createErr)
+			fmt.Printf("  [unavailable] %s %s: %s\n", f.objType, f.name, redactError(createErr, "", fixtureTransport))
 			continue
 		}
 		fmt.Printf("  [created] %s %s in package %s\n", f.objType, f.name, usedPkg)

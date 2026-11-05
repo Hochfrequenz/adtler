@@ -191,7 +191,8 @@ func TestGetTransportRequests_SystCust_GapDocumentation_Integration(t *testing.T
 						t.Logf("  ... and %d more", len(transports)-5)
 						break
 					}
-					t.Logf("  [%d] %s owner=%s status=%s %q", i, tr.Number, tr.Owner, tr.RawStatus, tr.Description)
+					// Number, owner and short text identify the landscape: flags only.
+					t.Logf("  [%d] status=%s ownerSet=%t descriptionSet=%t", i, tr.RawStatus, tr.Owner != "", tr.Description != "")
 				}
 			}
 		})
@@ -222,11 +223,11 @@ func TestGetTransportRequests_SystCust_AlternativeAcceptHeader_Integration(t *te
 			t.Logf("HTTP %d  Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 			if resp.StatusCode != http.StatusOK {
 				t.Logf("non-200 response — accept header not supported on the list endpoint")
-				t.Logf("body (first 500 chars): %.500s", body)
+				t.Logf("body: %d bytes (not logged, it can name requests and users)", len(body))
 				return
 			}
 
-			t.Logf("response body (first 1000 chars): %.1000s", body)
+			t.Logf("response body: %d bytes (not logged, it names requests, owners and objects)", len(body))
 			count := countXMLRequestElements(body)
 			t.Logf("found %d <*:request> elements", count)
 			if count > 0 {
@@ -336,7 +337,7 @@ func TestGetTransportRequests_SystCust_CombinedHypothesis_Integration(t *testing
 
 			body, _ := io.ReadAll(resp.Body)
 			t.Logf("HTTP %d  Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
-			t.Logf("response body (first 2000 chars): %.2000s", body)
+			t.Logf("response body: %d bytes (not logged, it names requests, owners and objects)", len(body))
 
 			if resp.StatusCode != http.StatusOK {
 				t.Logf("non-200 response — combined hypothesis rejected")
@@ -372,8 +373,9 @@ func countXMLRequestElements(data []byte) int {
 	return count
 }
 
-// logTransportNumbersFromXML logs the first five transport numbers found in an
-// XML response (any element with a "number" attribute).
+// logTransportNumbersFromXML reports, for the first five request elements of an
+// XML response, that they carry a "number" attribute. The numbers themselves
+// embed the system ID and are not logged.
 func logTransportNumbersFromXML(t *testing.T, data []byte) {
 	t.Helper()
 	d := xml.NewDecoder(bytes.NewReader(data))
@@ -389,7 +391,7 @@ func logTransportNumbersFromXML(t *testing.T, data []byte) {
 		}
 		for _, attr := range se.Attr {
 			if attr.Name.Local == "number" && attr.Value != "" {
-				t.Logf("  transport: %s", attr.Value)
+				t.Logf("  transport %d: number set (value not logged)", logged+1)
 				logged++
 				if logged >= 5 {
 					return

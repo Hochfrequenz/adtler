@@ -428,9 +428,9 @@ func (c *httpClient) releaseTransportDirect(ctx context.Context, transportNumber
 	// A 401 says the credential was rejected, not that /newreleasejobs is
 	// missing. The fallback would send the same credential again (#222).
 	if resp.StatusCode == http.StatusUnauthorized {
-		// parseADTError on the body already read is what checkResponse
+		// parseResponseError on the body already read is what checkResponse
 		// would return; checkResponse itself needs the unread body.
-		return fmt.Errorf("ReleaseTransport %s: %w", transportNumber, parseADTError(resp.StatusCode, bytes.NewReader(data)))
+		return fmt.Errorf("ReleaseTransport %s: %w", transportNumber, parseResponseError(resp, bytes.NewReader(data)))
 	}
 
 	// Fallback to /releasejobs (works for tasks on ECC and S4).
@@ -558,7 +558,7 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 	// passing through as before: the release job has finished, and that
 	// verification read is what decides whether the transport was released.
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("ReleaseTransport %s result: %w", transportNumber, parseADTError(resp.StatusCode, bytes.NewReader(data)))
+		return fmt.Errorf("ReleaseTransport %s result: %w", transportNumber, parseResponseError(resp, bytes.NewReader(data)))
 	}
 	return checkReleaseResponse(transportNumber, data)
 }

@@ -47,8 +47,9 @@ func TestUIACDependencies_AbsentCatalog_Integration(t *testing.T) {
 				t.Fatalf("[%s] GetObjectDependencies(UIAC, absent catalog) returned nil result", sys.Name)
 			}
 			if len(res.Dependencies) != 0 {
-				t.Errorf("[%s] absent catalog %q: got %d dependencies, want 0: %+v",
-					sys.Name, nonexistentCatID, len(res.Dependencies), res.Dependencies)
+				// The dependencies would be real app entries: count only.
+				t.Errorf("[%s] absent catalog %q: got %d dependencies, want 0",
+					sys.Name, nonexistentCatID, len(res.Dependencies))
 			}
 		})
 	}
@@ -90,7 +91,7 @@ func TestUIACUIADDependencies_MultiSystem_Integration(t *testing.T) {
 
 			uiacResult, err := sys.Client.GetObjectDependencies(ctx, "UIAC", catID, 0, 1)
 			if err != nil {
-				t.Fatalf("[%s] GetObjectDependencies(UIAC): %v", sys.Name, err)
+				t.Fatalf("[%s] GetObjectDependencies(UIAC): %s", sys.Name, redact(err.Error(), sys.Config.Host, catID))
 			}
 			if uiacResult == nil {
 				t.Fatalf("[%s] GetObjectDependencies(UIAC) returned nil result", sys.Name)
@@ -110,7 +111,7 @@ func TestUIACUIADDependencies_MultiSystem_Integration(t *testing.T) {
 			appID := uiacResult.Dependencies[0].Name
 			uiadResult, err := sys.Client.GetObjectDependencies(ctx, "UIAD", appID, 0, 1)
 			if err != nil {
-				t.Fatalf("[%s] GetObjectDependencies(UIAD): %v", sys.Name, err)
+				t.Fatalf("[%s] GetObjectDependencies(UIAD): %s", sys.Name, redactNames(err.Error(), sys.Config.Host, appID, catID))
 			}
 			if uiadResult == nil {
 				t.Fatalf("[%s] GetObjectDependencies(UIAD) returned nil result", sys.Name)

@@ -31,6 +31,11 @@ const (
 // one that only appears inside a proxy's error text.
 var ipv4Re = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
 
+// ipv6Re catches an IPv6 address in the bracketed form net/http and net
+// print next to a port ("[fd00::1]:443"). A bare IPv6 address is not
+// matched: such a pattern would also take clock times like "12:30:45".
+var ipv6Re = regexp.MustCompile(`\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(?:%[^\]]*)?\]`)
+
 // Redact returns err with every host name, port and network address it
 // carries replaced by a placeholder. hosts names further hosts to remove,
 // typically the configured system URL ("https://host:port" or a bare host);
@@ -57,6 +62,14 @@ func Redact(err error, hosts ...string) error {
 		return &url.Error{Op: ue.Op, URL: pathOnly(ue.URL), Err: wrap(ue.Err, tokens)}
 	}
 	return wrap(err, tokens)
+}
+
+// Text returns s with the given hosts, their host:port forms and short
+// names, and any IP address replaced by placeholders. It serves error texts
+// that come from a response body rather than from net/http, such as an SAP
+// error page; there is no error chain to read further hosts from.
+func Text(s string, hosts ...string) string {
+	return scrub(s, collectTokens(nil, hosts))
 }
 
 // wrap returns err behind a scrubbed text, or err itself when scrubbing
@@ -131,6 +144,10 @@ func collectTokens(err error, hosts []string) []string {
 	}
 	for _, h := range hosts {
 		addURL(h)
+		addShortName(add, h)
+	}
+	if err == nil {
+		return sortTokens(seen)
 	}
 
 	var ue *url.Error
@@ -169,6 +186,35 @@ func collectTokens(err error, hosts []string) []string {
 		addCertificate(add, invalidErr.Cert)
 	}
 
+	return sortTokens(seen)
+}
+
+// minShortName is the shortest first DNS label addShortName adds. A
+// shorter one ("sap", "erp") is too likely an ordinary word in an SAP
+// message to replace safely.
+const minShortName = 4
+
+// addShortName adds the first DNS label of a configured host: SAP names
+// an application server by it ("<label>_<SID>_<nr>"), and a resolver
+// search domain lets it stand alone in a DNS error.
+func addShortName(add func(string), raw string) {
+	h := raw
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		h = u.Hostname()
+	} else if host, _, err := net.SplitHostPort(raw); err == nil {
+		h = host
+	}
+	if net.ParseIP(h) != nil {
+		return
+	}
+	if label, _, found := strings.Cut(h, "."); found && len(label) >= minShortName {
+		add(label)
+	}
+}
+
+// sortTokens returns the tokens longest first, so that "host:port" is
+// replaced before "host" alone.
+func sortTokens(seen map[string]bool) []string {
 	tokens := make([]string, 0, len(seen))
 	for s := range seen {
 		tokens = append(tokens, s)
@@ -203,6 +249,7 @@ func scrub(msg string, tokens []string) string {
 	for _, tok := range tokens {
 		msg = replaceToken(msg, tok, placeholderFor(tok))
 	}
+	msg = ipv6Re.ReplaceAllString(msg, addrPlaceholder)
 	return ipv4Re.ReplaceAllString(msg, addrPlaceholder)
 }
 

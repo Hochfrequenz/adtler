@@ -186,3 +186,32 @@ func TestPathOnly(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// TestText_ShortNameAndAddresses: a response text names the server by its
+// first DNS label; that label, the full name with and without port, and
+// IPv4 and bracketed IPv6 addresses are all replaced.
+func TestText_ShortNameAndAddresses(t *testing.T) {
+	in := "Server sapsrv01_ABC_00 (sapsrv01.corp.example:44300, 10.0.0.7, [fd00::7]:44300)"
+	got := Text(in, "https://sapsrv01.corp.example:44300")
+	want := "Server <host>_ABC_00 (<host>, <addr>, <addr>:44300)"
+	if got != want {
+		t.Errorf("Text() = %q, want %q", got, want)
+	}
+}
+
+// TestText_ShortLabelNotUsed: a first label shorter than minShortName is
+// too likely an ordinary word, so only the full name is replaced.
+func TestText_ShortLabelNotUsed(t *testing.T) {
+	got := Text("SAP system on sap.corp.example", "https://sap.corp.example")
+	if got != "SAP system on <host>" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// TestText_ClockTimeKept: the IPv6 fallback does not take a clock time.
+func TestText_ClockTimeKept(t *testing.T) {
+	in := "Server time: 2026-04-09 00:33:26"
+	if got := Text(in, "https://sapsrv01.corp.example"); got != in {
+		t.Errorf("got %q", got)
+	}
+}
