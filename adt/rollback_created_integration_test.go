@@ -90,19 +90,20 @@ func TestRollbackTransport_CreatedObject_Integration(t *testing.T) {
 	}
 }
 
-// writeAndActivate writes source to the program at objectURI under request
-// and activates it.
+// writeAndActivate writes source to the program or class at objectURI under
+// request and activates it.
 func writeAndActivate(t *testing.T, c adt.Client, objectURI, source, request string) {
 	t.Helper()
 	ctx := context.Background()
+	// ETag before the lock: on SAP_BASIS 750 a GET between LockObject and
+	// SetSource ends the stateful session, and a class's lock with it.
+	src, err := c.GetSource(ctx, objectURI)
+	if err != nil {
+		t.Fatalf("GetSource for ETag: %v", err)
+	}
 	lh, err := c.LockObject(ctx, objectURI)
 	if err != nil {
 		t.Fatalf("LockObject: %v", err)
-	}
-	src, err := c.GetSource(ctx, objectURI)
-	if err != nil {
-		_ = c.UnlockObject(ctx, objectURI, lh)
-		t.Fatalf("GetSource for ETag: %v", err)
 	}
 	if _, err := c.SetSource(ctx, objectURI, source, lh, request, src.ETag); err != nil {
 		_ = c.UnlockObject(ctx, objectURI, lh)

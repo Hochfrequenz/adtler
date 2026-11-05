@@ -489,13 +489,30 @@ func (c *httpClient) restoreVersion(ctx context.Context, objectURI string, write
 		sources[i] = src
 	}
 
+	// Read the main source's ETag before locking. On SAP_BASIS 750 a GET of
+	// a class's source between LockObject and SetSource ends the stateful
+	// session the lock lives in, and SetSource then fails with 423
+	// ExceptionResourceInvalidLockHandle (measured on the ECC system; a
+	// program's lock survives it). The lock still guards the write itself.
+	etag := ""
+	for _, w := range writes {
+		if w.include == "" || w.include == classIncludeMain {
+			current, err := c.GetSource(ctx, objectURI)
+			if err != nil {
+				return fmt.Errorf("get current source: %w", err)
+			}
+			etag = current.ETag
+			break
+		}
+	}
+
 	lockHandle, err := c.LockObject(ctx, objectURI)
 	if err != nil {
 		return fmt.Errorf("lock: %w", err)
 	}
 
 	for i, w := range writes {
-		if err := c.writeSource(ctx, objectURI, w.include, sources[i], lockHandle, request); err != nil {
+		if err := c.writeSource(ctx, objectURI, w.include, sources[i], lockHandle, request, etag); err != nil {
 			c.unlockUnlessUnauthorized(ctx, objectURI, lockHandle, err)
 			if i > 0 {
 				return fmt.Errorf("%w (earlier includes were written back but not activated)", err)
@@ -526,8 +543,9 @@ func (c *httpClient) restoreVersion(ctx context.Context, objectURI string, write
 }
 
 // writeSource writes source into the main source of objectURI, or into its
-// class include include, under the held lock.
-func (c *httpClient) writeSource(ctx context.Context, objectURI, include, source, lockHandle, request string) error {
+// class include include, under the held lock. etag is the main source's ETag,
+// read before the lock was taken.
+func (c *httpClient) writeSource(ctx context.Context, objectURI, include, source, lockHandle, request, etag string) error {
 	if include != "" && include != classIncludeMain {
 		// A held lock replaces If-Match for includes (see SetIncludeSource).
 		if _, err := c.SetIncludeSource(ctx, objectURI, include, source, lockHandle, request, ""); err != nil {
@@ -535,13 +553,9 @@ func (c *httpClient) writeSource(ctx context.Context, objectURI, include, source
 		}
 		return nil
 	}
-	current, err := c.GetSource(ctx, objectURI)
-	if err != nil {
-		return fmt.Errorf("get current source: %w", err)
-	}
 	// request is the request number, not a task; pass it as corrNr so both R/3
 	// and S/4 accept the write (S/4 rejects SetSource when corrNr is absent).
-	if _, err := c.SetSource(ctx, objectURI, source, lockHandle, request, current.ETag); err != nil {
+	if _, err := c.SetSource(ctx, objectURI, source, lockHandle, request, etag); err != nil {
 		return fmt.Errorf("set source: %w", err)
 	}
 	return nil

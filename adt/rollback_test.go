@@ -182,6 +182,7 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 			calls = append(calls, "lock")
 			_, _ = w.Write([]byte("lock-handle"))
 		case r.URL.Path == object+"/source/main" && r.Method == http.MethodGet:
+			calls = append(calls, "get-source")
 			w.Header().Set("ETag", `"current"`)
 			_, _ = w.Write([]byte("REPORT ZTEST.\nCURRENT."))
 		case r.URL.Path == object+"/source/main" && r.Method == http.MethodPut:
@@ -214,7 +215,10 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 	if corrNr != request {
 		t.Errorf("SetSource corrNr = %q, want request number %q", corrNr, request)
 	}
-	wantCalls := []string{"lock", "set-source", "unlock", "activate"}
+	// The ETag is read before the lock: on SAP_BASIS 750 a GET of a class's
+	// source between LockObject and SetSource ends the stateful session and
+	// with it the lock, and SetSource then fails with 423.
+	wantCalls := []string{"get-source", "lock", "set-source", "unlock", "activate"}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Errorf("call order = %v, want %v", calls, wantCalls)
 	}
