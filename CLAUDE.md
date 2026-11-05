@@ -218,7 +218,7 @@ edit.
 
 R/3 (ECC) and S/4HANA often behave differently for the same ADT endpoint. Always test against both. Known differences:
 
-- **Lock handle delivery**: R/3 reads `X-SAP-Lock-Handle` header; S/4 reads `?lockHandle=` query param. `SetSource` retries with query param on 423.
+- **Lock handle delivery**: R/3 reads `X-SAP-Lock-Handle` header; S/4 reads `?lockHandle=` query param. `SetSource` retries with query param on 423. **Classes are the exception on both releases**: their handler reads only `?lockHandle=`, so `SetSource` sends it that way first. On ECC a header-delivered class write with a `corrNr` the class is not yet recorded in fails with 403 "Transport request … is not valid for object" and ends the lock, so a retry only sees 423 (#281, #280).
 - **Delete vs. the caller's own lock (S/4)**: `DeleteObject` sends a stateless `DELETE` in a different SAP session than `LockObject`, so on S/4 a lock the caller still holds blocks it (`403 ExceptionResourceNoAccess`, "is currently editing") and stays behind as an orphaned enqueue; R/3 deletes regardless (#187). `DeleteObject` therefore releases a passed `lockHandle` first (best effort); callers that hold no lock pass `""`. Never write a cleanup as lock-then-delete, and never discard a cleanup error: that is how `VerifySource` leaked a `$TMP` program on every call.
 - **Accept headers**: S/4 is stricter — requires vendor MIME types (e.g. `application/vnd.sap.adt.mc.messageclass+xml`). R/3 often accepts `application/xml`. See "A 406 is never a missing path" below.
 - **ESRDIRE enqueue after CreateObject**: S/4 leaves a session-bound enqueue. Workaround: `Logout()` after `CreateObject`.

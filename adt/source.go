@@ -417,6 +417,21 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 		}
 		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, ddlsETag)
 	}
+	// OO classes read the lock handle only from ?lockHandle=, on both
+	// releases, so they never take the header-first attempt (#281). On S/4
+	// the header attempt failed with 403 "currently editing" and the #443
+	// retry below recovered. On ECC (SAP_BASIS 750) it is worse: with a
+	// corrNr naming a request the class is not yet recorded in, the header
+	// attempt fails with 403 ExceptionResourceNoAccess "Transport request
+	// … is not valid for object" — and that failed write also ends the
+	// class's lock, so the query retry then answers 423 and hides the 403
+	// (#280). Measured 2026-11-05 on SAP ERP 6.0 EHP8 (SAP_BASIS 750): the
+	// same write delivered as ?lockHandle= succeeds and records the change
+	// in the request. Interfaces keep the header-first path: their handler
+	// was not measured on ECC with a fresh request.
+	if lockHandle != "" && isClassURI(objectURI) {
+		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+	}
 	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
 	// Retry with query-param lock delivery when the header-first attempt is
 	// rejected in a way that means the handler didn't read the header handle:

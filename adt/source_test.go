@@ -623,13 +623,14 @@ func assertSetSourceRetriesAndSucceeds(t *testing.T, objectURI, source string, f
 
 // #443: OO classes/interfaces reject header lock delivery with 403
 // ExceptionResourceNoAccess ("currently editing"); the write must retry with
-// ?lockHandle= query delivery. Verified live on S/4.
+// ?lockHandle= query delivery. Verified live on S/4. Classes no longer take
+// the header attempt at all (#281), so an interface carries this test.
 func TestSetSource_RetriesQueryDeliveryOnCurrentlyEditing(t *testing.T) {
 	assertSetSourceRetriesAndSucceeds(t,
-		"/sap/bc/adt/oo/classes/zcl_oo_retry",
-		"CLASS zcl_oo_retry DEFINITION PUBLIC.\nENDCLASS.",
+		"/sap/bc/adt/oo/interfaces/zif_oo_retry",
+		"INTERFACE zif_oo_retry PUBLIC.\nENDINTERFACE.",
 		http.StatusForbidden,
-		`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZCL_OO_RETRY</message></exc:exception>`,
+		`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">User X is currently editing ZIF_OO_RETRY</message></exc:exception>`,
 		`"oo-new"`,
 	)
 }
@@ -679,8 +680,68 @@ func TestSetSource_NoRetryOn403WithoutLockHandle(t *testing.T) {
 // on R/3 a query retry would mask the real error as a 423. Guards the decision
 // to match isCurrentlyEditing on Type only (#443 review).
 func TestSetSource_NoRetryOnBare403(t *testing.T) {
-	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/classes/zcl_oo_bare403", "LOCKH1", "Forbidden") {
+	if sawQueryRetryAfter403(t, "/sap/bc/adt/oo/interfaces/zif_oo_bare403", "LOCKH1", "Forbidden") {
 		t.Error("bare 403 (empty Type) wrongly triggered the query-delivery retry")
+	}
+}
+
+// #281: a class write delivers the lock handle as ?lockHandle= on the first
+// and only attempt, keeping corrNr and If-Match. On ECC the header attempt
+// fails with 403 "Transport request … is not valid for object" whenever the
+// request does not hold the class yet, and that failure also ends the lock,
+// so a later query retry answers 423 instead (#280). The stub refuses any
+// header-delivered handle with that 403, so the old order fails here.
+func TestSetSource_ClassDeliversLockHandleAsQueryFirst(t *testing.T) {
+	const (
+		classURI   = "/sap/bc/adt/oo/classes/zcl_281"
+		request281 = "AAAK900281"
+	)
+	var writes int
+	var gotCorrNr, gotIfMatch, gotHeaderHandle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != http.MethodPut || r.URL.Path != classURI+"/source/main" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writes++
+		gotCorrNr = r.URL.Query().Get("corrNr")
+		gotIfMatch = r.Header.Get("If-Match")
+		gotHeaderHandle = r.Header.Get("X-SAP-Lock-Handle")
+		if r.URL.Query().Get("lockHandle") != "LOCKH1" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><namespace id="com.sap.adt"/><type id="ExceptionResourceNoAccess"/><message lang="EN">Transport request AAAK900281 is not valid for object ZCL_281!</message></exc:exception>`))
+			return
+		}
+		w.Header().Set("ETag", `"new"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	etag, err := client.SetSource(context.Background(), classURI, "CLASS zcl_281 DEFINITION PUBLIC.\nENDCLASS.", "LOCKH1", request281, `"old"`)
+	if err != nil {
+		t.Fatalf("SetSource: %v", err)
+	}
+	if writes != 1 {
+		t.Errorf("writes: got %d, want 1 (no header attempt before the query delivery)", writes)
+	}
+	if gotHeaderHandle != "" {
+		t.Errorf("X-SAP-Lock-Handle must not be sent for a class, got %q", gotHeaderHandle)
+	}
+	if gotCorrNr != request281 {
+		t.Errorf("corrNr: got %q, want %q", gotCorrNr, request281)
+	}
+	if gotIfMatch != `"old"` {
+		t.Errorf("If-Match: got %q, want %q", gotIfMatch, `"old"`)
+	}
+	if etag != `"new"` {
+		t.Errorf("ETag: got %q, want %q", etag, `"new"`)
 	}
 }
 
