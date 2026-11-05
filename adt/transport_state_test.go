@@ -57,10 +57,60 @@ func TestTransportState_JSON(t *testing.T) {
 	}
 }
 
+// TestTransportFilter_Text checks that a consumer can take the filter
+// straight from a string parameter.
+func TestTransportFilter_Text(t *testing.T) {
+	for _, f := range []adt.TransportFilter{adt.TransportFilterAll, adt.TransportFilterModifiable, adt.TransportFilterReleased} {
+		text, err := f.MarshalText()
+		if err != nil {
+			t.Fatalf("MarshalText(%v): %v", f, err)
+		}
+		var back adt.TransportFilter
+		if err := back.UnmarshalText(text); err != nil || back != f {
+			t.Errorf("round trip of %q = %v, %v; want %v", text, back, err, f)
+		}
+	}
+	var f adt.TransportFilter
+	for _, bad := range []string{"", "D", "Released", "open"} {
+		if err := f.UnmarshalText([]byte(bad)); err == nil {
+			t.Errorf("UnmarshalText(%q): want an error, got filter %v", bad, f)
+		}
+	}
+	if _, err := adt.TransportFilter(42).MarshalText(); err == nil {
+		t.Error("MarshalText of an invalid filter: want an error, got nil")
+	}
+}
+
+// TestGetTransportRequests_StopsAfter401 guards #222: a 401 on the tree read
+// must end the call without the E070 fallback sending the rejected Basic-auth
+// credential again.
+func TestGetTransportRequests_StopsAfter401(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != transportRequestsEndpoint && !strings.Contains(r.URL.Path, "datapreview") {
+			return // discovery and other preflights succeed
+		}
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+
+	if _, err := client.GetTransportRequests(context.Background(), "", adt.TransportFilterAll); err == nil {
+		t.Fatal("expected an error after a 401, got nil")
+	}
+	if len(paths) != 1 || paths[0] != transportRequestsEndpoint {
+		t.Errorf("tree and data preview requests sent = %v, want exactly one tree read", paths)
+	}
+}
+
 // mixedStatusTreeXML carries one request per TRSTATUS letter plus an unknown
-// one, in both groups and both buckets. The S/4 transport organizer tree
-// answers every status parameter with the same tree (measured on SAP_BASIS
-// 816), so the mock below does too: the filter has to be applied here.
+// one, in both groups and both buckets. The transport organizer tree does not
+// honour SAP's status parameter (measured on SAP_BASIS 750 and 816), so the
+// filter has to be applied by the client.
 const mixedStatusTreeXML = `<?xml version="1.0" encoding="utf-8"?>
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
   <tm:workbench>
@@ -84,23 +134,23 @@ const mixedStatusTreeXML = `<?xml version="1.0" encoding="utf-8"?>
 </tm:root>`
 
 // TestGetTransportRequests_FiltersOnClient guards #274 and #242 point 2: the
-// tree ignores SAP's status parameter on S/4, so every filter must be applied
-// to the answer, by state rather than by a single letter.
+// tree ignores SAP's status parameter, so every filter must be applied to the
+// answer, by state rather than by a single letter, and the parameter is not
+// sent at all.
 func TestGetTransportRequests_FiltersOnClient(t *testing.T) {
 	cases := []struct {
-		filter       adt.TransportFilter
-		wantStatuses []string // the status parameters sent, in order
-		wantNumbers  []string
+		filter      adt.TransportFilter
+		wantNumbers []string
 	}{
-		{adt.TransportFilterModifiable, []string{"D"}, []string{"AAAK900001", "AAAK900002"}},
-		{adt.TransportFilterReleased, []string{"R"}, []string{"AAAK900004", "AAAK900005"}},
-		{adt.TransportFilterAll, []string{"D", "R"},
+		{adt.TransportFilterModifiable, []string{"AAAK900001", "AAAK900002"}},
+		{adt.TransportFilterReleased, []string{"AAAK900004", "AAAK900005"}},
+		{adt.TransportFilterAll,
 			[]string{"AAAK900001", "AAAK900002", "AAAK900003", "AAAK900004", "AAAK900006", "AAAK900005"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.filter.String(), func(t *testing.T) {
 			var mu sync.Mutex
-			var gotStatuses []string
+			var gotQueries []string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(r.URL.Path, "datapreview") {
 					t.Errorf("the tree held matching requests: no E070 fallback expected")
@@ -110,7 +160,7 @@ func TestGetTransportRequests_FiltersOnClient(t *testing.T) {
 					return
 				}
 				mu.Lock()
-				gotStatuses = append(gotStatuses, r.URL.Query().Get("status"))
+				gotQueries = append(gotQueries, r.URL.RawQuery)
 				mu.Unlock()
 				_, _ = w.Write([]byte(mixedStatusTreeXML))
 			}))
@@ -131,8 +181,8 @@ func TestGetTransportRequests_FiltersOnClient(t *testing.T) {
 			if !reflect.DeepEqual(numbers, tc.wantNumbers) {
 				t.Errorf("numbers = %v, want %v", numbers, tc.wantNumbers)
 			}
-			if !reflect.DeepEqual(gotStatuses, tc.wantStatuses) {
-				t.Errorf("status parameters sent = %v, want %v", gotStatuses, tc.wantStatuses)
+			if want := []string{""}; !reflect.DeepEqual(gotQueries, want) {
+				t.Errorf("tree reads sent with queries %q, want one read without a status parameter", gotQueries)
 			}
 		})
 	}
@@ -184,7 +234,7 @@ func TestGetTransportRequests_FallbackWhenNothingPassesFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(gotSQL, "TRSTATUS IN ('D', 'L')") {
+	if !strings.Contains(gotSQL, "( TRSTATUS = 'D' OR TRSTATUS = 'L' )") {
 		t.Errorf("fallback SQL must ask for both modifiable letters, got: %s", gotSQL)
 	}
 	var numbers []string

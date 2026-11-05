@@ -175,6 +175,13 @@ const (
 	TransportStateReleased
 )
 
+// transportStatusLetters lists every TRSTATUS letter TransportStateOf knows.
+var transportStatusLetters = []string{
+	TransportStatusModifiable, TransportStatusModifiableProtected,
+	TransportStatusReleaseStarted,
+	TransportStatusReleased, TransportStatusReleasedProtected,
+}
+
 // TransportStateOf maps a TRSTATUS letter onto its TransportState. It is the
 // only place that knows the letters; an empty or unknown letter maps to
 // TransportStateUnknown.
@@ -251,18 +258,38 @@ func (f TransportFilter) matches(s TransportState) bool {
 	}
 }
 
+var transportFilterNames = [...]string{
+	TransportFilterAll:        "all",
+	TransportFilterModifiable: "modifiable",
+	TransportFilterReleased:   "released",
+}
+
 // String returns the filter's name: "all", "modifiable" or "released".
 func (f TransportFilter) String() string {
-	switch f {
-	case TransportFilterAll:
-		return "all"
-	case TransportFilterModifiable:
-		return "modifiable"
-	case TransportFilterReleased:
-		return "released"
-	default:
+	if f < 0 || int(f) >= len(transportFilterNames) {
 		return fmt.Sprintf("TransportFilter(%d)", int(f))
 	}
+	return transportFilterNames[f]
+}
+
+// MarshalText encodes the filter as its name.
+func (f TransportFilter) MarshalText() ([]byte, error) {
+	if f < 0 || int(f) >= len(transportFilterNames) {
+		return nil, fmt.Errorf("invalid transport filter %d", int(f))
+	}
+	return []byte(transportFilterNames[f]), nil
+}
+
+// UnmarshalText decodes "all", "modifiable" or "released", so a filter can
+// come straight from a string parameter. Any other text is an error.
+func (f *TransportFilter) UnmarshalText(text []byte) error {
+	for i, name := range transportFilterNames {
+		if name == string(text) {
+			*f = TransportFilter(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown transport filter %q (want all, modifiable or released)", text)
 }
 
 // TransportCheckResult is returned by CheckTransport.

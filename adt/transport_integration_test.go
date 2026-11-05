@@ -94,14 +94,47 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 	}
 }
 
+// TestGetTransportRequests_AllFilter_Integration checks that
+// TransportFilterAll lists no request twice. It logs counts per state only.
+//
+// The all filter is answered partly on both releases: ECC's tree lists only
+// modifiable requests, S/4's only released ones, and the E070 fallback runs
+// only when nothing passes the filter (#242 point 1).
+func TestGetTransportRequests_AllFilter_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+			requests, err := sys.Client.GetTransportRequests(ctx, "", adt.TransportFilterAll)
+			if err != nil {
+				t.Fatalf("GetTransportRequests(all) failed: %v", err)
+			}
+			seen := map[string]bool{}
+			counts := map[string]int{}
+			for _, tr := range requests {
+				if seen[tr.Number] {
+					t.Errorf("a request appears twice in the merged list (state %v)", tr.State)
+				}
+				seen[tr.Number] = true
+				counts[tr.State.String()+"/"+tr.RawStatus]++
+			}
+			t.Logf("filter all: %d request(s), state/raw counts %v", len(requests), counts)
+			if len(requests) == 0 {
+				t.Skip("no request visible for the all filter on this system")
+			}
+		})
+	}
+}
+
 // TestGetTransportRequests_StateFilter_Integration guards #270 and #274: each
 // filter must return requests, and only requests in the state it names.
 //
 // Before #274 the client passed the filter to SAP as a single TRSTATUS letter
 // and did not check the answer. The S/4 transport organizer tree ignores that
 // parameter and returned the same released requests for every filter, so the
-// modifiable case failed there; ECC filtered by the letter, so "R" missed
-// requests released with import protection ("N").
+// modifiable case failed there. On ECC the released list came from the E070
+// fallback, which asked for "R" only and so missed requests released with
+// import protection ("N").
 //
 // The test lists without a user: on ECC the configured user may own no
 // released request, while the system as a whole has many. It logs counts per

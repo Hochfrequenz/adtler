@@ -129,8 +129,6 @@ func TestGetTransportRequests(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	// The mock answers both status reads of TransportFilterAll with the same
-	// tree; the merge must not list a request twice.
 	transports, err := client.GetTransportRequests(context.Background(), "", adt.TransportFilterAll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -585,7 +583,7 @@ func TestGetTransportRequests_FallsBackToE070WhenADTReturnsEmpty(t *testing.T) {
 	if !strings.Contains(gotDatapreviewSQL, "AS4USER = 'USERE'") {
 		t.Errorf("fallback SQL must filter by user, got: %s", gotDatapreviewSQL)
 	}
-	if !strings.Contains(gotDatapreviewSQL, "TRSTATUS IN ('D', 'L')") {
+	if !strings.Contains(gotDatapreviewSQL, "( TRSTATUS = 'D' OR TRSTATUS = 'L' )") {
 		t.Errorf("fallback SQL must filter by every letter of the modifiable state, got: %s", gotDatapreviewSQL)
 	}
 }
