@@ -110,14 +110,14 @@ func (s *createdTestServer) handler(t *testing.T) http.HandlerFunc {
 		case r.URL.Query().Get("_action") == createdTestLockAction:
 			s.record("lock " + name)
 			_, _ = w.Write([]byte("lock-handle"))
-		case r.URL.Query().Get("_action") == "UNLOCK":
+		case r.URL.Query().Get("_action") == testActionUnlock:
 			s.record("unlock " + name)
 		case strings.HasSuffix(path, "/source/main") && r.Method == http.MethodGet:
 			w.Header().Set("ETag", `"current"`)
 			_, _ = w.Write([]byte("REPORT zcurrent."))
 		case strings.HasSuffix(path, "/source/main") && r.Method == http.MethodPut:
 			s.record("set-source " + name)
-		case path == "/sap/bc/adt/activation" && r.Method == http.MethodPost:
+		case path == testActivationPath && r.Method == http.MethodPost:
 			s.record("activate")
 			if s.activateFail {
 				_, _ = w.Write([]byte(`<chkl:messages xmlns:chkl="http://www.sap.com/abapxml/checklist"><msg type="E"><shortText><txt>broken</txt></shortText></msg></chkl:messages>`))
@@ -139,7 +139,7 @@ func (s *createdTestServer) handler(t *testing.T) http.HandlerFunc {
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><dataPreview:tableData xmlns:dataPreview="http://www.sap.com/adt/dataPreview">` +
 				`<dataPreview:totalRows>1</dataPreview:totalRows><dataPreview:columns><dataPreview:metadata dataPreview:name="SRCSYSTEM" dataPreview:type="C"/>` +
 				`<dataPreview:dataSet><dataPreview:data>` + src + `</dataPreview:data></dataPreview:dataSet></dataPreview:columns></dataPreview:tableData>`))
-		case path == "/sap/bc/adt/activation/inactiveobjects":
+		case path == testInactiveObjectsPath:
 			_, _ = w.Write([]byte(`<root/>`))
 		case strings.HasPrefix(path, createdTestProgURI) && r.Method == http.MethodGet:
 			w.Header().Set("ETag", `"obj"`)
@@ -415,9 +415,9 @@ func TestRollbackTransportWithOptions_SubObjectEntriesBlockDeletion(t *testing.T
 	s := &createdTestServer{
 		programs:  []string{createdTestNewA},
 		histories: map[string][]string{createdTestNewA: {createdTestTask}},
-		// A method of an existing class, changed in the same request, is not
-		// rolled back (#134) and may use the created program.
-		extraEntries: `<tm:abap_object tm:pgmid="LIMU" tm:type="METH" tm:name="ZCL_EXISTING                  DO_IT"/>`,
+		// A screen of an existing program, changed in the same request, is
+		// not rolled back and may use the created program.
+		extraEntries: `<tm:abap_object tm:pgmid="LIMU" tm:type="DYNP" tm:name="ZEXISTING                               0100"/>`,
 	}
 	result := s.run(t, RollbackOptions{DeleteCreatedObjects: true})
 	if d := s.deleteCalls(); len(d) != 0 {

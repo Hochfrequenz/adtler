@@ -417,6 +417,9 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 		}
 		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, ddlsETag)
 	}
+	if lockHandle != "" && transport != "" && isClassURI(objectURI) {
+		return c.setClassSourceIntoRequest(ctx, objectURI, source, lockHandle, transport, etag)
+	}
 	newETag, err := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
 	// Retry with query-param lock delivery when the header-first attempt is
 	// rejected in a way that means the handler didn't read the header handle:
@@ -434,6 +437,43 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 	if err != nil && lockHandle != "" &&
 		(isInvalidLockHandle(err) || isCurrentlyEditing(err) || isLockHandleParameterNotFound(err)) {
 		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+	}
+	return newETag, err
+}
+
+// setClassSourceIntoRequest writes a class's main source with a corrNr,
+// delivering the lock handle as ?lockHandle= first (#281).
+//
+// On ECC (SAP_BASIS 750) the two deliveries reach different code paths:
+//   - ?lockHandle= checks the lock and records the change in the request,
+//     including one the class is not yet recorded in.
+//   - X-SAP-Lock-Handle writes even when the class's lock is already gone
+//     (a GET between LockObject and SetSource ends it on this release), but
+//     records nothing: with a corrNr naming a request that does not hold the
+//     class yet it fails with 403 "Transport request … is not valid for
+//     object", and the failure ends the lock too, so the aibap.mcp#443 query
+//     retry then answered 423 and hid the 403 (#280).
+//
+// Measured 2026-11-05 on SAP ERP 6.0 EHP8 (SAP_BASIS 750). On S/4 the header
+// form fails with 403 "currently editing" and only ?lockHandle= works
+// (aibap.mcp#443).
+//
+// A 423 to the query form means the lock is gone, not that the handle went
+// to the wrong place, so the header form is tried next: it is the request
+// this method sent first before #281, and it keeps working for callers that
+// read between locking and writing and write into a request that already
+// holds the class. That fallback is a write without a live lock, as every
+// header-delivered class write after such a GET was before #281; the 423
+// says the lock is gone, so the trade-off is now made knowingly rather than
+// by accident. If the header form fails as well, its error is returned and
+// the 423 is dropped (#280 tracks reporting both). Without a corrNr nothing
+// changes, so trySetSource keeps
+// the header-first order there. Interfaces keep it too: their handler was
+// not measured on ECC with a fresh request.
+func (c *httpClient) setClassSourceIntoRequest(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
+	newETag, err := c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+	if err != nil && isInvalidLockHandle(err) {
+		return c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
 	}
 	return newETag, err
 }

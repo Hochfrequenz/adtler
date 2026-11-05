@@ -108,9 +108,11 @@ func TestFindPreTransportVersion(t *testing.T) {
 	})
 }
 
-// TestRollbackTransport_SkipsNonRestorable confirms the filtering: non-R3TR
-// entries and non-source object types are skipped without any restore work
-// (so only the transport-objects read is needed).
+// TestRollbackTransport_SkipsNonRestorable confirms the filtering: sub-object
+// entries without source (a screen), non-source object types and release
+// markers are skipped without any restore work (so only the transport-objects
+// read is needed). The CORR entry is left out of the result altogether: its
+// name is an audit string, not an object (#134).
 func TestRollbackTransport_SkipsNonRestorable(t *testing.T) {
 	const transport = "AAAK900100"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +120,8 @@ func TestRollbackTransport_SkipsNonRestorable(t *testing.T) {
 			_, _ = w.Write([]byte(`<?xml version="1.0"?>
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
   <tm:request tm:number="` + transport + `">
-    <tm:abap_object tm:pgmid="LIMU" tm:type="REPS" tm:name="ZFOO_PART"/>
+    <tm:abap_object tm:pgmid="CORR" tm:type="RELE" tm:name="AAAK900101 20250526 112849 USERA"/>
+    <tm:abap_object tm:pgmid="LIMU" tm:type="DYNP" tm:name="ZFOO_PART"/>
     <tm:abap_object tm:pgmid="R3TR" tm:type="TABL" tm:name="ZTABLE"/>
   </tm:request>
 </tm:root>`))
@@ -145,8 +148,8 @@ func TestRollbackTransport_SkipsNonRestorable(t *testing.T) {
 	for _, e := range result.Skipped {
 		reasons[e.Name] = e.Reason
 	}
-	if reasons["ZFOO_PART"] != "not R3TR" {
-		t.Errorf("LIMU object reason = %q, want %q", reasons["ZFOO_PART"], "not R3TR")
+	if reasons["ZFOO_PART"] != rollbackReasonNonSourceLIMU {
+		t.Errorf("LIMU object reason = %q, want %q", reasons["ZFOO_PART"], rollbackReasonNonSourceLIMU)
 	}
 	if reasons["ZTABLE"] != "non-source object type" {
 		t.Errorf("TABL object reason = %q, want %q", reasons["ZTABLE"], "non-source object type")
@@ -179,19 +182,20 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 			calls = append(calls, "lock")
 			_, _ = w.Write([]byte("lock-handle"))
 		case r.URL.Path == object+"/source/main" && r.Method == http.MethodGet:
+			calls = append(calls, "get-source")
 			w.Header().Set("ETag", `"current"`)
 			_, _ = w.Write([]byte("REPORT ZTEST.\nCURRENT."))
 		case r.URL.Path == object+"/source/main" && r.Method == http.MethodPut:
 			calls = append(calls, "set-source")
 			corrNr = r.URL.Query().Get("corrNr")
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == object && r.URL.Query().Get("_action") == "UNLOCK":
+		case r.URL.Path == object && r.URL.Query().Get("_action") == testActionUnlock:
 			calls = append(calls, "unlock")
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/sap/bc/adt/activation" && r.Method == http.MethodPost:
+		case r.URL.Path == testActivationPath && r.Method == http.MethodPost:
 			calls = append(calls, "activate")
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/sap/bc/adt/activation/inactiveobjects":
+		case r.URL.Path == testInactiveObjectsPath:
 			_, _ = w.Write([]byte(`<root/>`))
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
@@ -211,7 +215,10 @@ func TestRollbackObject_UsesRequestNumberAndUnlocksBeforeActivation(t *testing.T
 	if corrNr != request {
 		t.Errorf("SetSource corrNr = %q, want request number %q", corrNr, request)
 	}
-	wantCalls := []string{"lock", "set-source", "unlock", "activate"}
+	// The ETag is read before the lock: on SAP_BASIS 750 a GET of a class's
+	// source between LockObject and SetSource ends the stateful session and
+	// with it the lock, and SetSource then fails with 423.
+	wantCalls := []string{"get-source", "lock", "set-source", "unlock", "activate"}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Errorf("call order = %v, want %v", calls, wantCalls)
 	}

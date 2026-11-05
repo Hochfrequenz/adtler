@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -60,6 +61,18 @@ func TestGetVersionHistory_ClassIncludes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch path {
+		case "/sap/bc/adt/oo/classes/ZCL_TEST/includes/main/versions":
+			gotPaths = append(gotPaths, path)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>00003</id>
+    <updated>2025-01-17T09:00:00Z</updated>
+    <author><name>DEV3</name></author>
+    <content src="/sap/bc/adt/oo/classes/ZCL_TEST/includes/main/versions/20250117090000/00003/content"/>
+  </entry>
+</feed>`))
 		case "/sap/bc/adt/oo/classes/ZCL_TEST/includes/definitions/versions":
 			gotPaths = append(gotPaths, path)
 			w.WriteHeader(http.StatusOK)
@@ -98,30 +111,24 @@ func TestGetVersionHistory_ClassIncludes(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should fetch both includes
-	if len(gotPaths) != 2 {
-		t.Fatalf("expected 2 requests, got %d: %v", len(gotPaths), gotPaths)
+	// Should fetch the global source and the three includes that exist
+	// (macros and testclasses answer 404 and contribute nothing).
+	if len(gotPaths) != 3 {
+		t.Fatalf("expected 3 served requests, got %d: %v", len(gotPaths), gotPaths)
 	}
 
-	// Should return versions from both includes
-	if len(versions) != 2 {
-		t.Fatalf("expected 2 versions, got %d", len(versions))
+	want := []struct{ include, author string }{
+		{"main", "DEV3"},
+		{"definitions", "DEV1"},
+		{"implementations", "DEV2"},
 	}
-
-	// Definitions include
-	if versions[0].Include != "definitions" {
-		t.Errorf("version[0] include: got %q, want %q", versions[0].Include, "definitions")
+	if len(versions) != len(want) {
+		t.Fatalf("expected %d versions, got %d", len(want), len(versions))
 	}
-	if versions[0].Author != "DEV1" {
-		t.Errorf("version[0] author: got %q, want DEV1", versions[0].Author)
-	}
-
-	// Implementations include
-	if versions[1].Include != "implementations" {
-		t.Errorf("version[1] include: got %q, want %q", versions[1].Include, "implementations")
-	}
-	if versions[1].Author != "DEV2" {
-		t.Errorf("version[1] author: got %q, want DEV2", versions[1].Author)
+	for i, w := range want {
+		if versions[i].Include != w.include || versions[i].Author != w.author {
+			t.Errorf("version[%d]: got include %q author %q, want %q %q", i, versions[i].Include, versions[i].Author, w.include, w.author)
+		}
 	}
 }
 
@@ -135,7 +142,8 @@ func TestGetVersionHistory_ClassDoesNotUseSourceMain(t *testing.T) {
 			return
 		}
 		// Serve empty feeds for includes
-		if path == "/sap/bc/adt/oo/classes/ZCL_TEST/includes/definitions/versions" ||
+		if path == "/sap/bc/adt/oo/classes/ZCL_TEST/includes/main/versions" ||
+			path == "/sap/bc/adt/oo/classes/ZCL_TEST/includes/definitions/versions" ||
 			path == "/sap/bc/adt/oo/classes/ZCL_TEST/includes/implementations/versions" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`))
@@ -151,5 +159,21 @@ func TestGetVersionHistory_ClassDoesNotUseSourceMain(t *testing.T) {
 	_, err := client.GetVersionHistory(context.Background(), "/sap/bc/adt/oo/classes/ZCL_TEST")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestGetVersionHistory_ClassMainIsRequired: a local include without history
+// answers 404 and is left out, but the global source must answer, or the
+// history would silently miss every method change (#134).
+func TestGetVersionHistory_ClassMainIsRequired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	_, err := client.GetVersionHistory(context.Background(), "/sap/bc/adt/oo/classes/ZCL_TEST")
+	if err == nil || !strings.Contains(err.Error(), "main") {
+		t.Fatalf("want an error naming the main include, got %v", err)
 	}
 }

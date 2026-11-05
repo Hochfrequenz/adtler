@@ -125,7 +125,7 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		}
 		return newDependencyResult(objectType, objectName, deps, nil), nil
 
-	case "CLAS":
+	case objTypeCLAS:
 		ddic, err := c.d010tabDeps(ctx, classPoolProgramName(objectName), maxResults)
 		if err != nil {
 			return nil, err
@@ -136,7 +136,7 @@ func (c *httpClient) GetObjectDependencies(ctx context.Context, objectType, obje
 		}
 		return newDependencyResult(objectType, objectName, append(ddic, oo...), nil), nil
 
-	case "INTF":
+	case objTypeINTF:
 		ddic, err := c.d010tabDeps(ctx, intfPoolProgramName(objectName), maxResults)
 		if err != nil {
 			return nil, err
