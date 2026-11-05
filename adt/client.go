@@ -164,7 +164,9 @@ type TransportClient interface {
 	RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error)
 	RollbackTransportWithOptions(ctx context.Context, transportNumber string, opts RollbackOptions) (*RollbackResult, error)
 	GetTransportRequests(ctx context.Context, opts TransportListOptions) (*TransportRequestPage, error)
-	AddToTransport(ctx context.Context, objectURI, transport string) error
+	// AddToTransport records an E071 key (e.g. R3TR PROG ZFOO) in a
+	// modifiable request or task. S/4 only; ErrorNotSupported on ECC (#154).
+	AddToTransport(ctx context.Context, pgmID, objectType, objectName, transport string) error
 	RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error
 	CopyTransportObjects(ctx context.Context, sourceRequest, targetRequest string, withDocumentation bool) error
 	AddPackageToTransport(ctx context.Context, packageName, targetRequest string, includeSubpackages bool) error

@@ -391,6 +391,11 @@ const (
 	// CopyTransportObjects and AddPackageToTransport: the target request does
 	// not advertise the addobjectsfrompackage relation, so no write was sent.
 	ExceptionTypeAddObjectsUnsupported = "ADT_TM_ADDOBJECTS_UNSUPPORTED"
+	// ExceptionTypeAddObjectUnsupported is synthesised locally by
+	// AddToTransport's capability gate: the request or task does not
+	// advertise the addobject relation (SAP_BASIS 750, or released), so no
+	// write was sent.
+	ExceptionTypeAddObjectUnsupported = "ADT_TM_ADDOBJECT_UNSUPPORTED"
 	// ExceptionTypeCreateRequestUnsupported is synthesised locally by
 	// CreateTransport when a customizing request or a transport of copies is
 	// asked for on a system whose discovery does not advertise creating

@@ -18,6 +18,7 @@ import (
 const (
 	userActionAddObjectFromRequest  = "addobjectfromrequest"
 	userActionAddObjectsFromPackage = "addobjectsfrompackage"
+	userActionAddObject             = "addobject"
 )
 
 // addObjectsFromPackageRelation is the atom relation a transport request
@@ -34,8 +35,7 @@ const transportOrganizerType = "application/vnd.sap.adt.transportorganizer.v1+xm
 
 // CopyTransportObjects copies the object entries of sourceRequest into
 // targetRequest, as SE09's "include objects" does. The usual target is a
-// transport of copies (category T), whose object list AddToTransport cannot
-// fill (SAP answers "user action abaptransportcomponents is not supported").
+// transport of copies (category T).
 //
 // SAP's handler calls TR_COPY_COMM, which copies only the entries recorded
 // directly under the number it is given, and records a CORR MERG entry for
@@ -213,18 +213,11 @@ func (c *httpClient) putTransportUserAction(ctx context.Context, targetRequest, 
 // without advertising it: refusing there costs a missed feature, sending
 // to a system without the action returns a misleading change-owner error.
 func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetRequest string) error {
-	data, err := c.readTransportXML(ctx, targetRequest, transportOrganizerType)
+	ok, err := c.advertisesRelation(ctx, targetRequest, addObjectsFromPackageRelation)
 	if err != nil {
 		return fmt.Errorf("read target %s: %w", targetRequest, err)
 	}
-	// A body that does not parse advertises nothing, and is refused like
-	// one without the relation.
-	var root atomLinkNode
-	rels := make(map[string]bool)
-	if xml.Unmarshal(data, &root) == nil {
-		root.collectRels(rels)
-	}
-	if rels[addObjectsFromPackageRelation] {
+	if ok {
 		return nil
 	}
 	return &ADTError{
@@ -233,6 +226,46 @@ func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetReques
 			"(added in ABAP Platform 2105; never offered for a released request); include the objects in SE09 instead",
 			targetRequest),
 	}
+}
+
+// ensureAddObjectSupported is AddToTransport's gate, built like
+// ensureAddObjectsSupported and failing closed for the same reason. S/4
+// (SAP_BASIS 816) advertises the addobject relation on every request and
+// task that is not released; SAP_BASIS 750 has no such action.
+func (c *httpClient) ensureAddObjectSupported(ctx context.Context, transport string) error {
+	ok, err := c.advertisesRelation(ctx, transport, addObjectRelation)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", transport, err)
+	}
+	if ok {
+		return nil
+	}
+	return &ADTError{
+		Type: ExceptionTypeAddObjectUnsupported,
+		Message: fmt.Sprintf("transport request %s does not advertise adding an object "+
+			"(not offered by SAP_BASIS 750, nor for a released request); add the entry in SE09 instead",
+			transport),
+	}
+}
+
+// advertisesRelation reads a transport request or task and reports whether
+// its response carries the atom relation rel anywhere, which includes the
+// links of its tasks: SAP still decides on the write itself, so a relation
+// found on a child only lets the request through to that decision. A body
+// that does not parse advertises nothing. A read error, a 401 included, is
+// returned unwrapped, so a gate built on it sends no write after a failed
+// read.
+func (c *httpClient) advertisesRelation(ctx context.Context, number, rel string) (bool, error) {
+	data, err := c.readTransportXML(ctx, number, transportOrganizerType)
+	if err != nil {
+		return false, err
+	}
+	var root atomLinkNode
+	rels := make(map[string]bool)
+	if xml.Unmarshal(data, &root) == nil {
+		root.collectRels(rels)
+	}
+	return rels[rel], nil
 }
 
 // validateTransportNumbers rejects empty numbers and numbers that would

@@ -236,7 +236,6 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	})
 
 	// No explicit AddToTransport needed: SetSource records the change in T2 automatically.
-	// (AddToTransport's /abaptransportcomponents path is not supported on S/4.)
 	lh, err = client.LockObject(ctx, objectURI)
 	if err != nil {
 		t.Fatalf("[3] LockObject v2: %v", err)

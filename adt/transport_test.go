@@ -78,32 +78,6 @@ func TestCheckTransport(t *testing.T) {
 	}
 }
 
-func TestAddToTransport(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == csrfEndpoint {
-			w.Header().Set("X-CSRF-Token", "token")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	client := adt.NewClient(cfg)
-
-	err := client.AddToTransport(context.Background(), "/sap/bc/adt/programs/programs/ZTEST", "AAAK900123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	expected := "/sap/bc/adt/cts/transportrequests/AAAK900123/abaptransportcomponents"
-	if gotPath != expected {
-		t.Errorf("path: got %q, want %q", gotPath, expected)
-	}
-}
-
 // TestRemoveFromTransport primes the parent transport's capability read with
 // s4SingleRequestXML (removeobject and addobject both present), so
 // RemoveObjectSupport resolves to Supported and Task 7's gate in

@@ -65,61 +65,6 @@ func TestReleaseTransport_Integration(t *testing.T) {
 	}
 }
 
-func TestAddToTransport_Integration(t *testing.T) {
-	client := newIntegrationClient(t)
-	ctx := context.Background()
-
-	trNumber, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP AddToTransport test", Package: testPackage})
-	if err != nil {
-		t.Fatalf("CreateTransport: %v", err)
-	}
-	t.Logf("created transport: %s", trNumber)
-	t.Cleanup(func() { _, _ = client.ReleaseTransportWithTasks(context.Background(), trNumber) })
-
-	const objName = "Z_ADT_MCP_TR_ADD_TST"
-	objectURI := "/sap/bc/adt/programs/programs/" + objName
-	err = client.CreateObject(ctx, "PROG", objName, testPackage, "Transport add test", trNumber)
-	if err != nil {
-		if _, infoErr := client.GetObjectInfo(ctx, objectURI); infoErr != nil {
-			t.Fatalf("CreateObject failed and object does not exist: %v", err)
-		}
-		t.Logf("object %s already exists, reusing", objName)
-	} else {
-		t.Logf("created %s in %s", objName, testPackage)
-	}
-
-	check, err := client.CheckTransport(ctx, "R3TR", "PROG", objName)
-	if err != nil {
-		t.Fatalf("CheckTransport: %v", err)
-	}
-	if len(check.Requests) == 0 {
-		t.Skip("no transport requests available")
-	}
-
-	taskNumber := check.Requests[0].Number
-	err = client.AddToTransport(ctx, objectURI, taskNumber)
-	if err != nil {
-		t.Fatalf("AddToTransport: %v", err)
-	}
-	t.Logf("added %s to %s", objectURI, taskNumber)
-
-	// Verify object appears in transport object list.
-	objects, err := client.GetTransportObjects(ctx, trNumber)
-	if err != nil {
-		t.Fatalf("GetTransportObjects: %v", err)
-	}
-	found := false
-	for _, obj := range objects {
-		if obj.Name == objName {
-			found = true
-			t.Logf("verified: %s found in transport (pgmid=%s type=%s)", obj.Name, obj.PgmID, obj.Type)
-		}
-	}
-	if !found {
-		t.Errorf("object %s not found in transport %s objects: %v", objName, trNumber, objects)
-	}
-}
-
 // TestTransportFullCycle_Integration tests the complete transport lifecycle:
 // 1. Create transport
 // 2. Create a program in a real package (assigned to transport)

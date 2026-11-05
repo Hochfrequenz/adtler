@@ -337,6 +337,10 @@ func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, module
 	if transport != "" {
 		path += "?corrNr=" + transport
 	}
+	// No Accept header, unlike CreatePackage (#149): measured 2026-11-05,
+	// a create that SAP carries out answers 201 with and without one on
+	// both SAP_BASIS 750 and 816 (#154). SAP checks Accept last, so only a
+	// request that otherwise succeeds can show the difference.
 	resp, err := c.doMutate(ctx, http.MethodPost, path,
 		strings.NewReader(xml.Header+string(body)),
 		map[string]string{"Content-Type": "application/vnd.sap.adt.functions.fmodules.v2+xml"},

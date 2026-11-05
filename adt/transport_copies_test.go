@@ -46,7 +46,7 @@ func copiesRequestXML(number, status, task string, rels ...string) string {
 var copiesSupportedTargetXML = copiesRequestXML(copiesTarget, "D", "", "modify", "addobject", "addobjectsfrompackage")
 
 type copiesPut struct {
-	path, query, contentType, body string
+	path, query, contentType, accept, body string
 }
 
 // copiesServer serves transport reads from reads (keyed by transport number)
@@ -72,8 +72,15 @@ func copiesServer(t *testing.T, reads map[string]string, putStatus int) (*httpte
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, prefix):
 			b, _ := io.ReadAll(r.Body)
 			mu.Lock()
-			puts = append(puts, copiesPut{r.URL.Path, r.URL.RawQuery, r.Header.Get("Content-Type"), string(b)})
+			puts = append(puts, copiesPut{r.URL.Path, r.URL.RawQuery, r.Header.Get("Content-Type"), r.Header.Get("Accept"), string(b)})
 			mu.Unlock()
+			// S/4 checks Accept only when it writes the response, after the
+			// change is made (measured with addobject, #154), and answers 400.
+			if r.Header.Get("Accept") == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?><exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework"><type id="ExceptionResourceBadRequest"/><message lang="EN">Request could not be understood by the server due to malformed syntax: Accept header missing</message></exc:exception>`))
+				return
+			}
 			w.WriteHeader(putStatus)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
