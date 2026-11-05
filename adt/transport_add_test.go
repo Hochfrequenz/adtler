@@ -46,7 +46,7 @@ func assertAddObjectUnsupported(t *testing.T, err error) {
 func TestAddToTransport_SendsAddObjectUserAction(t *testing.T) {
 	srv, puts := copiesServer(t, map[string]string{addTask: addTaskXML}, http.StatusOK)
 
-	if err := copiesClient(srv).AddToTransport(context.Background(), "r3tr", "prog", "ztest", addTask); err != nil {
+	if err := copiesClient(srv).AddToTransport(context.Background(), "r3tr", "prog", addObjName, addTask); err != nil {
 		t.Fatalf("AddToTransport: %v", err)
 	}
 	got := puts()
@@ -82,7 +82,7 @@ func TestAddToTransport_SendsAddObjectUserAction(t *testing.T) {
 	}
 	o := body.Request.Objects[0]
 	if o.PgmID != addPgmID || o.Type != addObjType || o.Name != addObjName {
-		t.Errorf("object = %s %s %s, want R3TR PROG ZTEST (upper-cased)", o.PgmID, o.Type, o.Name)
+		t.Errorf("object = %s %s %s, want R3TR PROG ZTEST (pgmid and type upper-cased)", o.PgmID, o.Type, o.Name)
 	}
 }
 

@@ -214,8 +214,11 @@ func (c *httpClient) putTransportUserAction(ctx context.Context, targetRequest, 
 // to a system without the action returns a misleading change-owner error.
 func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetRequest string) error {
 	ok, err := c.advertisesRelation(ctx, targetRequest, addObjectsFromPackageRelation)
-	if err != nil || ok {
-		return err
+	if err != nil {
+		return fmt.Errorf("read target %s: %w", targetRequest, err)
+	}
+	if ok {
+		return nil
 	}
 	return &ADTError{
 		Type: ExceptionTypeAddObjectsUnsupported,
@@ -231,8 +234,11 @@ func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetReques
 // task that is not released; SAP_BASIS 750 has no such action.
 func (c *httpClient) ensureAddObjectSupported(ctx context.Context, transport string) error {
 	ok, err := c.advertisesRelation(ctx, transport, addObjectRelation)
-	if err != nil || ok {
-		return err
+	if err != nil {
+		return fmt.Errorf("read %s: %w", transport, err)
+	}
+	if ok {
+		return nil
 	}
 	return &ADTError{
 		Type: ExceptionTypeAddObjectUnsupported,
@@ -243,13 +249,16 @@ func (c *httpClient) ensureAddObjectSupported(ctx context.Context, transport str
 }
 
 // advertisesRelation reads a transport request or task and reports whether
-// its response carries the atom relation rel anywhere. A body that does not
-// parse advertises nothing. A read error, a 401 included, is returned as is,
-// so a gate built on it sends no write after a failed read.
+// its response carries the atom relation rel anywhere, which includes the
+// links of its tasks: SAP still decides on the write itself, so a relation
+// found on a child only lets the request through to that decision. A body
+// that does not parse advertises nothing. A read error, a 401 included, is
+// returned unwrapped, so a gate built on it sends no write after a failed
+// read.
 func (c *httpClient) advertisesRelation(ctx context.Context, number, rel string) (bool, error) {
 	data, err := c.readTransportXML(ctx, number, transportOrganizerType)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", number, err)
+		return false, err
 	}
 	var root atomLinkNode
 	rels := make(map[string]bool)

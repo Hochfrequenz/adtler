@@ -946,6 +946,8 @@ func queryCell(row []string, i int) string {
 // AddToTransport records the object pgmID/objectType/objectName (an E071
 // key such as R3TR PROG ZFOO or LIMU FUNC Z_FOO) in transport, a modifiable
 // request or task. SAP locks the new entry for transport, as SE09 does.
+// pgmID and objectType are upper-cased; objectName is sent as given,
+// because an E071 name is not upper-case for every object type.
 //
 // It sends the transport organizer's addobject user action (a PUT on the
 // request or task with tm:useraction="addobject"). Measured 2026-11-05 on
@@ -964,7 +966,7 @@ func queryCell(row []string, i int) string {
 func (c *httpClient) AddToTransport(ctx context.Context, pgmID, objectType, objectName, transport string) error {
 	pgmID = strings.ToUpper(strings.TrimSpace(pgmID))
 	objectType = strings.ToUpper(strings.TrimSpace(objectType))
-	objectName = strings.ToUpper(strings.TrimSpace(objectName))
+	objectName = strings.TrimSpace(objectName)
 	transport = strings.ToUpper(strings.TrimSpace(transport))
 	if pgmID == "" || objectType == "" || objectName == "" {
 		return fmt.Errorf("AddToTransport: pgmid, object type and object name are required (got %q %q %q)", pgmID, objectType, objectName)
@@ -1184,7 +1186,11 @@ func (n atomLinkNode) collectRels(rels map[string]bool) {
 // actionlogs/adturi/checkruns/self/transportchecks/transportlogs — neither
 // addobject nor removeobject. Which relations a server offers depends on the
 // state of the transport being read, not on the release alone, so this
-// discriminator resolves a system positively rather than reliably. But "at least one other relation and
+// discriminator resolves a system positively rather than reliably.
+// (Re-measured 2026-11-05 on SAP_BASIS 816 for #154: an own empty request,
+// its task, and modifiable requests and tasks of other users all carried
+// addobject; removeobject was missing only while the request held no
+// object. AddToTransport's gate relies on addobject being there.) But "at least one other relation and
 // neither addobject nor removeobject" is still not enough to conclude
 // unsupported, because a supported S/4 system can omit mutation actions for a
 // released or foreign request while still carrying unrelated links such as
