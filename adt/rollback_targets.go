@@ -181,6 +181,12 @@ func (c *httpClient) resolveInclude(ctx context.Context, name string) (rollbackT
 		return rollbackTarget{}, rollbackReasonUnresolvedLIMU, false, nil
 	}
 	group := ns + rest[1:len(rest)-3]
+	suffix := rest[len(rest)-3:]
+	if suffix[0] == 'U' {
+		// L<group>U<nn> holds function module nn; ADT serves its source
+		// through the module, not as an include. UXX is generated.
+		return c.resolveModuleInclude(ctx, ns+"SAPL"+rest[1:len(rest)-3], suffix[1:])
+	}
 	_, isGroup, err := c.queryOne(ctx, fmt.Sprintf(
 		"SELECT OBJ_NAME FROM TADIR WHERE PGMID = 'R3TR' AND OBJECT = 'FUGR' AND OBJ_NAME = '%s'", EscapeValue(group)))
 	if err != nil || !isGroup {
@@ -190,6 +196,20 @@ func (c *httpClient) resolveInclude(ctx context.Context, name string) (rollbackT
 		entry: RollbackEntry{Type: "REPS", Name: name},
 		uri:   "/sap/bc/adt/functions/groups/" + adtName(group) + "/includes/" + adtName(name),
 	}, "", true, nil
+}
+
+// resolveModuleInclude resolves the function module include number nn of
+// the function pool pool (L<group>U<nn>) to its function module, by TFDIR.
+func (c *httpClient) resolveModuleInclude(ctx context.Context, pool, nn string) (rollbackTarget, string, bool, error) {
+	if len(nn) != 2 || nn[0] < '0' || nn[0] > '9' || nn[1] < '0' || nn[1] > '9' {
+		return rollbackTarget{}, "generated function group include", false, nil
+	}
+	fm, found, err := c.queryOne(ctx, fmt.Sprintf(
+		"SELECT FUNCNAME FROM TFDIR WHERE PNAME = '%s' AND INCLUDE = '%s'", EscapeValue(pool), nn))
+	if err != nil || !found {
+		return rollbackTarget{}, rollbackReasonUnresolvedLIMU, false, err
+	}
+	return c.resolveFUNC(ctx, fm)
 }
 
 func (c *httpClient) resolveFUNC(ctx context.Context, name string) (rollbackTarget, string, bool, error) {

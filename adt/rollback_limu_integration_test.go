@@ -145,6 +145,7 @@ func ensureReleasedFixture(t *testing.T, c adt.Client, objType, name, uri, sourc
 	t.Helper()
 	ctx := context.Background()
 	if _, err := c.GetObjectInfo(ctx, uri); err == nil {
+		requireReleasedVersion(t, c, uri)
 		return
 	} else if adt.ClassifyError(err) != adt.ErrorNotFound {
 		t.Fatalf("[0] GetObjectInfo: %v", err)
@@ -175,6 +176,38 @@ func ensureReleasedFixture(t *testing.T, c adt.Client, objType, name, uri, sourc
 		t.Skipf("[0] fixture created, but its request was not released (state %v); release it by hand and run again", res.State)
 	}
 	t.Logf("[0] fixture created and released")
+}
+
+// requireReleasedVersion skips the test unless the existing fixture at uri
+// has a version from a released request. A fixture created by an earlier run
+// whose request SAP did not release is still locked in that request, and
+// changing it in a new one would fail for that reason alone.
+func requireReleasedVersion(t *testing.T, c adt.Client, uri string) {
+	t.Helper()
+	ctx := context.Background()
+	versions, err := c.GetVersionHistory(ctx, uri)
+	if err != nil {
+		t.Fatalf("[0] GetVersionHistory: %v", err)
+	}
+	checked := map[string]bool{}
+	for _, v := range versions {
+		if v.Transport == "" || checked[v.Transport] {
+			continue
+		}
+		checked[v.Transport] = true
+		// E070, not GetTransportInfo: the ECC organizer tree lists modifiable
+		// requests only.
+		qr, err := c.RunQuery(ctx, "SELECT TRSTATUS FROM E070 WHERE TRKORR = '"+adt.EscapeValue(v.Transport)+"'", 1)
+		if err != nil {
+			t.Fatalf("[0] read request status: %v", err)
+		}
+		if len(qr.Rows) == 1 && len(qr.Rows[0]) == 1 {
+			if st := strings.TrimSpace(qr.Rows[0][0]); st == "R" || st == "N" {
+				return
+			}
+		}
+	}
+	t.Skipf("[0] fixture exists, but no version of it comes from a released request (%d requests checked); release its request by hand and run again", len(checked))
 }
 
 // resetFixtureSource writes source back if the fixture still holds the v2
