@@ -68,6 +68,10 @@ func preauditServer(t *testing.T, answers ...string) (*httptest.Server, *[]sentA
 			if len(sent) <= len(answers) {
 				answer = answers[len(sent)-1]
 			}
+			if answer == serverErrorAnswer {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(answer))
@@ -145,5 +149,83 @@ func TestActivateObjects_NoFollowUpWithoutPreauditList(t *testing.T) {
 	}
 	if len(*sent) != 1 || !(*sent)[0].preaudit {
 		t.Errorf("activation POSTs: got %+v, want one with preauditRequested=true", *sent)
+	}
+}
+
+// serverErrorAnswer makes preauditServer answer that activation POST with 500.
+const serverErrorAnswer = "<500>"
+
+// preauditList wraps refs (each an ioc:ref element's attributes) in a
+// pre-audit answer, one entry per ref.
+func preauditList(refs ...string) string {
+	s := `<?xml version="1.0" encoding="utf-8"?><ioc:inactiveObjects xmlns:ioc="http://www.sap.com/abapxml/inactiveCtsObjects">`
+	for _, r := range refs {
+		s += `<ioc:entry><ioc:object ioc:user="USERA" ioc:deleted="false"><ioc:ref ` + r + ` xmlns:adtcore="http://www.sap.com/adt/core"/></ioc:object><ioc:transport/></ioc:entry>`
+	}
+	return s + `</ioc:inactiveObjects>`
+}
+
+func activateAndCollect(t *testing.T, uri string, answers ...string) ([]sentActivation, error) {
+	t.Helper()
+	srv, sent := preauditServer(t, answers...)
+	defer srv.Close()
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	_, err := client.ActivateObjects(context.Background(), []string{uri})
+	return *sent, err
+}
+
+// #279: an entry whose URI is not under the requested object but whose
+// parentUri names it is sent back too.
+func TestActivateObjects_PreauditFollowUpIncludesParentedEntries(t *testing.T) {
+	const part = "/sap/bc/adt/vit/wb/object_type/clasosi/object_name/ZCL_EXAMPLE"
+	sent, err := activateAndCollect(t, preauditClassURI,
+		preauditList(`adtcore:uri="`+part+`" adtcore:type="CLAS/OSI" adtcore:parentUri="`+preauditClassURI+`"`), "")
+	if err != nil {
+		t.Fatalf("ActivateObjects: %v", err)
+	}
+	if len(sent) != 2 || len(sent[1].refs) != 2 || sent[1].refs[1].URI != part {
+		t.Fatalf("follow-up: got %+v, want the class and the parented part", sent)
+	}
+}
+
+// #279: the match is one-way. For a requested function module, the listed
+// function group it is nested under stays out; the module's own entry is
+// sent back.
+func TestActivateObjects_PreauditFollowUpLeavesOutEnclosingObject(t *testing.T) {
+	const (
+		group  = "/sap/bc/adt/functions/groups/zfg"
+		module = group + "/fmodules/zfm"
+	)
+	sent, err := activateAndCollect(t, module,
+		preauditList(`adtcore:uri="`+group+`" adtcore:type="FUGR/F"`, `adtcore:uri="`+module+`" adtcore:type="FUGR/FF"`), "")
+	if err != nil {
+		t.Fatalf("ActivateObjects: %v", err)
+	}
+	if len(sent) != 2 || len(sent[1].refs) != 1 || sent[1].refs[0].URI != module || sent[1].refs[0].Type != "FUGR/FF" {
+		t.Fatalf("follow-up: got %+v, want only the module, with its type", sent)
+	}
+}
+
+// #279: a list holding only unrelated objects still gets a follow-up, for the
+// requested objects alone.
+func TestActivateObjects_PreauditFollowUpWithOnlyUnrelatedEntries(t *testing.T) {
+	sent, err := activateAndCollect(t, preauditClassURI,
+		preauditList(`adtcore:uri="/sap/bc/adt/programs/programs/zother" adtcore:type="PROG/P"`), "")
+	if err != nil {
+		t.Fatalf("ActivateObjects: %v", err)
+	}
+	if len(sent) != 2 || len(sent[1].refs) != 1 || sent[1].refs[0].URI != preauditClassURI {
+		t.Fatalf("follow-up: got %+v, want the requested class only", sent)
+	}
+}
+
+// #279: an HTTP error on the follow-up POST is returned, without a third POST.
+func TestActivateObjects_PreauditFollowUpHTTPError(t *testing.T) {
+	sent, err := activateAndCollect(t, preauditClassURI, preauditAnswer, serverErrorAnswer)
+	if err == nil {
+		t.Fatal("expected the follow-up's 500 to surface")
+	}
+	if len(sent) != 2 {
+		t.Errorf("activation POSTs: got %d, want 2", len(sent))
 	}
 }

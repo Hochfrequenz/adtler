@@ -24,7 +24,9 @@ import (
 // Activating any one URI of a class pool — the class, its /source/main, or
 // its /includes/testclasses — activates every inactive part of that class
 // pool with it: the class, its includes, and its method and source-unit
-// entries. Measured on local ($TMP) classes on SAP ERP 6.0 EHP8
+// entries. (A class recorded in a request on SAP_BASIS 750 first gets a
+// pre-audit list instead; postActivation answers it, see #279.)
+// Measured on local ($TMP) classes on SAP ERP 6.0 EHP8
 // (SAP_BASIS 750) and SAP S/4HANA 2025 (SAP_BASIS 816);
 // TestActivateObjects_ClassPoolSubIncludes_Integration guards it. A
 // requested URI that stays inactive despite a successful POST — or a part
@@ -237,14 +239,24 @@ func preauditFollowUp(requested []adtxml.ActivationObject, body []byte) []adtxml
 }
 
 // belongsToRequested reports whether ref is one of the requested objects, is
-// nested under one, or names one as its parent.
+// nested under one, or names one as its parent. The match is one-way: an
+// object a requested URI is nested under (a function group, for a requested
+// function module) is not pulled in, since activating it would also activate
+// its other inactive parts.
 func belongsToRequested(requested []adtxml.ActivationObject, ref *adtxml.ActivationPreauditRef) bool {
 	for _, r := range requested {
-		if objectURIMatches(r.URI, ref.URI) || (ref.ParentURI != "" && objectURIMatches(r.URI, ref.ParentURI)) {
+		if sameOrNestedUnder(ref.URI, r.URI) || (ref.ParentURI != "" && sameOrNestedUnder(ref.ParentURI, r.URI)) {
 			return true
 		}
 	}
 	return false
+}
+
+// sameOrNestedUnder reports whether uri is root or a path below it, ignoring
+// case, a query or fragment, and a trailing slash (see normalizeObjectURI).
+func sameOrNestedUnder(uri, root string) bool {
+	uri, root = strings.ToLower(normalizeObjectURI(uri)), strings.ToLower(normalizeObjectURI(root))
+	return uri == root || strings.HasPrefix(uri, root+"/")
 }
 
 // indexOfURI returns the index of the object whose URI equals uri, ignoring
