@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
@@ -128,37 +129,27 @@ func normalizeObjectURI(uri string) string {
 // even for a genuinely successful activation (Hochfrequenz/aibap.mcp#34) —
 // yields Success:true with no messages, same as a body that explicitly says
 // so; ActivateObjects treats both the same way and verifies regardless.
+//
+// The first POST asks for a pre-audit. Where SAP answers it with a list of
+// inactive objects instead of activating (#279), the activation is sent
+// again without the pre-audit, for the requested objects plus the listed
+// objects that belong to them (see preauditFollowUp), and that answer is
+// parsed instead.
 func (c *httpClient) postActivation(ctx context.Context, objectURIs []string) (*ActivationResult, error) {
 	objects := make([]adtxml.ActivationObject, len(objectURIs))
 	for i, uri := range objectURIs {
 		objects[i] = adtxml.ActivationObject{URI: uri}
 	}
-	bodyXML, err := xml.Marshal(adtxml.ActivationRequest{
-		NS:      nsADTCore,
-		Objects: objects,
-	})
+	data, err := c.sendActivation(ctx, objects, true)
 	if err != nil {
-		return nil, fmt.Errorf("marshal activation request: %w", err)
-	}
-
-	resp, err := c.doMutate(ctx, http.MethodPost,
-		"/sap/bc/adt/activation?method=activate&preauditRequested=true",
-		strings.NewReader(xml.Header+string(bodyXML)),
-		map[string]string{
-			"Content-Type": contentTypeXML,
-			"Accept":       "application/xml",
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("ActivateObjects: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if err := checkResponse(resp); err != nil {
 		return nil, err
 	}
+	if followUp := preauditFollowUp(objects, data); followUp != nil {
+		if data, err = c.sendActivation(ctx, followUp, false); err != nil {
+			return nil, err
+		}
+	}
 
-	data, _ := io.ReadAll(resp.Body)
 	var msgs adtxml.ActivationMessages
 	xml.Unmarshal(data, &msgs) //nolint:errcheck // an empty/unparseable body is treated as "no messages", see doc comment
 
@@ -175,6 +166,97 @@ func (c *httpClient) postActivation(ctx context.Context, objectURIs []string) (*
 		}
 	}
 	return result, nil
+}
+
+// sendActivation POSTs one activation request for objects and returns the
+// response body.
+func (c *httpClient) sendActivation(ctx context.Context, objects []adtxml.ActivationObject, preaudit bool) ([]byte, error) {
+	bodyXML, err := xml.Marshal(adtxml.ActivationRequest{
+		NS:      nsADTCore,
+		Objects: objects,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal activation request: %w", err)
+	}
+
+	resp, err := c.doMutate(ctx, http.MethodPost,
+		"/sap/bc/adt/activation?method=activate&preauditRequested="+strconv.FormatBool(preaudit),
+		strings.NewReader(xml.Header+string(bodyXML)),
+		map[string]string{
+			"Content-Type": contentTypeXML,
+			"Accept":       "application/xml",
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ActivateObjects: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	data, _ := io.ReadAll(resp.Body)
+	return data, nil
+}
+
+// preauditFollowUp returns the objects of the second activation request when
+// body is a pre-audit answer (adtxml.ActivationPreaudit), and nil otherwise.
+//
+// On SAP ERP 6.0 EHP8 (SAP_BASIS 750) a class whose parts are inactive and
+// recorded in a request is not activated by the first POST: SAP answers 200
+// with the inactive parts (the class, its methods, its source units) and
+// expects them back, which is what Eclipse's "activate these objects too?"
+// dialog does. Activating the class URI alone again changes nothing (#279).
+//
+// The follow-up holds the requested objects, enriched with the type, name
+// and parent of their own entry, and every listed object nested under or
+// parented by one of them. Other listed objects are left out: they are other
+// inactive work of the same user, which the caller did not ask to activate.
+// Entries that carry only a transport are skipped. Measured 2026-11-05 on
+// the ECC system: the class plus its listed parts, sent without a pre-audit,
+// activated every part.
+func preauditFollowUp(requested []adtxml.ActivationObject, body []byte) []adtxml.ActivationObject {
+	var preaudit adtxml.ActivationPreaudit
+	if err := xml.Unmarshal(body, &preaudit); err != nil {
+		return nil
+	}
+	followUp := append([]adtxml.ActivationObject(nil), requested...)
+	for _, e := range preaudit.Entries {
+		ref := e.Object.Ref
+		if ref == nil || ref.URI == "" || !belongsToRequested(requested, ref) {
+			continue
+		}
+		obj := adtxml.ActivationObject{URI: ref.URI, Type: ref.Type, Name: ref.Name, ParentURI: ref.ParentURI}
+		if i := indexOfURI(followUp, ref.URI); i >= 0 {
+			followUp[i] = obj
+			continue
+		}
+		followUp = append(followUp, obj)
+	}
+	return followUp
+}
+
+// belongsToRequested reports whether ref is one of the requested objects, is
+// nested under one, or names one as its parent.
+func belongsToRequested(requested []adtxml.ActivationObject, ref *adtxml.ActivationPreauditRef) bool {
+	for _, r := range requested {
+		if objectURIMatches(r.URI, ref.URI) || (ref.ParentURI != "" && objectURIMatches(r.URI, ref.ParentURI)) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexOfURI returns the index of the object whose URI equals uri, ignoring
+// case and a trailing slash, or -1. Fragments count: two methods of one class
+// share the URI up to their #type=…;name=… fragment.
+func indexOfURI(objects []adtxml.ActivationObject, uri string) int {
+	for i, o := range objects {
+		if strings.EqualFold(strings.TrimSuffix(o.URI, "/"), strings.TrimSuffix(uri, "/")) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (c *httpClient) GetInactiveObjects(ctx context.Context) ([]ObjectInfo, error) {
