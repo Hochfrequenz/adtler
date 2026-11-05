@@ -54,7 +54,10 @@ const (
 	// removeobject relation (see RemoveObjectSupport), the PUT would reach a
 	// legacy change-owner handler, which fails without a target user and
 	// answers with a misleading error. The call therefore never leaves the
-	// library and reports this kind instead.
+	// library and reports this kind instead. CopyTransportObjects,
+	// AddPackageToTransport and CreateTransport (customizing requests and
+	// transports of copies, which only S/4 can create over ADT) gate the same
+	// way.
 	ErrorNotSupported
 	// ErrorUnauthorized means SAP rejected the logon itself (HTTP 401): the
 	// user name or password is wrong, the user is locked, or the OAuth token

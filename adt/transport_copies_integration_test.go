@@ -50,7 +50,7 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			want := expectAddObjectsSupport(t, c)
 
 			source := createDisposableTransport(t, c, "adtler #267 copy source")
-			target := createCopiesTarget(t, c, want, source, "adtler #267 transport of copies")
+			target := createCopiesTarget(t, c, source, "adtler #267 transport of copies")
 
 			// 1. Decide the branch with an empty source: nothing created yet.
 			err := c.CopyTransportObjects(ctx, source, target, true)
@@ -101,7 +101,7 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			t.Logf("[3] program copied into the target request")
 
 			// 4. Fill a second target request from the package.
-			byPackage := createCopiesTarget(t, c, want, source, "adtler #267 package copy")
+			byPackage := createCopiesTarget(t, c, source, "adtler #267 package copy")
 			if err := c.AddPackageToTransport(ctx, testPackage, byPackage, false); err != nil {
 				t.Fatalf("[4] AddPackageToTransport: %v", err)
 			}
@@ -178,17 +178,20 @@ func createDisposableTransport(t *testing.T, c adt.Client, description string) s
 // createCopiesTarget creates a transport of copies aimed at the target the
 // source request got from its package, and deletes it when the test ends.
 // Where the release has no typed create, it creates a workbench request
-// instead; a release that supports the copy actions must also create the
-// transport of copies.
-func createCopiesTarget(t *testing.T, c adt.Client, want addObjectsExpectation, source, description string) string {
+// instead.
+func createCopiesTarget(t *testing.T, c adt.Client, source, description string) string {
 	t.Helper()
 	_, target := readE070(t, c, source)
 	number, err := c.CreateTransport(context.Background(), adt.CreateTransportOptions{
 		Type: adt.TransportTypeCopies, Description: description, Target: target,
 	})
 	if adt.ClassifyError(err) == adt.ErrorNotSupported {
-		if want == addObjectsSupported {
-			t.Fatalf("CreateTransport(T) refused on a release that has the copy actions: %v", err)
+		// Only SAP_BASIS 816 is known to create one, the same threshold
+		// TestCreateTransport_Integration asserts. A release that has the
+		// copy actions (756 and newer) but not the typed create still runs
+		// the copy test, against a workbench target.
+		if release := sapBasisRelease(t, c); release >= 816 {
+			t.Fatalf("CreateTransport(T) refused on SAP_BASIS %d, which has the typed create: %v", release, err)
 		}
 		t.Logf("no transport of copies on this release; target is a workbench request")
 		return createDisposableTransport(t, c, description)

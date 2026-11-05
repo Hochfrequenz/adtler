@@ -123,10 +123,19 @@ const transportRequestsPath = "/sap/bc/adt/cts/transportrequests"
 //
 // A customizing request or a transport of copies goes to
 // POST /sap/bc/adt/cts/transportrequests, which only S/4 offers. Where
-// discovery does not advertise that collection, CreateTransport returns
-// ErrorNotSupported (ADTError type ExceptionTypeCreateRequestUnsupported)
-// without sending anything. A customizing request gets one task owned by the
-// logon user, a transport of copies none, as in SE09.
+// discovery lists no transport organizer media type for that collection,
+// CreateTransport returns ErrorNotSupported (ADTError type
+// ExceptionTypeCreateRequestUnsupported) without sending anything. That
+// signal was measured on two releases only: SAP_BASIS 816 advertises the
+// type and creates W and T requests; SAP_BASIS 750 lists the collection
+// without it and answers a create with 400 "user action is not supported".
+// A release in between that advertises the type without the create would
+// get the POST and report SAP's error. Without discovery data at all the
+// call fails with an ordinary error, never ErrorNotSupported, so a caller
+// does not mistake a failed discovery read for a missing capability.
+//
+// A customizing request gets one task owned by the logon user, a transport
+// of copies none, as in SE09.
 func (c *httpClient) CreateTransport(ctx context.Context, opts CreateTransportOptions) (string, error) {
 	typ := TransportType(strings.ToUpper(strings.TrimSpace(string(opts.Type))))
 	pkg := strings.ToUpper(strings.TrimSpace(opts.Package))
@@ -196,8 +205,12 @@ func (c *httpClient) createTypedRequest(ctx context.Context, typ TransportType, 
 		return "", fmt.Errorf("CreateTransport: %w", err)
 	}
 	c.mu.Lock()
+	haveDiscovery := len(c.discovery) > 0
 	accepts := c.discovery[transportRequestsPath]
 	c.mu.Unlock()
+	if !haveDiscovery {
+		return "", fmt.Errorf("CreateTransport: no discovery data, so whether this system can create a request of type %s is unknown", typ)
+	}
 	if !slices.Contains(accepts, transportOrganizerType) {
 		return "", &ADTError{
 			Type: ExceptionTypeCreateRequestUnsupported,
@@ -208,7 +221,9 @@ func (c *httpClient) createTypedRequest(ctx context.Context, typ TransportType, 
 
 	req := &adtxml.TMRequest{Desc: description, Type: string(typ), Target: target}
 	// SE09 gives a customizing request a task for its owner; a transport of
-	// copies has none. Without a known user (OAuth) SAP creates no task.
+	// copies has none. SAP creates exactly the tasks listed: a request sent
+	// without tm:task gets none (measured on SAP_BASIS 816), which is what
+	// happens when the client has no user name configured.
 	if owner := strings.ToUpper(strings.TrimSpace(c.cfg.User)); typ == TransportTypeCustomizing && owner != "" {
 		req.Tasks = []adtxml.TMTask{{Owner: owner}}
 	}

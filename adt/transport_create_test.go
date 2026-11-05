@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,9 +26,17 @@ const discoveryWithTransportRequests = `<?xml version="1.0"?>
   </app:workspace>
 </app:service>`
 
+// discoveryWithoutTransportRequests is the ECC shape (SAP_BASIS 750): the
+// transport organizer collection is listed without app:accept, among other
+// collections that do have one. parseDiscovery drops a collection without
+// app:accept, so the other collection is what keeps the document from
+// looking like no discovery at all.
 const discoveryWithoutTransportRequests = `<?xml version="1.0"?>
 <app:service xmlns:app="http://www.w3.org/2007/app">
   <app:workspace>
+    <app:collection href="/sap/bc/adt/cts/transports">
+      <app:accept>application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CreateCorrectionRequest.v1</app:accept>
+    </app:collection>
     <app:collection href="/sap/bc/adt/cts/transportrequests"/>
   </app:workspace>
 </app:service>`
@@ -39,11 +48,16 @@ const createdRequestResponse = `<?xml version="1.0" encoding="utf-8"?>` +
 	`<tm:request tm:number="AAAK900777" tm:parent="" tm:desc="d" tm:type="T" tm:target="DUM"><tm:long_desc/></tm:request>` +
 	`</tm:root>`
 
-// typedCreateServer serves discovery and records every other request.
+// typedCreateServer serves discovery and records every other request. It
+// answers the create with status and response (default: 201 and
+// createdRequestResponse) and logs on as user (default "usera").
 type typedCreateServer struct {
-	mu    sync.Mutex
-	paths []string
-	body  string
+	mu       sync.Mutex
+	paths    []string
+	body     string
+	status   int
+	response string
+	user     *string
 }
 
 func (s *typedCreateServer) start(t *testing.T, discovery string) adt.Client {
@@ -64,12 +78,20 @@ func (s *typedCreateServer) start(t *testing.T, discovery string) adt.Client {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		status, response := http.StatusCreated, createdRequestResponse
+		if s.status != 0 {
+			status, response = s.status, s.response
+		}
 		w.Header().Set("Content-Type", "application/vnd.sap.adt.transportorganizer.v1+xml")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(createdRequestResponse))
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(response))
 	}))
 	t.Cleanup(srv.Close)
-	return adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "usera", Password: "P", Client: "100"})
+	user := "usera"
+	if s.user != nil {
+		user = *s.user
+	}
+	return adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: user, Password: "P", Client: "100"})
 }
 
 // TestCreateTransport_RefusesIgnoredInputs: every input SAP would drop or
@@ -173,5 +195,79 @@ func TestCreateTransport_Customizing(t *testing.T) {
 	}
 	if strings.Contains(s.body, "tm:target") {
 		t.Errorf("body must omit an empty target:\n%s", s.body)
+	}
+}
+
+// TestCreateTransport_NoDiscoveryIsNotUnsupported: when the preflight
+// returns no usable discovery document, the capability is unknown. That must
+// not read as ErrorNotSupported, or a caller would take an ECC fallback on
+// an S/4 system.
+func TestCreateTransport_NoDiscoveryIsNotUnsupported(t *testing.T) {
+	var s typedCreateServer
+	client := s.start(t, "not a discovery document")
+	_, err := client.CreateTransport(context.Background(), adt.CreateTransportOptions{Type: adt.TransportTypeCopies, Description: "d"})
+	if err == nil {
+		t.Fatal("want an error without discovery data")
+	}
+	if got := adt.ClassifyError(err); got == adt.ErrorNotSupported {
+		t.Errorf("ClassifyError: got ErrorNotSupported for a missing discovery document (err %v)", err)
+	}
+	if len(s.paths) != 0 {
+		t.Errorf("sent %v, want no request", s.paths)
+	}
+}
+
+// TestCreateTransport_CustomizingWithoutUser: without a configured user name
+// no task is listed, and SAP creates none.
+func TestCreateTransport_CustomizingWithoutUser(t *testing.T) {
+	empty := ""
+	s := typedCreateServer{user: &empty}
+	client := s.start(t, discoveryWithTransportRequests)
+	if _, err := client.CreateTransport(context.Background(), adt.CreateTransportOptions{
+		Type: adt.TransportTypeCustomizing, Description: "cust",
+	}); err != nil {
+		t.Fatalf("CreateTransport: %v", err)
+	}
+	if strings.Contains(s.body, "tm:task") {
+		t.Errorf("body must not list a task without a user:\n%s", s.body)
+	}
+}
+
+// TestCreateTransport_TypedSAPError: SAP's refusal (here S/4's answer to an
+// unknown target) comes back as an *ADTError with SAP's message.
+func TestCreateTransport_TypedSAPError(t *testing.T) {
+	s := typedCreateServer{
+		status: http.StatusBadRequest,
+		response: `<?xml version="1.0" encoding="utf-8"?>` +
+			`<exc:exception xmlns:exc="http://www.sap.com/abapxml/types/communicationframework">` +
+			`<namespace id="com.sap.adt.tm"/><type id="ADT_TM_COMMON_EXCEPTION"/>` +
+			`<message lang="EN">Target 'QQQ' does not exist</message>` +
+			`<localizedMessage lang="EN">Target 'QQQ' does not exist</localizedMessage>` +
+			`</exc:exception>`,
+	}
+	client := s.start(t, discoveryWithTransportRequests)
+	_, err := client.CreateTransport(context.Background(), adt.CreateTransportOptions{
+		Type: adt.TransportTypeCopies, Description: "d", Target: "qqq",
+	})
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("want *adt.ADTError, got %T: %v", err, err)
+	}
+	if adtErr.StatusCode != http.StatusBadRequest || !strings.Contains(adtErr.Message, "does not exist") {
+		t.Errorf("got status %d, message %q", adtErr.StatusCode, adtErr.Message)
+	}
+}
+
+// TestCreateTransport_TypedWithoutNumber: a success answer that carries no
+// request number is reported, not returned as an empty number.
+func TestCreateTransport_TypedWithoutNumber(t *testing.T) {
+	s := typedCreateServer{
+		status:   http.StatusCreated,
+		response: `<?xml version="1.0" encoding="utf-8"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm"/>`,
+	}
+	client := s.start(t, discoveryWithTransportRequests)
+	nr, err := client.CreateTransport(context.Background(), adt.CreateTransportOptions{Type: adt.TransportTypeCopies, Description: "d"})
+	if err == nil || !strings.Contains(err.Error(), "number not returned") {
+		t.Fatalf("want a 'number not returned' error, got nr %q, err %v", nr, err)
 	}
 }
