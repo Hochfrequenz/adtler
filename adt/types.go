@@ -391,6 +391,13 @@ const (
 	// CopyTransportObjects and AddPackageToTransport: the target request does
 	// not advertise the addobjectsfrompackage relation, so no write was sent.
 	ExceptionTypeAddObjectsUnsupported = "ADT_TM_ADDOBJECTS_UNSUPPORTED"
+	// ExceptionTypeCreateRequestUnsupported is synthesised locally by
+	// CreateTransport when a customizing request or a transport of copies is
+	// asked for on a system whose discovery does not advertise creating
+	// requests at /sap/bc/adt/cts/transportrequests (ECC, SAP_BASIS 750,
+	// which answers such a POST with 400 "user action is not supported").
+	// No request was sent.
+	ExceptionTypeCreateRequestUnsupported = "ADT_TM_CREATEREQUEST_UNSUPPORTED"
 	// ExceptionTypeParameterNotFound is raised (HTTP 400) when a request
 	// parameter the ADT handler expects is absent from the request it
 	// received. It is overloaded across unrelated parameters (a missing

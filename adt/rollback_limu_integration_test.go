@@ -78,7 +78,7 @@ func TestRollbackTransport_SubObjects_Integration(t *testing.T) {
 					_ = c.Logout(ctx)
 					ensureReleasedFixture(t, c, k.objType, k.objName, k.uri, k.source("v1"))
 
-					request := createDisposableTransport(t, c, "K", "adtler #134 rollback of sub-object entries")
+					request := createDisposableTransport(t, c, "adtler #134 rollback of sub-object entries")
 					t.Cleanup(func() { cleanupTransportEntries(t, c, request) })
 					t.Cleanup(func() { resetFixtureSource(t, c, k.uri, k.source("v1"), request) })
 
@@ -150,7 +150,7 @@ func ensureReleasedFixture(t *testing.T, c adt.Client, objType, name, uri, sourc
 	} else if adt.ClassifyError(err) != adt.ErrorNotFound {
 		t.Fatalf("[0] GetObjectInfo: %v", err)
 	}
-	request, err := c.CreateTransport(ctx, "K", "DUM", "adtler #134 rollback fixture", testPackage)
+	request, err := c.CreateTransport(ctx, adt.CreateTransportOptions{Description: "adtler #134 rollback fixture", Package: testPackage})
 	if err != nil {
 		t.Fatalf("[0] CreateTransport: %v", err)
 	}

@@ -5,6 +5,8 @@ package adt_test
 import (
 	"context"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 // TestSetSource_DDLS_Integration is the regression guard for aibap.mcp#383's
@@ -22,7 +24,7 @@ func TestSetSource_DDLS_Integration(t *testing.T) {
 	cds := "@EndUserText.label: 'aibap 383 regression'\n" +
 		"define root view entity Z_ADT_MCP_CDS383\n  as select from t000\n{\n  key mandt as Client\n}\n"
 
-	tr, err := client.CreateTransport(ctx, "K", "", "aibap #383 DDLS regression", testPackage)
+	tr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "aibap #383 DDLS regression", Package: testPackage})
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}

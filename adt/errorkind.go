@@ -168,7 +168,8 @@ func classifyByExceptionType(excType string) ErrorKind {
 		return ErrorMethodNotAllowed
 	case ExceptionTypeResourceCreationFailure:
 		return ErrorCreationFailed
-	case ExceptionTypeRemoveObjectUnsupported, ExceptionTypeAddObjectsUnsupported:
+	case ExceptionTypeRemoveObjectUnsupported, ExceptionTypeAddObjectsUnsupported,
+		ExceptionTypeCreateRequestUnsupported:
 		return ErrorNotSupported
 	default:
 		return ErrorUnknown

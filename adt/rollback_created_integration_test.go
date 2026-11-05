@@ -29,7 +29,7 @@ func TestRollbackTransport_CreatedObject_Integration(t *testing.T) {
 			c := sys.Client
 			_ = c.Logout(ctx)
 
-			request := createDisposableTransport(t, c, "K", "adtler #268 rollback of a created object")
+			request := createDisposableTransport(t, c, "adtler #268 rollback of a created object")
 
 			// 1. Create and activate a program in the request.
 			objName := timestampedName("Z_RBC_")

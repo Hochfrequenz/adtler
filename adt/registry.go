@@ -143,8 +143,8 @@ func (r *ClientRegistry) BatchSyntaxCheck(ctx context.Context, objectURIs []stri
 func (r *ClientRegistry) RunUnitTests(ctx context.Context, objectURI string, timeoutSeconds int) (*TestResult, error) {
 	return r.activeClient().RunUnitTests(ctx, objectURI, timeoutSeconds)
 }
-func (r *ClientRegistry) CreateTransport(ctx context.Context, category, target, description, devClass string) (string, error) {
-	return r.activeClient().CreateTransport(ctx, category, target, description, devClass)
+func (r *ClientRegistry) CreateTransport(ctx context.Context, opts CreateTransportOptions) (string, error) {
+	return r.activeClient().CreateTransport(ctx, opts)
 }
 func (r *ClientRegistry) CreateTransportTask(ctx context.Context, parentTransport, owner, description string) (string, error) {
 	return r.activeClient().CreateTransportTask(ctx, parentTransport, owner, description)

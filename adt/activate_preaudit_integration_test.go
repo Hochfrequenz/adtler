@@ -29,7 +29,7 @@ func TestActivateObjects_TransportableClass_Integration(t *testing.T) {
 			name := fmt.Sprintf("ZCL_ADT279_%d", time.Now().UnixNano()%1000000000)
 			uri := "/sap/bc/adt/oo/classes/" + strings.ToLower(name)
 
-			request := createDisposableTransport(t, c, "K", "adtler #279 activation pre-audit")
+			request := createDisposableTransport(t, c, "adtler #279 activation pre-audit")
 			t.Cleanup(func() { cleanupTransportEntries(t, c, request) })
 			if err := c.CreateObject(ctx, "CLAS", name, testPackage, "adtler #279", request); err != nil {
 				t.Fatalf("CreateObject: %v", err)

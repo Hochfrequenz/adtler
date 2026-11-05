@@ -6,6 +6,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 // TestSetSource_OOCreateWrite_Integration is the regression guard for
@@ -26,7 +28,7 @@ func TestSetSource_OOCreateWrite_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	tr, err := client.CreateTransport(ctx, "K", "", "aibap #443 OO write guard", testPackage)
+	tr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "aibap #443 OO write guard", Package: testPackage})
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}

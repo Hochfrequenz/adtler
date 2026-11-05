@@ -76,11 +76,16 @@ type TransportCheckRequest struct {
 
 // CreateTransportData is the DATA content for creating a transport request.
 // Endpoint: POST /sap/bc/adt/cts/transports
-// Verified: 2026-03-23 against an SAP S/4HANA on-premise system
+//
+// SAP deserializes the body into the DDIC structure SADT_CREATE_CORR_REQUEST,
+// which has no category, target or long-description field: elements it does
+// not know are dropped without an error. The handler always creates a
+// workbench request (TRFUNCTION K) and takes the target from the transport
+// layer of DEVCLASS, so the package is the only input that shapes the request
+// besides its short text (#137).
+// Verified: 2026-11-05 against SAP ERP 6.0 EHP8 (SAP_BASIS 750) and
+// SAP S/4HANA 2025, on-premise (SAP_BASIS 816).
 type CreateTransportData struct {
-	Category    string `xml:"CATEGORY"`
-	Target      string `xml:"TARGET,omitempty"`
-	Text        string `xml:"REQUEST_TEXT"`
-	Description string `xml:"DESCRIPTION"`
-	DevClass    string `xml:"DEVCLASS,omitempty"`
+	DevClass string `xml:"DEVCLASS"`
+	Text     string `xml:"REQUEST_TEXT"`
 }

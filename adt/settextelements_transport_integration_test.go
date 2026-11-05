@@ -38,8 +38,7 @@ func TestSetTextElements_WithTransport_MultiSystem(t *testing.T) {
 			programURI := "/sap/bc/adt/programs/programs/" + name
 			textElementsURI := "/sap/bc/adt/textelements/programs/" + name
 
-			transport, err := sys.Client.CreateTransport(ctx, "K", "DUM",
-				"adtler #45 SetTextElements integration test", testPackage)
+			transport, err := sys.Client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "adtler #45 SetTextElements integration test", Package: testPackage})
 			if err != nil {
 				t.Fatalf("[%s] CreateTransport: %v", sys.Name, err)
 			}

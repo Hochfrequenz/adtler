@@ -24,7 +24,7 @@ func TestReleaseTransportWithTasks_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP ReleaseWithTasks test", testPackage)
+	trNumber, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP ReleaseWithTasks test", Package: testPackage})
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	objectURI := "/sap/bc/adt/programs/programs/" + objName
 
 	// ── Phase 1: Create T1, create object, write v1 source, activate ──────
-	t1, err := client.CreateTransport(ctx, "K", "DUM", "MCP Rollback test T1", testPackage)
+	t1, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP Rollback test T1", Package: testPackage})
 	if err != nil {
 		t.Fatalf("[1] CreateTransport T1: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestRollbackTransport_Integration(t *testing.T) {
 	_ = client.Logout(ctx)
 
 	// ── Phase 3: Create T2, add object, write v2 source, activate ──────────
-	t2, err := client.CreateTransport(ctx, "K", "DUM", "MCP Rollback test T2", testPackage)
+	t2, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP Rollback test T2", Package: testPackage})
 	if err != nil {
 		t.Fatalf("[3] CreateTransport T2: %v", err)
 	}
