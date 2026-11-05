@@ -237,3 +237,27 @@ func TestTokenRequestDoesNotFollowRedirect(t *testing.T) {
 		t.Fatalf("redirect target received %d token request(s)", targetHits)
 	}
 }
+
+// TestRefreshToken_TransportErrorDoesNotNameTheHost: a token endpoint that
+// cannot be reached yields an error naming neither its host nor its port
+// (#167).
+func TestRefreshToken_TransportErrorDoesNotNameTheHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	host := srv.URL
+	srv.Close() // nothing listens there any more: connection refused
+
+	_, err := RefreshToken(host, "client", "refresh", false)
+	if err == nil {
+		t.Fatal("want a transport error")
+	}
+	u, _ := url.Parse(host)
+	for _, leak := range []string{u.Hostname(), ":" + u.Port(), "http://"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error text names %q: %v", leak, err)
+		}
+	}
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		t.Errorf("want a *url.Error in the chain, got %v", err)
+	}
+}

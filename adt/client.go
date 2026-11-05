@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Hochfrequenz/adtler/internal/neterr"
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
 )
 
@@ -384,14 +385,14 @@ func (c *httpClient) SystemInfo() (host, client string) {
 // status of the logoff is ignored. The local session state is dropped either
 // way.
 func (c *httpClient) Logout(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+"/sap/public/bc/icf/logoff", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/sap/public/bc/icf/logoff", nil)
 	if err != nil {
 		return fmt.Errorf("Logout: %w", err)
 	}
 	if _, err := c.setAuth(req); err != nil {
 		return fmt.Errorf("Logout: %w", err)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.send(c.http, req)
 	if err != nil {
 		return fmt.Errorf("Logout: %w", err)
 	}
@@ -431,8 +432,7 @@ func (c *httpClient) Logout(ctx context.Context) error {
 // itself and counted a second failed logon (#222). Other error statuses are
 // still tolerated, see the comment on the Accept header below.
 func (c *httpClient) fetchCSRFToken(ctx context.Context) (string, error) {
-	url := c.cfg.Host + "/sap/bc/adt/discovery"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/sap/bc/adt/discovery", nil)
 	if err != nil {
 		return "", err
 	}
@@ -455,7 +455,7 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) (string, error) {
 	// discovery endpoint doesn't recognise the vendor type.
 	req.Header.Set("Accept", "application/atomsvc+xml, */*")
 
-	resp, err := c.http.Do(req)
+	resp, err := c.send(c.http, req)
 	if err != nil {
 		return sent, fmt.Errorf("CSRF fetch: %w", err)
 	}
@@ -637,7 +637,7 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 
 	var sent string
 	makeReq := func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+path, nil)
+		req, err := c.newRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -655,7 +655,7 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 	if err != nil {
 		return nil, err
 	}
-	resp, err := hc.Do(req)
+	resp, err := c.send(hc, req)
 	if err != nil {
 		return nil, err
 	}
@@ -683,7 +683,7 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 	if err != nil {
 		return nil, err
 	}
-	return hc.Do(req2)
+	return c.send(hc, req2)
 }
 
 // doMutate performs a POST/PUT/DELETE with CSRF token and retry on 403, and
@@ -799,7 +799,7 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 // This allows callers to choose between the default (30s timeout) and long-timeout client.
 // It also returns the OAuth token the request carried (see setAuth).
 func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader, headers map[string]string, csrfToken string) (resp *http.Response, sentToken string, err error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.cfg.Host+path, body)
+	req, err := c.newRequest(ctx, method, path, body)
 	if err != nil {
 		return nil, "", err
 	}
@@ -811,8 +811,35 @@ func (c *httpClient) execMutateWith(ctx context.Context, hc *http.Client, method
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err = hc.Do(req)
+	resp, err = c.send(hc, req)
 	return resp, sentToken, err
+}
+
+// newRequest builds a request for path on the configured system. A
+// malformed host makes net/url name it in the error, so that error is
+// redacted like a failed request (see send).
+func (c *httpClient) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.cfg.Host+path, body)
+	if err != nil {
+		return nil, neterr.Redact(err, c.cfg.Host)
+	}
+	return req, nil
+}
+
+// send executes req on hc. Every request of this package goes through it,
+// because a transport-level failure comes back as a *url.Error whose text
+// carries the full request URL, and its wrapped error often names the host
+// or its address again (DNS lookup, refused connection, certificate names).
+// Callers print these errors, integration tests included, and their output
+// can end up on a public pull request (#167). send therefore cuts the URL
+// down to path and query and replaces host names and addresses with
+// placeholders; errors.Is and errors.As still reach the original errors.
+func (c *httpClient) send(hc *http.Client, req *http.Request) (*http.Response, error) {
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, neterr.Redact(err, c.cfg.Host)
+	}
+	return resp, nil
 }
 
 // htmlErrorTextHeaderRe matches the SAP "Application Server Error" page's

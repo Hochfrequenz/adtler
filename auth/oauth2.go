@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Hochfrequenz/adtler/internal/neterr"
 )
 
 // GeneratePKCE generates a code_verifier (43 random URL-safe chars) and
@@ -84,7 +86,8 @@ func postToken(host string, form url.Values, tlsSkipVerify bool) (TokenData, err
 	client := httpClient(tlsSkipVerify)
 	resp, err := client.Post(endpoint, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	if err != nil {
-		return TokenData{}, fmt.Errorf("token request: %w", err)
+		// The error names the token endpoint's host (#167).
+		return TokenData{}, fmt.Errorf("token request: %w", neterr.Redact(err, host))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
