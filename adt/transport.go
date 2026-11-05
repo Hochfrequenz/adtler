@@ -943,25 +943,55 @@ func queryCell(row []string, i int) string {
 	return strings.TrimSpace(row[i])
 }
 
-func (c *httpClient) AddToTransport(ctx context.Context, objectURI, transport string) error {
-	body, err := xml.Marshal(adtxml.TransportComponent{
-		NSCore:    nsADTCore,
-		ObjectURI: objectURI,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal transport component: %w", err)
+// AddToTransport records the object pgmID/objectType/objectName (an E071
+// key such as R3TR PROG ZFOO or LIMU FUNC Z_FOO) in transport, a modifiable
+// request or task. SAP locks the new entry for transport, as SE09 does.
+//
+// It sends the transport organizer's addobject user action (a PUT on the
+// request or task with tm:useraction="addobject"). Measured 2026-11-05 on
+// SAP_BASIS 816: the handler checks the Accept header only when it writes
+// the response, after the entry has been added, so a call without it
+// reports 400 "Accept header missing" for a change that did happen. The
+// vendor type is therefore always sent.
+//
+// The call is refused locally with ErrorNotSupported (ADTError type
+// ExceptionTypeAddObjectUnsupported), and no write is sent, when transport
+// does not advertise the addobject relation: on SAP_BASIS 750, whose
+// transport organizer has no add action at all (every PUT there is a
+// change-owner request, see #125), and for a released request. Before #154
+// this method posted to an .../abaptransportcomponents path that no release
+// implements, so it never worked on any system.
+func (c *httpClient) AddToTransport(ctx context.Context, pgmID, objectType, objectName, transport string) error {
+	pgmID = strings.ToUpper(strings.TrimSpace(pgmID))
+	objectType = strings.ToUpper(strings.TrimSpace(objectType))
+	objectName = strings.ToUpper(strings.TrimSpace(objectName))
+	transport = strings.ToUpper(strings.TrimSpace(transport))
+	if pgmID == "" || objectType == "" || objectName == "" {
+		return fmt.Errorf("AddToTransport: pgmid, object type and object name are required (got %q %q %q)", pgmID, objectType, objectName)
 	}
-
-	path := "/sap/bc/adt/cts/transportrequests/" + transport + "/abaptransportcomponents"
-	resp, err := c.doMutate(ctx, http.MethodPost, path,
-		strings.NewReader(xml.Header+string(body)),
-		map[string]string{"Content-Type": contentTypeXML},
-	)
-	if err != nil {
+	if err := validateTransportNumbers(transport); err != nil {
 		return fmt.Errorf("AddToTransport: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	return checkResponse(resp)
+	if err := c.ensureAddObjectSupported(ctx, transport); err != nil {
+		return fmt.Errorf("AddToTransport: %w", err)
+	}
+
+	body, err := xml.Marshal(adtxml.TMRoot{
+		NSTM:       nsTM,
+		UserAction: userActionAddObject,
+		Number:     transport,
+		Request: &adtxml.TMRequest{
+			Number:  transport,
+			Objects: []adtxml.TMAbapObject{{PgmID: pgmID, Type: objectType, Name: objectName}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("AddToTransport: marshal request: %w", err)
+	}
+	if err := c.putTransportUserAction(ctx, transport, "", body); err != nil {
+		return fmt.Errorf("AddToTransport: %w", err)
+	}
+	return nil
 }
 
 func (c *httpClient) RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error {

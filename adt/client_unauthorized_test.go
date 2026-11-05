@@ -114,6 +114,9 @@ var unauthorizedOperations = []struct {
 	{"add package to transport with capability check", func(ctx context.Context, c adt.Client) error {
 		return c.AddPackageToTransport(ctx, "ZPACKAGE", unauthorizedRequest, false)
 	}},
+	{"add object to transport with capability check", func(ctx context.Context, c adt.Client) error {
+		return c.AddToTransport(ctx, "R3TR", "PROG", "ZTEST", unauthorizedTask)
+	}},
 	{"release transport with fallback endpoint", func(ctx context.Context, c adt.Client) error {
 		_, err := c.ReleaseTransport(ctx, unauthorizedRequest)
 		return err

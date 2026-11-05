@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// PrettyPrint sends no Accept header: S/4 (SAP_BASIS 816) formats the
+// source without one, measured while auditing #154. The call has no side
+// effect, so the header check SAP runs last cannot hide a change here.
 func (c *httpClient) PrettyPrint(ctx context.Context, source string) (string, error) {
 	resp, err := c.doMutate(ctx, "POST",
 		"/sap/bc/adt/abapsource/prettyprinter",

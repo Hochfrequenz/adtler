@@ -31,13 +31,6 @@ type TransportRequest struct {
 	Status      string `xml:"status,attr"`
 }
 
-// TransportComponent is the XML body for adding an object to a transport.
-type TransportComponent struct {
-	XMLName   xml.Name `xml:"adtcore:objectReference"`
-	NSCore    string   `xml:"xmlns:adtcore,attr"`
-	ObjectURI string   `xml:"adtcore:uri,attr"`
-}
-
 // TMRoot is the XML body for transport organizer actions (removeobject, etc.).
 // Namespace: http://www.sap.com/cts/adt/tm
 type TMRoot struct {

@@ -85,7 +85,7 @@ func (m *mockClient) RunUnitTests(context.Context, string, int) (*adt.TestResult
 func (m *mockClient) GetTransportRequests(context.Context, adt.TransportListOptions) (*adt.TransportRequestPage, error) {
 	panic("not implemented")
 }
-func (m *mockClient) AddToTransport(context.Context, string, string) error {
+func (m *mockClient) AddToTransport(context.Context, string, string, string, string) error {
 	panic("not implemented")
 }
 func (m *mockClient) RemoveFromTransport(context.Context, string, string, string, string, string, string, string) error {

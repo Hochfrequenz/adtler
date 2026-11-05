@@ -173,8 +173,8 @@ func (r *ClientRegistry) DiffActiveInactive(ctx context.Context, objectURI strin
 func (r *ClientRegistry) CheckTransport(ctx context.Context, pgmID, object, objectName string) (*TransportCheckResult, error) {
 	return r.activeClient().CheckTransport(ctx, pgmID, object, objectName)
 }
-func (r *ClientRegistry) AddToTransport(ctx context.Context, objectURI, transport string) error {
-	return r.activeClient().AddToTransport(ctx, objectURI, transport)
+func (r *ClientRegistry) AddToTransport(ctx context.Context, pgmID, objectType, objectName, transport string) error {
+	return r.activeClient().AddToTransport(ctx, pgmID, objectType, objectName, transport)
 }
 func (r *ClientRegistry) RemoveFromTransport(ctx context.Context, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position string) error {
 	return r.activeClient().RemoveFromTransport(ctx, taskNumber, parentTransport, pgmID, objectType, objectName, wbType, position)
