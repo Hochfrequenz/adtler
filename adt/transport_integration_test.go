@@ -95,11 +95,11 @@ func TestGetTransportRequests_AllSystems_Integration(t *testing.T) {
 }
 
 // TestGetTransportRequests_AllFilter_Integration checks that
-// TransportFilterAll lists no request twice. It logs counts per state only.
+// TransportFilterAll, merged from the tree and E070, lists no request twice.
+// It logs counts per state only.
 //
-// The all filter is answered partly on both releases: ECC's tree lists only
-// modifiable requests, S/4's only released ones, and the E070 fallback runs
-// only when nothing passes the filter (#242 point 1).
+// TestGetTransportRequests_Complete_Integration checks that nothing is lost
+// in the merge.
 func TestGetTransportRequests_AllFilter_Integration(t *testing.T) {
 	for _, sys := range eachSystem(t) {
 		sys := sys
@@ -136,9 +136,9 @@ func TestGetTransportRequests_AllFilter_Integration(t *testing.T) {
 // fallback, which asked for "R" only and so missed requests released with
 // import protection ("N").
 //
-// The test lists without a user: on ECC the configured user may own no
-// released request, while the system as a whole has many. It logs counts per
-// state only, never request numbers.
+// The test lists every user's requests: on ECC the configured user may own
+// no released request, while the system as a whole has many. It logs counts
+// per state only, never request numbers.
 func TestGetTransportRequests_StateFilter_Integration(t *testing.T) {
 	cases := []struct {
 		filter adt.TransportFilter
@@ -152,7 +152,7 @@ func TestGetTransportRequests_StateFilter_Integration(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(sys.Name+"/"+tc.filter.String(), func(t *testing.T) {
 				ctx := context.Background()
-				requests, err := sys.Client.GetTransportRequests(ctx, "", tc.filter)
+				requests, err := sys.Client.GetTransportRequests(ctx, adt.TransportAllUsers, tc.filter)
 				if err != nil {
 					t.Fatalf("GetTransportRequests(%v) failed: %v", tc.filter, err)
 				}

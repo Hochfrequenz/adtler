@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -423,62 +424,100 @@ func (c *httpClient) fetchReleaseResult(ctx context.Context, transportNumber, re
 	return checkReleaseResponse(transportNumber, data)
 }
 
-// GetTransportRequests lists CTS transport requests filtered by owner and state.
+// TransportAllUsers, passed as GetTransportRequests' user, lists the requests
+// of every user instead of one user's.
+const TransportAllUsers = "*"
+
+// ErrTransportListIncomplete marks a GetTransportRequests result that misses
+// requests because one of its two sources could not be read. The call then
+// returns what the other source yielded together with an error wrapping
+// ErrTransportListIncomplete; check with errors.Is before using it.
+var ErrTransportListIncomplete = errors.New("adt: transport request list is incomplete")
+
+// GetTransportRequests lists the top-level CTS transport requests owned by
+// user whose state passes filter, sorted by request number.
 //
-// user is the SAP username (e.g. "MMUSTERMANN") whose requests to return.
-// If you want a specific developer's requests (e.g. the person currently logged
-// in via a BTP app), extract their username from the JWT and pass it here.
-// An empty user means different things on the two paths (#242): the
-// transport organizer tree scopes it to the authenticated user, the E070
-// fallback below applies no user condition and returns the requests of every
-// user. On S/4 the tree never lists a modifiable request, so there
-// TransportFilterModifiable with an empty user lists every user's open
-// requests. Pass a user when you mean "my requests".
+// user is the SAP username (e.g. "MMUSTERMANN") whose requests to return: the
+// requests it owns (E070-AS4USER), not those in which it only owns a task. An
+// empty user means the client's logon user; with no logon user configured
+// (OAuth), pass one explicitly. TransportAllUsers returns every user's
+// requests. If you want a specific developer's requests (e.g. the person
+// currently logged in via a BTP app), extract their username from the JWT and
+// pass it here.
 //
-// filter selects requests by TransportState. It is applied here, on the
-// client: SAP's own status parameter names a single TRSTATUS letter, which
-// would miss the protected variants ("L", "N"), and the transport organizer
-// tree does not honour it anyway. Measured on SAP_BASIS 750 and 816 (#274),
-// with and without a user, the ECC tree lists modifiable requests only and
-// the S/4 tree a few released ones only, whatever status is asked for. The
-// parameter is therefore not sent. A request in
+// The list is read from two sources and merged by request number (#242):
+//
+//   - the ADT transport organizer tree, the only source of descriptions. It
+//     is incomplete on its own: measured on SAP_BASIS 750 and 816 (#274), the
+//     ECC tree lists modifiable requests only, and the S/4 tree a few released
+//     ones only (requests of KORRDEV=SYST/CUST do not appear), whatever
+//     status it is asked for, and on ECC it also lists requests in which the
+//     user only owns a task.
+//   - E070, through the data preview endpoint, which holds every request but
+//     no description. A request found only there has an empty Description;
+//     GetTransportInfo reads it.
+//
+// filter selects requests by TransportState and is applied on the client to
+// both sources: SAP's own status parameter names a single TRSTATUS letter,
+// which would miss the protected variants ("L", "N"), and the tree does not
+// honour it anyway, so it is not sent. A request in
 // TransportStateReleaseInProgress or TransportStateUnknown passes
 // TransportFilterAll only.
 //
-// The returned slice includes requests from both workbench and customizing
-// groups. When no request of the tree passes the filter, the requests are
-// read from E070 instead (see getTransportRequestsViaQuery). The fallback
-// runs only then (#242 point 1), so a filter the tree answers partly is
-// answered partly: TransportFilterAll lists the modifiable requests on ECC
-// and the tree's released requests on S/4, and TransportFilterReleased on
-// S/4 lists the tree's released requests rather than those of E070.
+// E070 returns at most TransportListLimit requests, the lowest request
+// numbers, and does not say when it stopped there. A result with
+// TransportListLimit or more requests is therefore probably incomplete; narrow
+// it with a user or a filter.
 //
-// The E070 fallback returns at most TransportListLimit requests, the lowest
-// request numbers, and does not say when it stopped there. A result of
-// exactly TransportListLimit requests is therefore probably incomplete;
-// narrow it with a user.
+// If the tree cannot be read, the call fails. If E070 cannot be read, the
+// call returns the tree's requests together with an error wrapping
+// ErrTransportListIncomplete.
 func (c *httpClient) GetTransportRequests(ctx context.Context, user string, filter TransportFilter) ([]TransportRequest, error) {
 	if filter < TransportFilterAll || filter > TransportFilterReleased {
 		return nil, fmt.Errorf("GetTransportRequests: invalid filter %v", filter)
 	}
+	allUsers := user == TransportAllUsers
+	switch {
+	case allUsers:
+		user = ""
+	case user == "":
+		user = c.cfg.User
+		if user == "" {
+			return nil, fmt.Errorf("GetTransportRequests: no user given and the client has no logon user; pass a user or TransportAllUsers")
+		}
+	}
+	user = strings.ToUpper(user)
+	if user != "" && !transportUserRe.MatchString(user) {
+		return nil, fmt.Errorf("GetTransportRequests: user %q contains characters not allowed in a transport query", user)
+	}
 
-	requests, err := c.getTransportRequestsTree(ctx, user)
+	// For every user the tree is read unscoped, which SAP scopes to the logon
+	// user: it then only contributes descriptions.
+	treeRequests, err := c.getTransportRequestsTree(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	var result []TransportRequest
-	for _, tr := range requests {
-		if filter.matches(tr.State) {
-			result = append(result, tr)
+	byNumber := map[string]TransportRequest{}
+	for _, tr := range treeRequests {
+		if filter.matches(tr.State) && (allUsers || strings.EqualFold(tr.Owner, user)) {
+			byNumber[tr.Number] = tr
 		}
 	}
 
-	// S/4HANA systems using KORRDEV=SYST/CUST have transports silently filtered
-	// by the ADT endpoint, which only surfaces KORRDEV=K requests, and ECC's
-	// tree lists no released request. Fall back to querying E070 directly
-	// when nothing passed the filter.
-	if len(result) == 0 {
-		return c.getTransportRequestsViaQuery(ctx, user, filter)
+	e070Requests, queryErr := c.getTransportRequestsViaQuery(ctx, user, filter)
+	for _, tr := range e070Requests {
+		if _, inTree := byNumber[tr.Number]; !inTree {
+			byNumber[tr.Number] = tr
+		}
+	}
+
+	result := make([]TransportRequest, 0, len(byNumber))
+	for _, tr := range byNumber {
+		result = append(result, tr)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Number < result[j].Number })
+	if queryErr != nil {
+		return result, fmt.Errorf("%w: %w", ErrTransportListIncomplete, queryErr)
 	}
 	return result, nil
 }
@@ -527,8 +566,8 @@ func (c *httpClient) getTransportRequestsTree(ctx context.Context, user string) 
 // clause literal. SAP usernames are at most 40 chars: alphanumeric, _, -, ..
 var transportUserRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,40}$`)
 
-// TransportListLimit is the most requests GetTransportRequests returns from
-// one path. See GetTransportRequests.
+// TransportListLimit is the most requests GetTransportRequests reads from
+// E070. See GetTransportRequests.
 const TransportListLimit = 5000
 
 // transportStatusCondition returns the E070 condition selecting the TRSTATUS
@@ -549,14 +588,11 @@ func transportStatusCondition(filter TransportFilter) string {
 	return "( " + strings.Join(terms, " OR ") + " )"
 }
 
-// getTransportRequestsViaQuery is the fallback for GetTransportRequests on
-// S/4HANA systems where KORRDEV=SYST/CUST prevents the ADT transport organizer
-// tree endpoint from returning any results. It queries E070 directly via the
-// ADT data preview endpoint (JOINs are rejected on some S/4HANA releases).
+// getTransportRequestsViaQuery reads the top-level requests of user (every
+// user for "") whose state passes filter from E070, through the ADT data
+// preview endpoint (JOINs are rejected on some S/4HANA releases). user must
+// already be validated against transportUserRe.
 func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user string, filter TransportFilter) ([]TransportRequest, error) {
-	if user != "" && !transportUserRe.MatchString(user) {
-		return nil, fmt.Errorf("GetTransportRequests: user %q contains characters not allowed in a transport query", user)
-	}
 
 	// Exclude tasks (STRKORR is set on tasks; top-level requests have STRKORR = '').
 	where := []string{"STRKORR = ''"}
@@ -575,12 +611,12 @@ func (c *httpClient) getTransportRequestsViaQuery(ctx context.Context, user stri
 
 	qr, err := c.RunQuery(ctx, query, TransportListLimit)
 	if err != nil {
-		return nil, fmt.Errorf("GetTransportRequests: fallback E070 query: %w", err)
+		return nil, fmt.Errorf("GetTransportRequests: E070 query: %w", err)
 	}
 
 	idx := queryColumnIndexes(qr, "TRKORR", "AS4USER", "TRSTATUS")
 	if idx["TRKORR"] < 0 {
-		return nil, fmt.Errorf("GetTransportRequests: fallback query returned no TRKORR column")
+		return nil, fmt.Errorf("GetTransportRequests: E070 query returned no TRKORR column")
 	}
 
 	result := make([]TransportRequest, 0, len(qr.Rows))
