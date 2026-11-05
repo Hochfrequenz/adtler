@@ -443,54 +443,6 @@ It lives at `/sap/bc/adt/ucon/httpservices` and speaks
   answers both a GET below it and the create POST with 404. The create then fails with
   "probably not available on this SAP system", followed by SAP's own error.
 
-## Creating transport requests
-
-`CreateTransport(ctx, adt.CreateTransportOptions{Type, Description, Package, Target})`
-creates a workbench request (`K`, the default), a customizing request (`W`) or a
-transport of copies (`T`). The two kinds go to two different ADT endpoints, and
-every option either reaches SAP or is refused before anything is sent
-(adtler#137). Measured on SAP ERP 6.0 EHP8 (SAP_BASIS 750) and SAP S/4HANA 2025,
-on-premise (SAP_BASIS 816), on 2026-11-05, by reading E070 after each create:
-
-| Type | Endpoint | `Package` | `Target` | ECC (SAP_BASIS 750) | S/4 (SAP_BASIS 816) |
-|---|---|---|---|---|---|
-| `K` | `POST /sap/bc/adt/cts/transports` | required | refused | ✓ | ✓ |
-| `W` | `POST /sap/bc/adt/cts/transportrequests` | refused | optional | `ErrorNotSupported` | ✓ |
-| `T` | `POST /sap/bc/adt/cts/transportrequests` | refused | optional | `ErrorNotSupported` | ✓ |
-
-**Why a workbench request takes no target.** `/sap/bc/adt/cts/transports` reads
-its body into the structure `SADT_CREATE_CORR_REQUEST`, which has a package and a
-short text but no category, target or long text. SAP drops elements it does not
-know without an error, always creates a `K` request with one task, and takes the
-target from the transport layer of the package. Without a package both releases
-answer 500. Before #137 adtler sent a category and a target here anyway, so a
-caller asking for a transport of copies silently got a workbench request.
-
-**Customizing requests and transports of copies** go to the transport organizer
-collection, which takes type, target and short text. A customizing request gets
-one task owned by the logon user (none without a configured user name), a
-transport of copies none, as in SE09. SAP checks the target: an unknown one is
-refused with 400 "Target … does not exist", and the name is case-sensitive, so
-adtler upper-cases it. Leaving `Target` empty gives a customizing request the
-client's default target and a transport of copies none.
-
-**How adtler decides that a system cannot do it.** The decision is read from the
-system's discovery document, not from its name or release: the transport
-organizer collection has to list its media type
-(`application/vnd.sap.adt.transportorganizer.v1+xml`) as `app:accept`. S/4 does;
-ECC lists the collection without one, and answers a create POST with 400 "user
-action is not supported". Where the media type is missing, `CreateTransport`
-returns an error that `ClassifyError` maps to `ErrorNotSupported`, without
-sending the POST, so a consumer can fall back to SE09 or another route. Two
-limits of that signal:
-
-- It was measured on two releases only. A release between SAP_BASIS 750 and 816
-  that lists the media type but cannot create requests would get the POST and
-  report SAP's error instead of `ErrorNotSupported`.
-- When no discovery document could be read at all, the capability is unknown,
-  and `CreateTransport` returns an ordinary error rather than `ErrorNotSupported`,
-  so a failed discovery read is never mistaken for a missing capability.
-
 ## Status
 
 `adtler` was extracted from

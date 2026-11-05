@@ -105,6 +105,8 @@ type CreateTransportOptions struct {
 	// transport of copies (e.g. "DUM", a virtual system or "<SID>.<client>").
 	// Empty leaves it to SAP: a customizing request gets the client's
 	// default, a transport of copies none. Refused for a workbench request.
+	// SAP rejects an unknown target with 400 "Target ... does not exist" and
+	// compares case-sensitively, so CreateTransport upper-cases it.
 	Target string
 }
 
