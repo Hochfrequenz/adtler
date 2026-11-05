@@ -99,6 +99,7 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 			// the right answer for them. Search by common name prefixes instead
 			// and take the first function module whose group names a package.
 			var uri, groupPackage string
+			var fmName, groupName string // discovered: redacted from error texts
 			candidates := 0
 			for _, query := range fmoduleSearchQueries {
 				hits, err := client.SearchObjects(ctx, query, fmoduleSearchType, fmoduleSearchLimit)
@@ -114,6 +115,7 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 					group, err := client.GetObjectInfo(ctx, h.URI[:i])
 					if err == nil && group.PackageName != "" {
 						uri, groupPackage = h.URI, group.PackageName
+						fmName, groupName = h.Name, group.Name
 						break
 					}
 				}
@@ -128,7 +130,7 @@ func TestGetObjectInfo_FunctionModule_MultiSystem_Integration(t *testing.T) {
 			rec.watch(uri)
 			info, err := client.GetObjectInfo(ctx, uri)
 			if err != nil {
-				t.Fatalf("GetObjectInfo on a function module: %s", redact(err.Error(), sys.Config.Host, ""))
+				t.Fatalf("GetObjectInfo on a function module: %s", redactNames(err.Error(), sys.Config.Host, fmName, groupName))
 			}
 
 			accepts := rec.acceptHeaders()
@@ -184,6 +186,7 @@ func TestGetObjectInfo_FunctionGroupInclude_MultiSystem_Integration(t *testing.T
 		t.Run(sys.Name, func(t *testing.T) {
 			client := sys.Client
 			var uri, groupPackage string
+			var includeName, groupName string // discovered: redacted from error texts
 			groups := 0
 			for _, query := range fmoduleSearchQueries {
 				hits, err := client.SearchObjects(ctx, query, fgroupSearchType, fmoduleSearchLimit)
@@ -207,6 +210,7 @@ func TestGetObjectInfo_FunctionGroupInclude_MultiSystem_Integration(t *testing.T
 					for _, p := range parts {
 						if strings.HasPrefix(p.URI, g.URI+"/includes/") {
 							uri, groupPackage = p.URI, group.PackageName
+							includeName, groupName = p.Name, g.Name
 							break
 						}
 					}
@@ -224,7 +228,7 @@ func TestGetObjectInfo_FunctionGroupInclude_MultiSystem_Integration(t *testing.T
 
 			info, err := client.GetObjectInfo(ctx, uri)
 			if err != nil {
-				t.Fatalf("GetObjectInfo on a function group include: %s", redact(err.Error(), sys.Config.Host, ""))
+				t.Fatalf("GetObjectInfo on a function group include: %s", redactNames(err.Error(), sys.Config.Host, includeName, groupName))
 			}
 			t.Logf("package present: %t", info.PackageName != "")
 			if info.URI != uri || info.Name == "" {

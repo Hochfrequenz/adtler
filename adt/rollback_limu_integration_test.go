@@ -88,7 +88,7 @@ func TestRollbackTransport_SubObjects_Integration(t *testing.T) {
 					// 2. The request records the change as sub-object entries.
 					objs, err := c.GetTransportObjects(ctx, request)
 					if err != nil {
-						t.Fatalf("[2] GetTransportObjects: %v", err)
+						t.Fatalf("[2] GetTransportObjects: %s", redact(err.Error(), "", request))
 					}
 					byKind := map[string]int{}
 					for _, o := range objs {
@@ -111,7 +111,7 @@ func TestRollbackTransport_SubObjects_Integration(t *testing.T) {
 					// 3. Roll back: the object is restored, once, under its own type.
 					result, err := c.RollbackTransport(ctx, request)
 					if err != nil {
-						t.Fatalf("[3] RollbackTransport: %v", err)
+						t.Fatalf("[3] RollbackTransport: %s", redact(err.Error(), "", request))
 					}
 					logRollback(t, "[3]", request, result)
 					restored := 0
@@ -155,13 +155,13 @@ func ensureReleasedFixture(t *testing.T, c adt.Client, objType, name, uri, sourc
 		t.Fatalf("[0] CreateTransport: %v", err)
 	}
 	if err := c.CreateObject(ctx, objType, name, testPackage, "adtler #134 rollback fixture", request); err != nil {
-		t.Fatalf("[0] CreateObject: %v", err)
+		t.Fatalf("[0] CreateObject: %s", redact(err.Error(), "", request))
 	}
 	_ = c.Logout(ctx)
 	writeAndActivate(t, c, uri, source, request)
 	res, err := c.ReleaseTransportWithTasks(ctx, request)
 	if err != nil {
-		t.Fatalf("[0] ReleaseTransportWithTasks: %v", err)
+		t.Fatalf("[0] ReleaseTransportWithTasks: %s", redact(err.Error(), "", request))
 	}
 	// S/4 releases in a background job: wait for it before deciding.
 	for i := 0; res.State == adt.TransportStateReleaseInProgress && i < 12; i++ {
@@ -199,7 +199,7 @@ func requireReleasedVersion(t *testing.T, c adt.Client, uri string) {
 		// requests only.
 		qr, err := c.RunQuery(ctx, "SELECT TRSTATUS FROM E070 WHERE TRKORR = '"+adt.EscapeValue(v.Transport)+"'", 1)
 		if err != nil {
-			t.Fatalf("[0] read request status: %v", err)
+			t.Fatalf("[0] read request status: %s", redact(err.Error(), "", v.Transport))
 		}
 		if len(qr.Rows) == 1 && len(qr.Rows[0]) == 1 {
 			if st := strings.TrimSpace(qr.Rows[0][0]); st == "R" || st == "N" {

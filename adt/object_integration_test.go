@@ -112,11 +112,11 @@ func TestCreatePackage_Integration(t *testing.T) {
 			t.Fatalf("CreatePackage was rejected at the HTTP layer with %s: %q — "+
 				"the request never reached SAP's payload validation, so falling back "+
 				"on an existing package would hide a call that cannot work (adtler#149)",
-				adtErr.Type, adtErr.Message)
+				adtErr.Type, redactNames(adtErr.Message, cfg.Host, transportLayer, cfg.User))
 		}
 		// Package may already exist from a previous run.
 		if _, browseErr := client.BrowsePackage(ctx, pkgName); browseErr != nil {
-			t.Fatalf("CreatePackage failed and package does not exist: %v", err)
+			t.Fatalf("CreatePackage failed and package does not exist: %s", redactError(err, cfg.Host, transportLayer, cfg.User))
 		}
 		t.Logf("package %s already exists, reusing", pkgName)
 	} else {

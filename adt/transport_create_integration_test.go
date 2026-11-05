@@ -46,7 +46,7 @@ func TestCreateTransport_Integration(t *testing.T) {
 			t.Logf("[1] workbench request created; target taken from the package: set=%t", target != "")
 			info, err := c.GetTransportInfo(ctx, wb.number)
 			if err != nil {
-				t.Fatalf("[1] GetTransportInfo: %v", err)
+				t.Fatalf("[1] GetTransportInfo: %s", redact(err.Error(), "", wb.number))
 			}
 			if info.Description != wb.opts.Description {
 				t.Errorf("[1] short text: got %q, want %q", info.Description, wb.opts.Description)
@@ -65,13 +65,13 @@ func TestCreateTransport_Integration(t *testing.T) {
 				number, err := c.CreateTransport(ctx, opts)
 				if adt.ClassifyError(err) == adt.ErrorNotSupported {
 					if release >= 816 {
-						t.Fatalf("[2] %s refused as not supported on SAP_BASIS %d, which has the typed create: %v", opts.Type, release, err)
+						t.Fatalf("[2] %s refused as not supported on SAP_BASIS %d, which has the typed create: %s", opts.Type, release, redact(err.Error(), "", opts.Target))
 					}
 					t.Logf("[2] %s refused as not supported (SAP_BASIS %d)", opts.Type, release)
 					continue
 				}
 				if err != nil {
-					t.Fatalf("[2] CreateTransport(%s): %v", opts.Type, err)
+					t.Fatalf("[2] CreateTransport(%s): %s", opts.Type, redact(err.Error(), "", opts.Target))
 				}
 				t.Cleanup(func() { deleteTransportAfterTest(t, c, number) })
 				if release <= 750 {
@@ -108,7 +108,7 @@ func createAndCleanup(t *testing.T, c adt.Client, opts adt.CreateTransportOption
 
 func deleteTransportAfterTest(t *testing.T, c adt.Client, number string) {
 	if err := c.DeleteTransport(context.Background(), number); err != nil {
-		t.Logf("[cleanup] delete request: %v (manual cleanup may be needed)", err)
+		t.Logf("[cleanup] delete request: %s (manual cleanup may be needed)", redact(err.Error(), "", number))
 	}
 }
 
@@ -118,7 +118,7 @@ func readE070(t *testing.T, c adt.Client, number string) (trfunction, tarsystem 
 	res, err := c.RunQuery(context.Background(),
 		"SELECT trfunction, tarsystem FROM e070 WHERE trkorr = '"+number+"'", 1)
 	if err != nil {
-		t.Fatalf("E070 query: %v", err)
+		t.Fatalf("E070 query: %s", redact(err.Error(), "", number))
 	}
 	if len(res.Rows) != 1 || len(res.Rows[0]) != 2 {
 		t.Fatalf("E070: want one row with two columns, got %d rows", len(res.Rows))

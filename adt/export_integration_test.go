@@ -65,7 +65,7 @@ func TestExportPackage_WriteZIP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat ZIP: %v", err)
 	}
-	t.Logf("wrote %s (%d bytes)", zipPath, info.Size())
+	t.Logf("wrote the ZIP (%d bytes)", info.Size())
 }
 
 func TestExportPackage_ExtractFolder(t *testing.T) {
@@ -112,7 +112,7 @@ func TestExportPackage_ExtractFolder(t *testing.T) {
 		}
 		return nil
 	})
-	t.Logf("extracted %d files to %s", count, pkgDir)
+	t.Logf("extracted %d files", count)
 	if count < 5 {
 		t.Errorf("expected at least 5 files, got %d", count)
 	}
@@ -132,17 +132,19 @@ func TestExportPackage_BulkViaSearch(t *testing.T) {
 	t.Logf("found %d packages", len(packages))
 
 	outputDir := t.TempDir()
-	for _, pkg := range packages {
+	// The packages are discovered and may be customer packages: log their
+	// position, never their name or path, and redact both from error texts.
+	for i, pkg := range packages {
 		data, err := client.ExportPackage(ctx, pkg.Name)
 		if err != nil {
-			t.Logf("  [skip] %s: %v", pkg.Name, err)
+			t.Logf("  [skip] package %d: %s", i, redact(err.Error(), "", pkg.Name))
 			continue
 		}
 		path := filepath.Join(outputDir, pkg.Name+".zip")
 		if err := os.WriteFile(path, data, 0644); err != nil {
-			t.Fatalf("writing %s: %v", path, err)
+			t.Fatalf("writing package %d: %s", i, redactNames(err.Error(), "", path, pkg.Name))
 		}
-		t.Logf("  [exported] %s → %s (%d bytes)", pkg.Name, path, len(data))
+		t.Logf("  [exported] package %d (%d bytes)", i, len(data))
 	}
 }
 
@@ -182,28 +184,29 @@ func TestExportPackage_BulkWithExclude(t *testing.T) {
 		t.Error("exclude filter did not remove any packages")
 	}
 
-	for _, name := range filtered {
+	for i, name := range filtered {
 		if strings.HasPrefix(name, "ZCERE") {
-			t.Errorf("ZCERE package %s should have been excluded", name)
+			t.Errorf("a ZCERE* package (position %d) should have been excluded", i)
 		}
 	}
 
 	outputDir := t.TempDir()
 	exported := 0
-	for _, name := range filtered {
+	// Discovered packages again: positions only, names redacted.
+	for i, name := range filtered {
 		if exported >= 3 {
 			break
 		}
 		data, err := client.ExportPackage(ctx, name)
 		if err != nil {
-			t.Logf("  [skip] %s: %v", name, err)
+			t.Logf("  [skip] package %d: %s", i, redact(err.Error(), "", name))
 			continue
 		}
 		path := filepath.Join(outputDir, name+".zip")
 		if err := os.WriteFile(path, data, 0644); err != nil {
-			t.Fatalf("writing %s: %v", path, err)
+			t.Fatalf("writing package %d: %s", i, redactNames(err.Error(), "", path, name))
 		}
-		t.Logf("  [exported] %s (%d bytes)", name, len(data))
+		t.Logf("  [exported] package %d (%d bytes)", i, len(data))
 		exported++
 	}
 	if exported == 0 {

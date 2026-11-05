@@ -37,7 +37,9 @@ func TestEachSystem_Smoke_Integration(t *testing.T) {
 			if host == "" {
 				t.Errorf("[%s] SystemInfo returned empty host", sys.Name)
 			}
-			t.Logf("[%s] host=%s client=%s", sys.Name, host, sapClient)
+			// Only whether they are set: host and client number must not
+			// reach a test log that may be posted on a pull request (#167).
+			t.Logf("[%s] host set=%t client set=%t", sys.Name, host != "", sapClient != "")
 
 			// RSPARAM is the standard SAP "Display Profile Parameters" report.
 			// It exists on every R/3 and S/4 release. GetObjectInfo uses

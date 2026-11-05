@@ -443,6 +443,34 @@ It lives at `/sap/bc/adt/ucon/httpservices` and speaks
   answers both a GET below it and the create POST with 404. The create then fails with
   "probably not available on this SAP system", followed by SAP's own error.
 
+## Error texts do not name the host
+
+Errors returned by this library do not contain the SAP system's host name, its port or
+its IP addresses (adtler#167). Go's `net/http` puts the full request URL into every
+transport-level error, and the error it wraps often names the host again (a DNS lookup,
+a refused connection, the names on a certificate). Such texts end up in logs, test output
+and issue comments, which is where an internal host name should not be. So the library
+rewrites them where they arise:
+
+- a transport error is still a `*url.Error`, but its URL is cut down to path and query
+  (`Get "/sap/bc/adt/discovery": dial tcp <addr>: connect: connection refused`). Host
+  names become `<host>` and addresses `<addr>`;
+- `ADTError.Message`, the text SAP wrote, loses the host the request went to, including
+  its first DNS label, by which an application server names itself. `ADTError.Properties`
+  and `ADTError.T100Vars` are left as SAP sent them;
+- OAuth2 token requests (`auth`) are treated the same way.
+
+The original errors stay in the chain. `errors.Is(err, context.DeadlineExceeded)`, a
+`Timeout()` check and `errors.As` for `*net.OpError`, `*net.DNSError` or an `x509` error
+all work as before. **If you debug a connection and need the real address**, use
+`errors.As` to reach that inner error and read its fields, such as `OpError.Addr` or
+`DNSError.Name`. The configured host itself is returned by `Client.SystemInfo`.
+
+Two limits apply. A bare IPv6 address in free text is not recognised; only the bracketed
+form next to a port (`[fd00::1]:443`) is. And a first DNS label shorter than four
+characters is not replaced on its own, because it is too likely an ordinary word in an
+SAP message.
+
 ## Status
 
 `adtler` was extracted from

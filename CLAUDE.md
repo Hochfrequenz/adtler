@@ -130,6 +130,28 @@ CI logs stay clean too.
 Where a test genuinely cannot discover its fixture, take the name from an environment variable
 and skip when it is unset. Do not commit the value.
 
+### Failure output is published too
+
+The rules above cover what a test *chooses* to print. They also cover what an **error** carries,
+because integration-test output is posted on pull requests, and the failure path is the one
+nobody reads carefully (#167). Two layers split the work:
+
+- **The library removes the host.** Every request goes through `httpClient.send` and
+  `newRequest` (adt/client.go), which pass transport errors through `neterr.Redact`
+  (internal/neterr): the `*url.Error` keeps only path and query, and host names, ports and
+  addresses in the wrapped text become `<host>` / `<addr>`. `parseResponseError` does the same
+  for `ADTError.Message`. A new HTTP call site must go through `send`, and a new error-body
+  parser through `parseResponseError`, never `hc.Do` or `parseADTError` directly. Do not log
+  `SystemInfo()` or `Config.Host` either.
+- **The test removes object names.** SAP echoes the requested object in its messages ("Inactive
+  version for BDEF <NAME> does not exist"), and the library cannot know which names are
+  sensitive. A test that discovers its fixture at runtime passes every error text that can name
+  that object through `redact(text, host, name)` (adt/integration_helpers_test.go) before
+  printing it. Objects the test creates itself and SAP standard objects need no redaction.
+
+A test that checks for a leak reports **which kind** of value it found, never the value itself;
+`TestTransportErrorsDoNotNameTheHost_Integration` is the pattern.
+
 ### A reuse fallback must not swallow a request that never worked
 
 An integration test that falls back on an existing object when creation fails — *"create it, and
@@ -198,6 +220,11 @@ forms, or customer object names outside a namespace. Grep the diff for those you
 rather than by value, so the guard does not leak them: for logon IDs that means the values of
 user and owner attributes and fields in captured XML or JSON (`owner`, `responsible`, `changedBy`,
 `createdBy`, `AS4USER`) and the user argument of a test call.
+
+Neither the datacheck nor a diff grep sees **runtime output**: a test log or failure message
+exists only once the test runs. Before posting integration-test output on a pull request, read
+it for the same shapes, and quote only the lines the comment needs (see "Failure output is
+published too").
 
 When you find internal data already published, redact it in place (edit the issue body, or open a
 PR) rather than only noting it. For a host name, credential or logon ID, assume the value is
