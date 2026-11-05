@@ -13,7 +13,10 @@ import (
 
 // releaseTransportServer mocks a synchronous release followed by a status read.
 // postReleaseStatus is the tm:status attribute returned by the status GET; pass
-// "" to make the status read fail (no <request> element).
+// "" to make the status read fail (no <request> element), or
+// releaseStatusOmitted to return the request without a tm:status attribute.
+const releaseStatusOmitted = "<omitted>"
+
 func releaseTransportServer(t *testing.T, transport, postReleaseStatus string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,9 +36,13 @@ func releaseTransportServer(t *testing.T, transport, postReleaseStatus string) *
 				_, _ = w.Write([]byte(`<?xml version="1.0"?><tm:root xmlns:tm="http://www.sap.com/cts/adt/tm"/>`))
 				return
 			}
+			statusAttr := ` tm:status="` + postReleaseStatus + `"`
+			if postReleaseStatus == releaseStatusOmitted {
+				statusAttr = ""
+			}
 			_, _ = w.Write([]byte(`<?xml version="1.0"?>
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
-  <tm:request tm:number="` + transport + `" tm:desc="d" tm:status="` + postReleaseStatus + `"/>
+  <tm:request tm:number="` + transport + `" tm:desc="d"` + statusAttr + `/>
 </tm:root>`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -48,10 +55,17 @@ func TestReleaseTransport_Verified(t *testing.T) {
 		name              string
 		postReleaseStatus string
 		wantReleased      bool
+		wantStatus        string
 	}{
-		{"released (status L)", adt.TransportStatusReleased, true},
-		{"silent fail (status D)", adt.TransportStatusModifiable, false},
-		{"status read fails -> optimistic released", "", true},
+		{"released (status R)", adt.TransportStatusReleased, true, adt.TransportStatusReleased},
+		{"released, import protected (status N)", adt.TransportStatusReleasedProtected, true, adt.TransportStatusReleasedProtected},
+		{"silent fail (status D)", adt.TransportStatusModifiable, false, adt.TransportStatusModifiable},
+		// #270: L is modifiable (protected), not released.
+		{"still modifiable, protected (status L)", adt.TransportStatusModifiableProtected, false, adt.TransportStatusModifiableProtected},
+		// #270: O means the release started but has not finished.
+		{"release started (status O)", adt.TransportStatusReleaseStarted, false, adt.TransportStatusReleaseStarted},
+		{"status read fails -> optimistic released", "", true, ""},
+		{"status read has no status -> optimistic released", releaseStatusOmitted, true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,6 +85,9 @@ func TestReleaseTransport_Verified(t *testing.T) {
 			}
 			if res.Released != tc.wantReleased {
 				t.Errorf("Released = %v, want %v", res.Released, tc.wantReleased)
+			}
+			if res.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", res.Status, tc.wantStatus)
 			}
 		})
 	}
@@ -153,5 +170,20 @@ func TestReleaseTransport_ReleaseErrorPropagates(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected nil result on error, got %+v", res)
+	}
+}
+
+func TestIsReleasedStatus(t *testing.T) {
+	for status, want := range map[string]bool{
+		adt.TransportStatusReleased:            true,
+		adt.TransportStatusReleasedProtected:   true,
+		adt.TransportStatusModifiable:          false,
+		adt.TransportStatusModifiableProtected: false,
+		adt.TransportStatusReleaseStarted:      false,
+		"":                                     false,
+	} {
+		if got := adt.IsReleasedStatus(status); got != want {
+			t.Errorf("IsReleasedStatus(%q) = %v, want %v", status, got, want)
+		}
 	}
 }

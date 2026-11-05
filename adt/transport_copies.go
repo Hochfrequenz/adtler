@@ -117,7 +117,11 @@ func (c *httpClient) copySources(ctx context.Context, sourceRequest string) ([]s
 		return nil, fmt.Errorf("read source %s: %w", sourceRequest, err)
 	}
 	sources := []string{sourceRequest}
-	if isReleasedTRStatus(info.Status) {
+	// The tasks of D (modifiable) and L (modifiable, protected) still hold
+	// the objects, so they are copied too. O (release started) is treated the
+	// same way: its tasks are already released and their objects merged into
+	// the request, so copying them again is redundant but harmless.
+	if IsReleasedStatus(info.Status) {
 		return sources, nil
 	}
 	tasks, err := parseTransportTaskNumbers(data, sourceRequest)
@@ -228,16 +232,6 @@ func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetReques
 			"(added in ABAP Platform 2105; never offered for a released request); include the objects in SE09 instead",
 			targetRequest),
 	}
-}
-
-// isReleasedTRStatus reports whether a TRSTATUS value marks a released
-// request: R (released) or N (released, import protected). The tasks of D
-// (modifiable) and L (modifiable, protected) still hold the objects, so
-// they are copied too. O (release started) is treated the same way: its
-// tasks are already released and their objects merged into the request, so
-// copying them again is redundant but harmless.
-func isReleasedTRStatus(status string) bool {
-	return status == "R" || status == "N"
 }
 
 // validateTransportNumbers rejects empty numbers and numbers that would

@@ -188,7 +188,7 @@ func TestCopyTransportObjects_ProtectedSourceCopiesTasks(t *testing.T) {
 	// its tasks.
 	srv, puts := copiesServer(t, map[string]string{
 		copiesTarget: copiesSupportedTargetXML,
-		copiesSource: copiesRequestXML(copiesSource, "L", copiesSourceTask),
+		copiesSource: copiesRequestXML(copiesSource, adt.TransportStatusModifiableProtected, copiesSourceTask),
 	}, http.StatusOK)
 
 	if err := copiesClient(srv).CopyTransportObjects(context.Background(), copiesSource, copiesTarget, true); err != nil {

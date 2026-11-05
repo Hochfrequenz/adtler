@@ -126,14 +126,27 @@ type TransportRequest struct {
 	Number      string
 	Owner       string
 	Description string
-	Status      string // "D" = modifiable, "L" = released
+	Status      string // TRSTATUS value, see the TransportStatus* constants
 }
 
-// Transport request status codes (TransportRequest.Status).
+// Transport request status codes (TransportRequest.Status), the values of
+// SAP's TRSTATUS domain. Use IsReleasedStatus rather than comparing against
+// TransportStatusReleased alone: a request released with import protection
+// carries TransportStatusReleasedProtected instead.
 const (
-	TransportStatusModifiable = "D" // request is open / editable
-	TransportStatusReleased   = "L" // request has been released
+	TransportStatusModifiable          = "D" // modifiable
+	TransportStatusModifiableProtected = "L" // modifiable, protected — not released
+	TransportStatusReleaseStarted      = "O" // release started, not yet finished
+	TransportStatusReleased            = "R" // released
+	TransportStatusReleasedProtected   = "N" // released, with import protection for repaired objects
 )
+
+// IsReleasedStatus reports whether a TRSTATUS value marks a released request:
+// TransportStatusReleased ("R") or TransportStatusReleasedProtected ("N").
+// TransportStatusReleaseStarted ("O") is not released yet.
+func IsReleasedStatus(status string) bool {
+	return status == TransportStatusReleased || status == TransportStatusReleasedProtected
+}
 
 // TransportCheckResult is returned by CheckTransport.
 type TransportCheckResult struct {
