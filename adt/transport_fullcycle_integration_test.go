@@ -26,42 +26,13 @@ func extractTransportFromError(err error) string {
 //
 //	go test ./adt/ -tags 'integration transport' -v
 
-func TestCreateTransport_Integration(t *testing.T) {
-	client := newIntegrationClient(t)
-	ctx := context.Background()
-
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP integration test", testPackage)
-	if err != nil {
-		t.Fatalf("CreateTransport failed: %v", err)
-	}
-	if trNumber == "" {
-		t.Fatal("expected non-empty transport number")
-	}
-	if len(trNumber) != 10 {
-		t.Errorf("expected 10-char transport number (e.g. CCCK900001), got %q", trNumber)
-	}
-	t.Logf("created transport: %s", trNumber)
-
-	// Verify description is set (regression test for #226).
-	info, err := client.GetTransportInfo(ctx, trNumber)
-	if err != nil {
-		t.Fatalf("GetTransportInfo: %v", err)
-	}
-	if info.Description == "" {
-		t.Errorf("transport %s has empty description — REQUEST_TEXT not working", trNumber)
-	} else {
-		t.Logf("description: %q", info.Description)
-	}
-	if info.State != adt.TransportStateModifiable {
-		t.Errorf("expected state modifiable, got %v (raw %q)", info.State, info.RawStatus)
-	}
-}
+// TestCreateTransport_Integration lives in transport_create_integration_test.go.
 
 func TestReleaseTransport_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP release test", testPackage)
+	trNumber, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP release test", Package: testPackage})
 	if err != nil {
 		t.Fatalf("CreateTransport failed: %v", err)
 	}
@@ -98,7 +69,7 @@ func TestAddToTransport_Integration(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
 
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP AddToTransport test", testPackage)
+	trNumber, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP AddToTransport test", Package: testPackage})
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}
@@ -162,7 +133,7 @@ func TestTransportFullCycle_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create transport
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "MCP full cycle test", testPackage)
+	trNumber, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP full cycle test", Package: testPackage})
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -74,13 +75,96 @@ func (c *httpClient) CheckTransport(ctx context.Context, pgmID, object, objectNa
 	return result, nil
 }
 
-func (c *httpClient) CreateTransport(ctx context.Context, category, target, description, devClass string) (string, error) {
+// TransportType is the category of a transport request (E070-TRFUNCTION).
+type TransportType string
+
+const (
+	// TransportTypeWorkbench is a workbench request (K): repository objects,
+	// target taken from the package's transport layer.
+	TransportTypeWorkbench TransportType = "K"
+	// TransportTypeCustomizing is a customizing request (W).
+	TransportTypeCustomizing TransportType = "W"
+	// TransportTypeCopies is a transport of copies (T): no tasks, target
+	// chosen freely.
+	TransportTypeCopies TransportType = "T"
+)
+
+// CreateTransportOptions describes the request CreateTransport creates.
+//
+// Every field either reaches SAP or is refused: an input SAP would ignore
+// is an error, never a silent no-op (#137).
+type CreateTransportOptions struct {
+	// Type is the request category; empty means TransportTypeWorkbench.
+	Type TransportType
+	// Description is the request's short text (E07T-AS4TEXT, 60 characters).
+	Description string
+	// Package is required for a workbench request, whose target SAP takes
+	// from the package's transport layer, and refused for every other type.
+	Package string
+	// Target is the transport target of a customizing request or a
+	// transport of copies (e.g. "DUM", a virtual system or "<SID>.<client>").
+	// Empty leaves it to SAP: a customizing request gets the client's
+	// default, a transport of copies none. Refused for a workbench request.
+	// SAP rejects an unknown target with 400 "Target ... does not exist" and
+	// compares case-sensitively, so CreateTransport upper-cases it.
+	Target string
+}
+
+// transportRequestsPath is the transport organizer collection. On S/4 a POST
+// to it creates a request of any type; ECC advertises no media type for it
+// in discovery and answers such a POST with 400 "user action is not
+// supported".
+const transportRequestsPath = "/sap/bc/adt/cts/transportrequests"
+
+// CreateTransport creates a transport request and returns its number.
+//
+// A workbench request goes to POST /sap/bc/adt/cts/transports on every
+// release. That handler reads only the package and the short text: it always
+// creates a K request with one task, and takes the target from the
+// package's transport layer (measured on SAP_BASIS 750 and 816, #137).
+//
+// A customizing request or a transport of copies goes to
+// POST /sap/bc/adt/cts/transportrequests, which only S/4 offers. Where
+// discovery lists no transport organizer media type for that collection,
+// CreateTransport returns ErrorNotSupported (ADTError type
+// ExceptionTypeCreateRequestUnsupported) without sending anything. That
+// signal was measured on two releases only: SAP_BASIS 816 advertises the
+// type and creates W and T requests; SAP_BASIS 750 lists the collection
+// without it and answers a create with 400 "user action is not supported".
+// A release in between that advertises the type without the create would
+// get the POST and report SAP's error. Without discovery data at all the
+// call fails with an ordinary error, never ErrorNotSupported, so a caller
+// does not mistake a failed discovery read for a missing capability.
+//
+// A customizing request gets one task owned by the logon user, a transport
+// of copies none, as in SE09.
+func (c *httpClient) CreateTransport(ctx context.Context, opts CreateTransportOptions) (string, error) {
+	typ := TransportType(strings.ToUpper(strings.TrimSpace(string(opts.Type))))
+	pkg := strings.ToUpper(strings.TrimSpace(opts.Package))
+	target := strings.ToUpper(strings.TrimSpace(opts.Target))
+	switch typ {
+	case "", TransportTypeWorkbench:
+		if pkg == "" {
+			return "", errors.New("CreateTransport: a workbench request needs a package; SAP takes its target from the package's transport layer")
+		}
+		if target != "" {
+			return "", errors.New("CreateTransport: a workbench request takes its target from the package's transport layer; leave Target empty")
+		}
+		return c.createWorkbenchRequest(ctx, opts.Description, pkg)
+	case TransportTypeCustomizing, TransportTypeCopies:
+		if pkg != "" {
+			return "", fmt.Errorf("CreateTransport: request type %s does not belong to a package; leave Package empty", typ)
+		}
+		return c.createTypedRequest(ctx, typ, opts.Description, target)
+	default:
+		return "", fmt.Errorf("CreateTransport: unsupported request type %q (want K, W or T)", opts.Type)
+	}
+}
+
+func (c *httpClient) createWorkbenchRequest(ctx context.Context, description, pkg string) (string, error) {
 	reqData := adtxml.CreateTransportData{
-		Category:    strings.ToUpper(category),
-		Target:      strings.ToUpper(target),
-		Text:        description,
-		Description: description,
-		DevClass:    strings.ToUpper(devClass),
+		DevClass: pkg,
+		Text:     description,
 	}
 	body, err := adtxml.MarshalASXData(reqData)
 	if err != nil {
@@ -116,6 +200,61 @@ func (c *httpClient) CreateTransport(ctx context.Context, category, target, desc
 	}
 
 	return "", fmt.Errorf("CreateTransport: transport created but number not returned — check GetTransportRequests to find it")
+}
+
+func (c *httpClient) createTypedRequest(ctx context.Context, typ TransportType, description, target string) (string, error) {
+	if err := c.ensureCSRF(ctx); err != nil {
+		return "", fmt.Errorf("CreateTransport: %w", err)
+	}
+	c.mu.Lock()
+	haveDiscovery := len(c.discovery) > 0
+	accepts := c.discovery[transportRequestsPath]
+	c.mu.Unlock()
+	if !haveDiscovery {
+		return "", fmt.Errorf("CreateTransport: no discovery data, so whether this system can create a request of type %s is unknown", typ)
+	}
+	if !slices.Contains(accepts, transportOrganizerType) {
+		return "", &ADTError{
+			Type: ExceptionTypeCreateRequestUnsupported,
+			Message: fmt.Sprintf("CreateTransport: this system cannot create a request of type %s over ADT "+
+				"(discovery offers no media type for %s); create it in SE09 instead", typ, transportRequestsPath),
+		}
+	}
+
+	req := &adtxml.TMRequest{Desc: description, Type: string(typ), Target: target}
+	// SE09 gives a customizing request a task for its owner; a transport of
+	// copies has none. SAP creates exactly the tasks listed: a request sent
+	// without tm:task gets none (measured on SAP_BASIS 816), which is what
+	// happens when the client has no user name configured.
+	if owner := strings.ToUpper(strings.TrimSpace(c.cfg.User)); typ == TransportTypeCustomizing && owner != "" {
+		req.Tasks = []adtxml.TMTask{{Owner: owner}}
+	}
+	body, err := xml.Marshal(adtxml.TMRoot{NSTM: nsTM, Request: req})
+	if err != nil {
+		return "", fmt.Errorf("CreateTransport marshal: %w", err)
+	}
+
+	resp, err := c.doMutate(ctx, http.MethodPost, transportRequestsPath,
+		strings.NewReader(xml.Header+string(body)),
+		map[string]string{
+			"Content-Type": transportOrganizerType,
+			"Accept":       transportOrganizerType,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("CreateTransport: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := checkResponse(resp); err != nil {
+		return "", err
+	}
+
+	data, _ := io.ReadAll(resp.Body)
+	var created adtxml.TMCreatedRequest
+	if xml.Unmarshal(data, &created) == nil && created.Request.Number != "" {
+		return created.Request.Number, nil
+	}
+	return "", fmt.Errorf("CreateTransport: request created but number not returned — check GetTransportRequests to find it")
 }
 
 func (c *httpClient) CreateTransportTask(ctx context.Context, parentTransport, owner, description string) (string, error) {

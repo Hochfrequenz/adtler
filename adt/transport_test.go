@@ -199,64 +199,26 @@ func TestCreateTransport(t *testing.T) {
 	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
 	client := adt.NewClient(cfg)
 
-	nr, err := client.CreateTransport(context.Background(), "K", "DUM", "My description", "ZTEST")
+	nr, err := client.CreateTransport(context.Background(), adt.CreateTransportOptions{Description: "My description", Package: "ZTEST"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if nr != "AAAK900999" {
 		t.Errorf("transport number: got %q, want %q", nr, "AAAK900999")
 	}
-	// REQUEST_TEXT sets AS4TEXT (short text) on both ECC and S4 (see #226).
-	// DESCRIPTION sets the documentation tab (required for release on some systems).
+	// SAP reads the body into SADT_CREATE_CORR_REQUEST. REQUEST_TEXT becomes
+	// the short text (AS4TEXT); CATEGORY, TARGET and DESCRIPTION are not part
+	// of that structure and were dropped by SAP without an error (#137).
 	if !strings.Contains(gotBody, "<REQUEST_TEXT>My description</REQUEST_TEXT>") {
 		t.Errorf("body must contain REQUEST_TEXT, got:\n%s", gotBody)
 	}
-	if !strings.Contains(gotBody, "<DESCRIPTION>My description</DESCRIPTION>") {
-		t.Errorf("body must contain DESCRIPTION, got:\n%s", gotBody)
+	if !strings.Contains(gotBody, "<DEVCLASS>ZTEST</DEVCLASS>") {
+		t.Errorf("body must contain DEVCLASS, got:\n%s", gotBody)
 	}
-	if strings.Contains(gotBody, "<AS4TEXT>") {
-		t.Error("body must not contain AS4TEXT (use REQUEST_TEXT instead)")
-	}
-}
-
-func TestCreateTransportWithoutPackage(t *testing.T) {
-	var gotBody string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == csrfEndpoint {
-			w.Header().Set("X-CSRF-Token", "token")
-			w.WriteHeader(http.StatusOK)
-			return
+	for _, unknown := range []string{"<CATEGORY>", "<TARGET>", "<DESCRIPTION>", "<AS4TEXT>"} {
+		if strings.Contains(gotBody, unknown) {
+			t.Errorf("body must not contain %s, which SADT_CREATE_CORR_REQUEST does not have, got:\n%s", unknown, gotBody)
 		}
-		data, _ := io.ReadAll(r.Body)
-		gotBody = string(data)
-		w.Header().Set("Content-Type", "application/vnd.sap.as+xml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
-<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
-  <asx:values>
-    <DATA>
-      <TRKORR>AAAK900888</TRKORR>
-    </DATA>
-  </asx:values>
-</asx:abap>`))
-	}))
-	defer srv.Close()
-
-	cfg := sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"}
-	client := adt.NewClient(cfg)
-
-	nr, err := client.CreateTransport(context.Background(), "K", "", "No package transport", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if nr != "AAAK900888" {
-		t.Errorf("transport number: got %q", nr)
-	}
-	if strings.Contains(gotBody, "<DEVCLASS>") {
-		t.Errorf("body must not contain DEVCLASS when package is empty, got:\n%s", gotBody)
-	}
-	if strings.Contains(gotBody, "<TARGET>") {
-		t.Errorf("body must not contain TARGET when target is empty, got:\n%s", gotBody)
 	}
 }
 

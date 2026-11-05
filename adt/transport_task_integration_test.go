@@ -5,6 +5,8 @@ package adt_test
 import (
 	"context"
 	"testing"
+
+	"github.com/Hochfrequenz/adtler/adt"
 )
 
 func TestCreateAndDeleteTransportTask_Integration(t *testing.T) {
@@ -12,7 +14,7 @@ func TestCreateAndDeleteTransportTask_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a transport to test task operations
-	trNumber, err := client.CreateTransport(ctx, "K", "DUM", "task lifecycle test", "Z_ADT_MCP_TEST")
+	trNumber, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "task lifecycle test", Package: "Z_ADT_MCP_TEST"})
 	if err != nil {
 		t.Fatalf("CreateTransport: %v", err)
 	}

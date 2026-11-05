@@ -56,8 +56,7 @@ func TestRemoveFromTransport_Integration(t *testing.T) {
 			}
 
 			// 1. Create a transport to hold the test object.
-			trNumber, err := sys.Client.CreateTransport(ctx, "K", "DUM",
-				"adtler #125 RemoveFromTransport test", testPackage)
+			trNumber, err := sys.Client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "adtler #125 RemoveFromTransport test", Package: testPackage})
 			if err != nil {
 				t.Fatalf("[1] CreateTransport: %v", err)
 			}

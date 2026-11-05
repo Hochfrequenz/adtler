@@ -153,7 +153,10 @@ type VersionClient interface {
 // TransportClient manages CTS transports.
 type TransportClient interface {
 	CheckTransport(ctx context.Context, pgmID, object, objectName string) (*TransportCheckResult, error)
-	CreateTransport(ctx context.Context, category, target, description, devClass string) (string, error)
+	// CreateTransport creates a transport request; see CreateTransportOptions
+	// for what each type needs. Customizing requests and transports of copies
+	// need S/4 and return ErrorNotSupported on ECC (#137).
+	CreateTransport(ctx context.Context, opts CreateTransportOptions) (string, error)
 	CreateTransportTask(ctx context.Context, parentTransport, owner, description string) (string, error)
 	DeleteTransport(ctx context.Context, transportNumber string) error
 	ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error)

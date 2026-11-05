@@ -11,7 +11,7 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-// TestCopyTransportObjects_Integration fills a transport of copies from a
+// TestCopyTransportObjects_Integration fills a target request from a
 // workbench request and from a package (#267), on every configured system.
 //
 // It branches on what the library reports, never on the system's name. A
@@ -30,6 +30,12 @@ import (
 // at request level. Copying only the request's own entries yields a
 // CORR MERG note and no program; the program showing up in the copy is what
 // proves CopyTransportObjects also copied the task.
+//
+// The targets are transports of copies (TRFUNCTION T) wherever this client
+// can create one (S/4, #137). Before #137 they were workbench requests on
+// every release, because SAP dropped the category CreateTransport sent. On a
+// release without the typed create the target is a workbench request: both
+// actions are refused before any write there, so its type does not matter.
 func TestCopyTransportObjects_Integration(t *testing.T) {
 	ctx := context.Background()
 
@@ -43,8 +49,8 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 			// otherwise pass as "unsupported".
 			want := expectAddObjectsSupport(t, c)
 
-			source := createDisposableTransport(t, c, "K", "adtler #267 copy source")
-			target := createDisposableTransport(t, c, "T", "adtler #267 transport of copies")
+			source := createDisposableTransport(t, c, "adtler #267 copy source")
+			target := createCopiesTarget(t, c, source, "adtler #267 transport of copies")
 
 			// 1. Decide the branch with an empty source: nothing created yet.
 			err := c.CopyTransportObjects(ctx, source, target, true)
@@ -85,24 +91,24 @@ func TestCopyTransportObjects_Integration(t *testing.T) {
 				}
 			})
 
-			// 3. Copy the request into the transport of copies.
+			// 3. Copy the request into the target request.
 			if err := c.CopyTransportObjects(ctx, source, target, true); err != nil {
 				t.Fatalf("[3] CopyTransportObjects: %v", err)
 			}
 			if !transportLists(t, c, target, "PROG", objName) {
-				t.Fatalf("[3] the program is not in the transport of copies after CopyTransportObjects")
+				t.Fatalf("[3] the program is not in the target request after CopyTransportObjects")
 			}
-			t.Logf("[3] program copied into the transport of copies")
+			t.Logf("[3] program copied into the target request")
 
-			// 4. Fill a second transport of copies from the package.
-			byPackage := createDisposableTransport(t, c, "T", "adtler #267 package copy")
+			// 4. Fill a second target request from the package.
+			byPackage := createCopiesTarget(t, c, source, "adtler #267 package copy")
 			if err := c.AddPackageToTransport(ctx, testPackage, byPackage, false); err != nil {
 				t.Fatalf("[4] AddPackageToTransport: %v", err)
 			}
 			if !transportLists(t, c, byPackage, "PROG", objName) {
-				t.Fatalf("[4] the program is not in the transport of copies after AddPackageToTransport")
+				t.Fatalf("[4] the program is not in the target request after AddPackageToTransport")
 			}
-			t.Logf("[4] package content added to the transport of copies")
+			t.Logf("[4] package content added to the target request")
 		})
 	}
 }
@@ -124,6 +130,20 @@ const (
 // 756 and newer must accept, and 755 is left open.
 func expectAddObjectsSupport(t *testing.T, c adt.Client) addObjectsExpectation {
 	t.Helper()
+	release := sapBasisRelease(t, c)
+	switch {
+	case release >= 756:
+		return addObjectsSupported
+	case release <= 754:
+		return addObjectsUnsupported
+	default:
+		return addObjectsEither
+	}
+}
+
+// sapBasisRelease reads the SAP_BASIS release (e.g. 750, 816) from CVERS.
+func sapBasisRelease(t *testing.T, c adt.Client) int {
+	t.Helper()
 	res, err := c.RunQuery(context.Background(), "SELECT release FROM cvers WHERE component = 'SAP_BASIS'", 1)
 	if err != nil {
 		t.Fatalf("CVERS query for SAP_BASIS: %v", err)
@@ -136,29 +156,53 @@ func expectAddObjectsSupport(t *testing.T, c adt.Client) addObjectsExpectation {
 		t.Fatalf("SAP_BASIS release is not numeric: %v", err)
 	}
 	t.Logf("SAP_BASIS %d", release)
-	switch {
-	case release >= 756:
-		return addObjectsSupported
-	case release <= 754:
-		return addObjectsUnsupported
-	default:
-		return addObjectsEither
-	}
+	return release
 }
 
-// createDisposableTransport creates a request in testPackage and deletes it
-// again when the test ends.
-func createDisposableTransport(t *testing.T, c adt.Client, category, description string) string {
+// createDisposableTransport creates a workbench request in testPackage and
+// deletes it again when the test ends.
+func createDisposableTransport(t *testing.T, c adt.Client, description string) string {
 	t.Helper()
-	number, err := c.CreateTransport(context.Background(), category, "DUM", description, testPackage)
+	number, err := c.CreateTransport(context.Background(), adt.CreateTransportOptions{Description: description, Package: testPackage})
 	if err != nil {
-		t.Fatalf("CreateTransport(%s): %v", category, err)
+		t.Fatalf("CreateTransport(%q): %v", description, err)
 	}
 	t.Cleanup(func() {
 		if err := c.DeleteTransport(context.Background(), number); err != nil {
-			t.Logf("[cleanup] delete %s request: %v (manual cleanup may be needed)", category, err)
+			t.Logf("[cleanup] delete request %q: %v (manual cleanup may be needed)", description, err)
 		}
 	})
+	return number
+}
+
+// createCopiesTarget creates a transport of copies aimed at the target the
+// source request got from its package, and deletes it when the test ends.
+// Where the release has no typed create, it creates a workbench request
+// instead.
+func createCopiesTarget(t *testing.T, c adt.Client, source, description string) string {
+	t.Helper()
+	_, target := readE070(t, c, source)
+	number, err := c.CreateTransport(context.Background(), adt.CreateTransportOptions{
+		Type: adt.TransportTypeCopies, Description: description, Target: target,
+	})
+	if adt.ClassifyError(err) == adt.ErrorNotSupported {
+		// Only SAP_BASIS 816 is known to create one, the same threshold
+		// TestCreateTransport_Integration asserts. A release that has the
+		// copy actions (756 and newer) but not the typed create still runs
+		// the copy test, against a workbench target.
+		if release := sapBasisRelease(t, c); release >= 816 {
+			t.Fatalf("CreateTransport(T) refused on SAP_BASIS %d, which has the typed create: %v", release, err)
+		}
+		t.Logf("no transport of copies on this release; target is a workbench request")
+		return createDisposableTransport(t, c, description)
+	}
+	if err != nil {
+		t.Fatalf("CreateTransport(T, %q): %v", description, err)
+	}
+	t.Cleanup(func() { deleteTransportAfterTest(t, c, number) })
+	if fn, _ := readE070(t, c, number); fn != "T" {
+		t.Fatalf("copy target has TRFUNCTION %q, want T", fn)
+	}
 	return number
 }
 

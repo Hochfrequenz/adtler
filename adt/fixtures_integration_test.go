@@ -164,7 +164,7 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, str
 		if pkg == "$TMP" {
 			continue
 		}
-		tr, err := client.CreateTransport(ctx, "K", "DUM", "MCP integration test fixtures", pkg)
+		tr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP integration test fixtures", Package: pkg})
 		if err == nil {
 			fixtureTransport = tr
 			fmt.Printf("  [transport] %s for package %s\n", tr, pkg)

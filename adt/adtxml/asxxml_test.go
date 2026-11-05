@@ -133,11 +133,8 @@ func TestUnmarshalASXData_TransportCheckResponse(t *testing.T) {
 
 func TestMarshalASXData_TransportCreateRequest(t *testing.T) {
 	input := CreateTransportData{
-		Category:    "K",
-		Target:      "DUM",
-		Text:        "My transport description",
-		Description: "My transport description",
-		DevClass:    "$TMP",
+		DevClass: "$TMP",
+		Text:     "My transport description",
 	}
 
 	data, err := MarshalASXData(input)
@@ -148,9 +145,6 @@ func TestMarshalASXData_TransportCreateRequest(t *testing.T) {
 	xmlStr := string(data)
 	if !strings.Contains(xmlStr, `xmlns:asx="http://www.sap.com/abapxml"`) {
 		t.Error("missing asx namespace")
-	}
-	if !strings.Contains(xmlStr, "<CATEGORY>K</CATEGORY>") {
-		t.Error("missing CATEGORY element")
 	}
 	if !strings.Contains(xmlStr, "<REQUEST_TEXT>My transport description</REQUEST_TEXT>") {
 		t.Error("missing REQUEST_TEXT element")
