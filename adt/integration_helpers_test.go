@@ -20,11 +20,11 @@ import (
 // It must exist on the target system before running integration tests.
 // Source and installation instructions: https://github.com/Hochfrequenz/Z_ADT_MCP_TEST
 
+const testPackage = "Z_ADT_MCP_TEST"
+
 // integrationSupportedLanguages is the language allow-list handed to
 // sapmcpconfig.Load, which requires one since v2.
 var integrationSupportedLanguages = []string{"DE", "EN"}
-
-const testPackage = "Z_ADT_MCP_TEST"
 
 // Test fixture URIs — all objects live in testPackage (S4) or $TMP (ECC).
 // Created automatically by TestMain via setupFixtures. See also fixtures_integration_test.go.

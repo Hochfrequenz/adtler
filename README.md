@@ -119,9 +119,9 @@ default — set `language` explicitly if objects should be German-original. A
 hand-built `SAPSystem` with an empty `Language` sends no language and leaves
 the choice to SAP.
 
-Since sap-mcp-config v2, loading a config requires the caller to pass the
-languages its server supports (`sapmcpconfig.Load(path, []string{"DE", "EN"})`);
-sap-mcp-config rejects any system whose `language` is not on that list.
+Since sap-mcp-config v2, the caller passes the languages its server supports
+(`sapmcpconfig.Load(path, []string{"DE", "EN"})`, the list v1 had hardcoded);
+a system whose `language` is not on that list is rejected.
 
 ## Testing
 
