@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )

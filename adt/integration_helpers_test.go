@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 
 	"github.com/Hochfrequenz/adtler/adt"
 )
@@ -19,7 +19,12 @@ import (
 // testPackage is the SAP package that holds all persistent integration test objects.
 // It must exist on the target system before running integration tests.
 // Source and installation instructions: https://github.com/Hochfrequenz/Z_ADT_MCP_TEST
+
 const testPackage = "Z_ADT_MCP_TEST"
+
+// integrationSupportedLanguages is the language allow-list handed to
+// sapmcpconfig.Load, which requires one since v2.
+var integrationSupportedLanguages = []string{"DE", "EN"}
 
 // Test fixture URIs — all objects live in testPackage (S4) or $TMP (ECC).
 // Created automatically by TestMain via setupFixtures. See also fixtures_integration_test.go.
@@ -63,7 +68,7 @@ func integrationConfigFromFile() (sapmcpconfig.SAPSystem, bool) {
 			continue
 		}
 		var err error
-		cfg, err = sapmcpconfig.Load(p)
+		cfg, err = sapmcpconfig.Load(p, integrationSupportedLanguages)
 		if err == nil {
 			break
 		}
@@ -171,7 +176,7 @@ func eachSystem(t *testing.T) []integrationSystem {
 		if p == "" {
 			continue
 		}
-		c, err := sapmcpconfig.Load(p)
+		c, err := sapmcpconfig.Load(p, integrationSupportedLanguages)
 		if err == nil {
 			cfg = c
 			break

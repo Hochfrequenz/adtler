@@ -1,5 +1,5 @@
-github.com/Hochfrequenz/sap-mcp-config v1.1.1 h1:FCpazy8/qaw+UNxQkRbMiQrEeiDHgw9aKchwLMFfnyo=
-github.com/Hochfrequenz/sap-mcp-config v1.1.1/go.mod h1:FYNXWpfH16558Ai3BxYbJeTnKelaOqwbxi4TiFeYWsY=
+github.com/Hochfrequenz/sap-mcp-config/v2 v2.0.0 h1:vv6GQ4sgvkZpM/+gISxqRwK6JgybeGhsflZ4kKtF4aU=
+github.com/Hochfrequenz/sap-mcp-config/v2 v2.0.0/go.mod h1:Zje5Y8lphBOtoip9Yjn4PMU2PcwnR7kz58BIrwKiqYc=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 h1:PlNWJRxu5APSV0pWqfIsZ0qt9OOGHSWfZQ4zvx+WgWs=

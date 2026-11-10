@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // unauthorizedBody is a stand-in for the HTML page SAP sends with a 401. It

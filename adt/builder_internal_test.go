@@ -3,7 +3,7 @@ package adt
 import (
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func TestEffectiveOAuth2ClientID(t *testing.T) {

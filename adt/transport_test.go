@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func TestCheckTransport(t *testing.T) {

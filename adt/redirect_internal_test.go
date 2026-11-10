@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 const redirectTestSource = "/sap/bc/adt/programs/programs/ZTEST"

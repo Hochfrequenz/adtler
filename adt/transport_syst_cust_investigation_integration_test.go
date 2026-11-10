@@ -44,7 +44,7 @@ import (
 	"strings"
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // issue63System pairs a system name with its internal *httpClient for
@@ -72,7 +72,7 @@ func issue63Systems(t *testing.T) []issue63System {
 		if p == "" {
 			continue
 		}
-		c, err := sapmcpconfig.Load(p)
+		c, err := sapmcpconfig.Load(p, []string{"DE", "EN"})
 		if err == nil {
 			cfg = c
 			break

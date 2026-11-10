@@ -31,7 +31,7 @@ import (
     "fmt"
 
     "github.com/Hochfrequenz/adtler/adt"
-    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func main() {
@@ -118,6 +118,10 @@ only in that language (#247). sap-mcp-config fills an unset `language` with
 default — set `language` explicitly if objects should be German-original. A
 hand-built `SAPSystem` with an empty `Language` sends no language and leaves
 the choice to SAP.
+
+Since sap-mcp-config v2, the caller passes the languages its server supports
+(`sapmcpconfig.Load(path, []string{"DE", "EN"})`, the list v1 had hardcoded);
+a system whose `language` is not on that list is rejected.
 
 ## Testing
 

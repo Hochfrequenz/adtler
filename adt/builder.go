@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Hochfrequenz/adtler/auth"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // NewClientsFromConfig builds one Client per system in cfg, ready to pass to

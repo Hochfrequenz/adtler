@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func TestPoolProgramNames(t *testing.T) {

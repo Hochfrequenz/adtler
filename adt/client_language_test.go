@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // languageHeaders records the logon-language headers of every request a

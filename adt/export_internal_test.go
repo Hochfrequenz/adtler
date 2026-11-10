@@ -3,7 +3,7 @@ package adt
 import (
 	"context"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // TestClient extends Client with test-only hooks for unit tests in the

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // TestResolveETag_FallsBackToFetchETag regression-tests adtler#9 and #14:

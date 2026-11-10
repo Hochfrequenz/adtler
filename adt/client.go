@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // SourceClient reads and writes ABAP source code.

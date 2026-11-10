@@ -34,7 +34,7 @@ import (
     "context"
     "fmt"
 
-    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
     "github.com/Hochfrequenz/adtler/adt"
 )
 
@@ -108,7 +108,7 @@ a key-user package report `standard`.
 Use `ClientRegistry` to manage multiple SAP systems:
 
 ```go
-cfg, _ := sapmcpconfig.Load("~/.config/sap-mcp/systems.json")
+cfg, _ := sapmcpconfig.Load("~/.config/sap-mcp/systems.json", []string{"DE", "EN"})
 registry, _ := adt.NewClientRegistry(cfg, "my-app")
 
 // Switch systems at runtime
