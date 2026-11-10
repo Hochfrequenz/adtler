@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // CreatePackage sent only a Content-Type and no Accept header, so S/4 rejected

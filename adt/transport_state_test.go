@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func TestTransportStateOf(t *testing.T) {

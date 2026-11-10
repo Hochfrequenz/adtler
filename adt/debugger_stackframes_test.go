@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // Anonymised shapes of live responses: 816 lists stackPosition etc. first and

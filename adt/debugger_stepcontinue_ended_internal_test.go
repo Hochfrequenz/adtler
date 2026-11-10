@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // stepEndpointPath mirrors the debugger dispatch endpoint used by Step,

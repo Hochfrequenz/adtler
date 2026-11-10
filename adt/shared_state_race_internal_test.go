@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // Tests for issue #191: shared state on httpClient and DebugSession that

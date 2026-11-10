@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 // Issue #114: RunClass used to POST through the short (30-second) HTTP client,

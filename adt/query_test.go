@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Hochfrequenz/adtler/adt/adtxml"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func TestRunQuery_RejectNonSelect(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 
 	"github.com/Hochfrequenz/adtler/adt"
 	"github.com/Hochfrequenz/adtler/adt/custexport"
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 
 	_ "modernc.org/sqlite"
 )

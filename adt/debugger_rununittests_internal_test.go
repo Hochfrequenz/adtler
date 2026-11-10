@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 const minimalRunResultXML = `<?xml version="1.0" encoding="utf-8"?>` +
