@@ -45,19 +45,19 @@ The reviewer has no memory of the development conversation and reviews purely on
 
 All GitHub Actions checks must pass before proceeding: lint (`golangci-lint` with `dupl`, `goconst`, `gocyclo`), unit tests (Go 1.26 + 1.27), a compile check of the integration tests (`go vet -tags='integration transport' ./...`), coverage, CodeQL. Common lint issues: `goconst` (hoist repeated strings to constants), `gofmt` (godoc code blocks need tab indent after `//`), `staticcheck` (use tagged switch).
 
-#### 4. Local agent with SAP access runs integration tests
+#### 4. Integration tests run against real SAP systems
 
-A separate Claude instance with access to real SAP systems (R/3 and S/4 via `~/.config/sap-mcp/systems.json`) runs the integration test:
+Whoever has access to real SAP systems (R/3 and S/4 via `~/.config/sap-mcp/systems.json`) runs the integration tests. That is normally the developing agent itself: if it has system access, it runs them and does not wait for anyone. A separate Claude instance only takes over when the developing agent has no system access. Independence is the reviewer's job (step 2), not this step's.
 
-- Checks out the fix branch
-- Runs: `SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" go test -tags=integration -v -run <TestName> ./adt/...`
-- For transport-relevant changes, also runs: `go test -tags='integration transport' ./adt/...` (these create and release real transports — protected by the separate `transport` build tag)
-- Posts a structured result comment on the PR with:
+- Check out the fix branch
+- Run: `SAP_INTEGRATION_SYSTEMS="<r3-key>,<s4-key>" go test -tags=integration -v -run <TestName> ./adt/...`
+- For transport-relevant changes, also run: `go test -tags='integration transport' ./adt/...` (these create and release real transports — protected by the separate `transport` build tag)
+- Post a structured result comment on the PR with:
   - Per-system PASS/FAIL status
   - Relevant test output (no credentials or hostnames)
   - Cleanup notes (leftover test objects in `$TMP`)
 
-This agent does NOT push code — it runs tests and comments only.
+A separate instance brought in only for this step does NOT push code — it runs tests and comments only.
 
 #### 5. Merge
 
