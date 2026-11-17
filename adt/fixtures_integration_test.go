@@ -143,6 +143,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 
+	_ = client.Logout(ctx) // releases any lock the setup or teardown left (#300)
 	os.Exit(code)
 }
 
