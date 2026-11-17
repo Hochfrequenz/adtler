@@ -815,6 +815,10 @@ func TestSetSource_ClassIntoRequestReturnsHeaderErrorAfter423(t *testing.T) {
 	if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusForbidden {
 		t.Fatalf("err: got %v, want the header write's 403", err)
 	}
+	// #280: the query form's 423 is reported too, not dropped.
+	if !strings.Contains(err.Error(), "is not locked") {
+		t.Errorf("err: got %q, want the first attempt's 423 in it as well", err)
+	}
 	if len(writes) < 2 || !writes[0].query {
 		t.Fatalf("writes: got %+v, want query first", writes)
 	}
@@ -822,6 +826,42 @@ func TestSetSource_ClassIntoRequestReturnsHeaderErrorAfter423(t *testing.T) {
 		if !w.header || w.query {
 			t.Errorf("write %d after the 423: got %+v, want header delivery only", i+1, w)
 		}
+	}
+}
+
+// #280: when the query-delivery retry fails too, the header attempt's error is
+// reported along with it. On ECC the failed header write ends the lock, so the
+// retry always answers 423 "not locked", and only the first answer names the
+// cause. The retry's error still comes first for errors.As.
+func TestSetSource_FailedRetryKeepsTheFirstError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == csrfEndpoint {
+			w.Header().Set("X-CSRF-Token", "token")
+			return
+		}
+		if r.URL.Query().Get("lockHandle") != "" {
+			w.WriteHeader(http.StatusLocked)
+			_, _ = w.Write([]byte(notLocked281))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(notValid281))
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	_, err := client.SetSource(context.Background(), "/sap/bc/adt/oo/interfaces/zif_280", "INTERFACE zif_280 PUBLIC.\nENDINTERFACE.", lockH281, request281, `"e"`)
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusLocked {
+		t.Fatalf("err: got %v, want the retry's 423 first", err)
+	}
+	// The first error is text only, so a failure of the retry that is no SAP
+	// answer cannot be mistaken for the first attempt's 403.
+	if errors.Unwrap(err) != error(adtErr) {
+		t.Errorf("err wraps %v, want the retry's error alone", errors.Unwrap(err))
+	}
+	if !strings.Contains(err.Error(), "is not valid for object") {
+		t.Errorf("err: got %q, want the header attempt's 403 in it as well", err)
 	}
 }
 
