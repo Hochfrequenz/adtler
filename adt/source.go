@@ -436,9 +436,24 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 	// where the header IS read, succeeds on the first attempt and never retries.
 	if err != nil && lockHandle != "" &&
 		(isInvalidLockHandle(err) || isCurrentlyEditing(err) || isLockHandleParameterNotFound(err)) {
-		return c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+		newETag, retryErr := c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
+		return newETag, withFirstAttempt(retryErr, "the lock handle as header", err)
 	}
 	return newETag, err
+}
+
+// withFirstAttempt returns the error of a write's second delivery attempt
+// with the first attempt's error attached, or nil when the second attempt
+// succeeded. On ECC a failed write also ends the lock, so the second attempt
+// then always fails with 423 "not locked", and the first answer is the one
+// that names the cause (#280). Both errors stay reachable through errors.As
+// and errors.Is; the second attempt's comes first, so callers that branch on
+// it see what they saw before.
+func withFirstAttempt(retryErr error, firstDelivery string, firstErr error) error {
+	if retryErr == nil {
+		return nil
+	}
+	return fmt.Errorf("%w (first attempt, with %s: %w)", retryErr, firstDelivery, firstErr)
 }
 
 // setClassSourceIntoRequest writes a class's main source with a corrNr,
@@ -465,15 +480,15 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 // holds the class. That fallback is a write without a live lock, as every
 // header-delivered class write after such a GET was before #281; the 423
 // says the lock is gone, so the trade-off is now made knowingly rather than
-// by accident. If the header form fails as well, its error is returned and
-// the 423 is dropped (#280 tracks reporting both). Without a corrNr nothing
-// changes, so trySetSource keeps
-// the header-first order there. Interfaces keep it too: their handler was
+// by accident. If the header form fails as well, its error is returned with
+// the 423 attached (#280). Without a corrNr nothing changes, so trySetSource
+// keeps the header-first order there. Interfaces keep it too: their handler was
 // not measured on ECC with a fresh request.
 func (c *httpClient) setClassSourceIntoRequest(ctx context.Context, objectURI, source, lockHandle, transport, etag string) (string, error) {
 	newETag, err := c.setSourceWithLockParam(ctx, objectURI, source, lockHandle, transport, etag)
 	if err != nil && isInvalidLockHandle(err) {
-		return c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
+		newETag, retryErr := c.setSourceWithLockHeader(ctx, objectURI, source, lockHandle, transport, etag)
+		return newETag, withFirstAttempt(retryErr, "the lock handle as query parameter", err)
 	}
 	return newETag, err
 }
