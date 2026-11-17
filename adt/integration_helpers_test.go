@@ -151,6 +151,11 @@ func newTmpProgram(t *testing.T, c adt.Client, prefix string) (name, uri string)
 // the tests after it (#300). It is registered first, so it runs after every
 // cleanup the test registers itself. Errors are ignored: a session that is
 // already gone holds no locks.
+//
+// shortcut: after a 401 the logoff sends the rejected credential once more,
+// one extra failed logon per test. A run with wrong credentials normally
+// stops earlier, in TestMain's fixture setup, before any test runs; track the
+// client's 401s here if runs without that setup become common.
 func logOffAtEnd(t *testing.T, c adt.Client) adt.Client {
 	t.Helper()
 	t.Cleanup(func() { _ = c.Logout(context.Background()) })

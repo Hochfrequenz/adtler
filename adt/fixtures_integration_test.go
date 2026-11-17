@@ -161,6 +161,7 @@ func reportLeftLocks(ctx context.Context) {
 	left := 0
 	for _, sys := range systems {
 		c := adt.NewClient(sys.Config)
+		rejected := false
 		for _, f := range testFixtures {
 			h, err := c.LockObject(ctx, f.objectURI)
 			if err == nil {
@@ -174,10 +175,13 @@ func reportLeftLocks(ctx context.Context) {
 			left++
 			fmt.Printf("  [WARNING: cannot lock] %s %s on %s: %v\n", f.objType, f.name, sys.Name, err)
 			if kind == adt.ErrorUnauthorized {
+				rejected = true
 				break // a 401 is final: no further logon attempts (#222)
 			}
 		}
-		_ = c.Logout(ctx)
+		if !rejected { // a logoff would send the rejected credential once more
+			_ = c.Logout(ctx)
+		}
 	}
 	if left == 0 {
 		fmt.Println("  no fixture is locked")
