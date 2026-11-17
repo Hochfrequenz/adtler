@@ -119,6 +119,9 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	fmt.Println("=== Integration test teardown: checking fixtures for locks left behind ===")
+	reportLeftLocks(ctx)
+
 	// Teardown: delete objects we created (reverse order to handle dependencies).
 	if len(created) > 0 {
 		fmt.Println("=== Integration test teardown: deleting created fixtures ===")
@@ -141,6 +144,43 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+// reportLeftLocks tries to lock every shared fixture from a fresh session on
+// every system of the run and prints each one it cannot lock (#300). A lock a
+// test of this run left behind shows up here, close to its cause, instead of
+// as a "currently editing" failure in some later test. So does a lock held by
+// another run against the same system, which is why this warns instead of
+// failing the run.
+func reportLeftLocks(ctx context.Context) {
+	systems, skip := integrationSystemConfigs()
+	if skip != "" {
+		return
+	}
+	left := 0
+	for _, sys := range systems {
+		c := adt.NewClient(sys.Config)
+		for _, f := range testFixtures {
+			h, err := c.LockObject(ctx, f.objectURI)
+			if err == nil {
+				_ = c.UnlockObject(ctx, f.objectURI, h)
+				continue
+			}
+			kind := adt.ClassifyError(err)
+			if kind == adt.ErrorNotFound {
+				continue // this fixture does not exist on this system
+			}
+			left++
+			fmt.Printf("  [WARNING: cannot lock] %s %s on %s: %v\n", f.objType, f.name, sys.Name, err)
+			if kind == adt.ErrorUnauthorized {
+				break // a 401 is final: no further logon attempts (#222)
+			}
+		}
+		_ = c.Logout(ctx)
+	}
+	if left == 0 {
+		fmt.Println("  no fixture is locked")
+	}
 }
 
 // fixturePackages lists packages to try when creating fixtures, in order of preference.

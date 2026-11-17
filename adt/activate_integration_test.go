@@ -63,53 +63,50 @@ func TestGetInactiveObjects_Integration(t *testing.T) {
 }
 
 func TestActivateObjects_WithErrors_Integration(t *testing.T) {
-	client := newIntegrationClient(t)
-	ctx := context.Background()
+	// A throwaway $TMP program instead of the shared fixture report: the
+	// fixture is in a transportable package, so a write without a request
+	// failed on S/4, and the early exit left the fixture locked (#300).
+	for _, sys := range eachSystem(t) {
+		t.Run(sys.Name, func(t *testing.T) {
+			c := sys.Client
+			ctx := context.Background()
+			name, uri := newTmpProgram(t, c, "ZADTLER_ACTERR")
 
-	// Write invalid source, activate, check for errors, then restore.
-	lockHandle, err := client.LockObject(ctx, testReportURI)
-	if err != nil {
-		t.Fatalf("LockObject: %v", err)
-	}
-	t.Cleanup(func() {
-		// Restore valid source and activate.
-		lh, err := client.LockObject(context.Background(), testReportURI)
-		if err != nil {
-			return
-		}
-		src, _ := client.GetSource(context.Background(), testReportURI)
-		validSource := "REPORT z_adt_mcp_test_report.\nWRITE: / 'Hello from MCP integration test'.\n"
-		client.SetSource(context.Background(), testReportURI, validSource, lh, "", src.ETag)
-		client.UnlockObject(context.Background(), testReportURI, lh)
-		client.ActivateObjects(context.Background(), []string{testReportURI})
-	})
+			lockHandle, err := c.LockObject(ctx, uri)
+			if err != nil {
+				t.Fatalf("LockObject: %v", err)
+			}
+			unlocked := false
+			unlock := func() {
+				if !unlocked {
+					unlocked = true
+					_ = c.UnlockObject(context.Background(), uri, lockHandle)
+				}
+			}
+			t.Cleanup(unlock)
 
-	src, err := client.GetSource(ctx, testReportURI)
-	if err != nil {
-		t.Fatalf("GetSource: %v", err)
-	}
+			src, err := c.GetSource(ctx, uri)
+			if err != nil {
+				t.Fatalf("GetSource: %v", err)
+			}
+			invalidSource := "REPORT " + strings.ToLower(name) + ".\nTHIS IS NOT VALID ABAP.\n"
+			if _, err := c.SetSource(ctx, uri, invalidSource, lockHandle, "", src.ETag); err != nil {
+				t.Fatalf("SetSource: %v", err)
+			}
+			unlock()
 
-	invalidSource := "REPORT z_adt_mcp_test_report.\nTHIS IS NOT VALID ABAP.\n"
-	_, err = client.SetSource(ctx, testReportURI, invalidSource, lockHandle, "", src.ETag)
-	if err != nil {
-		t.Fatalf("SetSource: %v", err)
-	}
-	_ = client.UnlockObject(ctx, testReportURI, lockHandle)
-
-	// Activate should now report errors.
-	result, err := client.ActivateObjects(ctx, []string{testReportURI})
-	if err != nil {
-		t.Fatalf("ActivateObjects: %v", err)
-	}
-	t.Logf("success=%v messages=%d", result.Success, len(result.Messages))
-	for _, m := range result.Messages {
-		t.Logf("  [%s] %s (uri=%s)", m.Type, m.Text, m.ObjectURI)
-	}
-	if result.Success {
-		t.Error("expected Success=false for invalid ABAP source")
-	}
-	if len(result.Messages) == 0 {
-		t.Error("expected at least one error message")
+			result, err := c.ActivateObjects(ctx, []string{uri})
+			if err != nil {
+				t.Fatalf("ActivateObjects: %v", err)
+			}
+			t.Logf("success=%v messages=%d", result.Success, len(result.Messages))
+			if result.Success {
+				t.Error("expected Success=false for invalid ABAP source")
+			}
+			if len(result.Messages) == 0 {
+				t.Error("expected at least one error message")
+			}
+		})
 	}
 }
 

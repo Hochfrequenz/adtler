@@ -37,16 +37,19 @@ func TestLockUnlock_Integration(t *testing.T) {
 func TestLockObject_ReturnsFunctioningHandle(t *testing.T) {
 	client := newIntegrationClient(t)
 	ctx := context.Background()
+	// A throwaway $TMP program: the fixture report is transportable, so a
+	// write without a request fails on S/4 (#300).
+	_, uri := newTmpProgram(t, client, "ZADTLER_LOCKH")
 
-	lockHandle, err := client.LockObject(ctx, testReportURI)
+	lockHandle, err := client.LockObject(ctx, uri)
 	if err != nil {
 		t.Fatalf("LockObject failed: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = client.UnlockObject(context.Background(), testReportURI, lockHandle)
+		_ = client.UnlockObject(context.Background(), uri, lockHandle)
 	})
 
-	src, err := client.GetSource(ctx, testReportURI)
+	src, err := client.GetSource(ctx, uri)
 	if err != nil {
 		t.Fatalf("GetSource failed: %v", err)
 	}
@@ -55,10 +58,8 @@ func TestLockObject_ReturnsFunctioningHandle(t *testing.T) {
 	}
 	t.Logf("ETag: %s, source length: %d", src.ETag, len(src.Source))
 
-	// Write the same source back — validates that the lock handle works.
-	// Known bug: SetSource sends Content-Type: plain/abap but SAP requires
-	// text/plain → returns 415 Unsupported Media Type.
-	newETag, err := client.SetSource(ctx, testReportURI, src.Source, lockHandle, "", src.ETag)
+	// Write the same source back: validates that the lock handle works.
+	newETag, err := client.SetSource(ctx, uri, src.Source, lockHandle, "", src.ETag)
 	if err != nil {
 		t.Fatalf("SetSource with lock handle failed: %v", err)
 	}
