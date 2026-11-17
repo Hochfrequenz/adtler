@@ -348,11 +348,15 @@ func functionGroupURIOfPart(objectURI string) (string, bool) {
 //
 // The lookup is best effort and returns "" when the group cannot be read. The
 // object itself was read successfully, and one denied or failed second request
-// is no reason to withhold it from the caller. A cancelled or expired
-// context is the exception: the caller gave up, so it gets that error instead
-// of a success with a package that was never looked up.
+// is no reason to withhold it from the caller. Two exceptions: a cancelled or
+// expired context (the caller gave up, so it gets that error instead of a
+// success with a package that was never looked up), and a 401, which is final
+// and must not pass for a function module without a package (adtler#266).
 func (c *httpClient) packageOfFunctionGroup(ctx context.Context, groupURI string) (string, error) {
 	group, err := c.GetObjectInfo(ctx, groupURI)
+	if isUnauthorized(err) {
+		return "", err
+	}
 	if err != nil {
 		return "", ctx.Err()
 	}
