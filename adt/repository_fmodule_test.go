@@ -219,6 +219,25 @@ func TestGetObjectInfo_FunctionModule_GroupLookupFailureKeepsTheObject(t *testin
 	}
 }
 
+// TestGetObjectInfo_FunctionModule_UnauthorizedGroupLookupIsReported keeps a
+// 401 on the group lookup from looking like a function module without a
+// package: the credential is no longer accepted, and the caller has to learn
+// that (adtler#266).
+func TestGetObjectInfo_FunctionModule_UnauthorizedGroupLookupIsReported(t *testing.T) {
+	var fmoduleGets, groupGets int32
+	srv := packageLookupServer(fmoduleXMLWithoutPackage, http.StatusUnauthorized, &fmoduleGets, &groupGets)
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+	info, err := client.GetObjectInfo(context.Background(), fmoduleURI)
+	if adt.ClassifyError(err) != adt.ErrorUnauthorized {
+		t.Fatalf("GetObjectInfo: got info %v, error %v, want an unauthorized error", info, err)
+	}
+	if got := atomic.LoadInt32(&groupGets); got != 1 {
+		t.Errorf("function group document fetched %d times, want 1 — a 401 is final under Basic auth", got)
+	}
+}
+
 // TestGetObjectInfo_FunctionModule_GeneratedGroupHasNoPackage covers a function
 // group SAP generated for its own use: it is in no package, so both documents
 // name none and the answer stays empty after exactly one group lookup.
