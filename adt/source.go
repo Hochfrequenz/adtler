@@ -446,14 +446,15 @@ func (c *httpClient) trySetSource(ctx context.Context, objectURI, source, lockHa
 // with the first attempt's error attached, or nil when the second attempt
 // succeeded. On ECC a failed write also ends the lock, so the second attempt
 // then always fails with 423 "not locked", and the first answer is the one
-// that names the cause (#280). Both errors stay reachable through errors.As
-// and errors.Is; the second attempt's comes first, so callers that branch on
-// it see what they saw before.
+// that names the cause (#280). The first error is attached as text only:
+// errors.As and errors.Is see the second attempt's error alone, as before, so
+// a network failure or cancelled context on the second attempt is not
+// mistaken for the first attempt's SAP answer.
 func withFirstAttempt(retryErr error, firstDelivery string, firstErr error) error {
 	if retryErr == nil {
 		return nil
 	}
-	return fmt.Errorf("%w (first attempt, with %s: %w)", retryErr, firstDelivery, firstErr)
+	return fmt.Errorf("%w (first attempt, with %s: %v)", retryErr, firstDelivery, firstErr)
 }
 
 // setClassSourceIntoRequest writes a class's main source with a corrNr,

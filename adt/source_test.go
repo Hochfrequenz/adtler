@@ -855,6 +855,11 @@ func TestSetSource_FailedRetryKeepsTheFirstError(t *testing.T) {
 	if !errors.As(err, &adtErr) || adtErr.StatusCode != http.StatusLocked {
 		t.Fatalf("err: got %v, want the retry's 423 first", err)
 	}
+	// The first error is text only, so a failure of the retry that is no SAP
+	// answer cannot be mistaken for the first attempt's 403.
+	if errors.Unwrap(err) != error(adtErr) {
+		t.Errorf("err wraps %v, want the retry's error alone", errors.Unwrap(err))
+	}
 	if !strings.Contains(err.Error(), "is not valid for object") {
 		t.Errorf("err: got %q, want the header attempt's 403 in it as well", err)
 	}
