@@ -90,7 +90,7 @@ the request once.
 Calls that send several requests stop at the first `401` too, including any
 fallback or cleanup they would otherwise send: `DeleteObject`,
 `LockMap.ResolveETag`, `RemoveFromTransport`, `CopyTransportObjects`,
-`AddPackageToTransport`, `GetObjectInfo` (the package lookup of a function module or
+`AddPackageToTransport`, `GetObjectInfo` (the package lookup of an HTTP service, a function module or a
 function group include), `ReleaseTransport` (its polling
 and the read of its result), `CreateObject`, `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
 `401` as their error), `GetObjectDependencies`, `RollbackTransport` and
