@@ -130,6 +130,15 @@ CI logs stay clean too.
 Where a test genuinely cannot discover its fixture, take the name from an environment variable
 and skip when it is unset. Do not commit the value.
 
+### Integration tests must not leave locks on shared fixtures
+
+The fixtures (`testFixtures` in adt/fixtures_integration_test.go) are shared by every test and every run against the same system, so a lock left on one makes later tests fail with 403 "currently editing" until the SAP session behind it times out (#300). Two rules keep that from happening:
+
+- Create clients with `newIntegrationClient` or `eachSystem`. Both log the session off when the test ends (`newLoggedOffClient`, which skips the logoff after a 401), which releases every lock the session still holds, also after a `t.Fatalf` between `LockObject` and `UnlockObject`. A client a test builds itself should come from `newLoggedOffClient` too.
+- A test that writes source works on its own `$TMP` object (`newTmpProgram`), not on a fixture. The fixtures live in a transportable package, so a write without a request fails on S/4, and a lock taken for it is then easily left behind.
+
+After the run, `TestMain` tries to lock every fixture from a fresh session on every system and prints a warning for each one it cannot lock. It warns instead of failing, because another run against the same system may hold the lock legitimately.
+
 ### A reuse fallback must not swallow a request that never worked
 
 An integration test that falls back on an existing object when creation fails — *"create it, and

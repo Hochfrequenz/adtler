@@ -103,11 +103,14 @@ var testFixtures = []fixtureObject{
 func TestMain(m *testing.M) {
 	cfg := integrationConfig()
 	if cfg.Host == "" {
-		// Not an integration run — just execute tests normally (they'll skip).
-		os.Exit(m.Run())
+		// No default system: tests that need one skip, eachSystem tests may
+		// still run against SAP_INTEGRATION_SYSTEMS, so check their fixtures.
+		code := m.Run()
+		reportLeftLocks(context.Background())
+		os.Exit(code)
 	}
 
-	client := adt.NewClient(cfg)
+	client, rec := newRecordingClient(cfg)
 	ctx := context.Background()
 
 	fmt.Println("=== Integration test setup: ensuring fixtures exist ===")
@@ -118,6 +121,9 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
+
+	fmt.Println("=== Integration test teardown: checking fixtures for locks left behind ===")
+	reportLeftLocks(ctx)
 
 	// Teardown: delete objects we created (reverse order to handle dependencies).
 	if len(created) > 0 {
@@ -140,7 +146,49 @@ func TestMain(m *testing.M) {
 		}
 	}
 
+	if !rec.rejected.Load() { // after a 401 a logoff would only count one more failed logon
+		_ = client.Logout(ctx) // releases any lock the setup or teardown left (#300)
+	}
 	os.Exit(code)
+}
+
+// reportLeftLocks tries to lock every shared fixture from a fresh session on
+// every system of the run and prints each one it cannot lock (#300). A lock a
+// test of this run left behind shows up here, close to its cause, instead of
+// as a "currently editing" failure in some later test. So does a lock held by
+// another run against the same system, which is why this warns instead of
+// failing the run.
+func reportLeftLocks(ctx context.Context) {
+	systems, skip := integrationSystemConfigs()
+	if skip != "" {
+		return
+	}
+	left := 0
+	for _, sys := range systems {
+		c, rec := newRecordingClient(sys.Config)
+		for _, f := range testFixtures {
+			h, err := c.LockObject(ctx, f.objectURI)
+			if err == nil {
+				_ = c.UnlockObject(ctx, f.objectURI, h)
+			}
+			if rec.rejected.Load() {
+				// A 401 is final (#222): stop for this system, and no logoff.
+				left++
+				fmt.Printf("  [WARNING: credential rejected] %s answered 401; its remaining fixtures were not checked\n", sys.Name)
+				break
+			}
+			if err != nil && adt.ClassifyError(err) != adt.ErrorNotFound {
+				left++
+				fmt.Printf("  [WARNING: cannot lock] %s %s on %s: %v\n", f.objType, f.name, sys.Name, err)
+			}
+		}
+		if !rec.rejected.Load() {
+			_ = c.Logout(ctx)
+		}
+	}
+	if left == 0 {
+		fmt.Println("  no fixture is locked")
+	}
 }
 
 // fixturePackages lists packages to try when creating fixtures, in order of preference.
