@@ -103,8 +103,11 @@ var testFixtures = []fixtureObject{
 func TestMain(m *testing.M) {
 	cfg := integrationConfig()
 	if cfg.Host == "" {
-		// Not an integration run — just execute tests normally (they'll skip).
-		os.Exit(m.Run())
+		// No default system: tests that need one skip, eachSystem tests may
+		// still run against SAP_INTEGRATION_SYSTEMS, so check their fixtures.
+		code := m.Run()
+		reportLeftLocks(context.Background())
+		os.Exit(code)
 	}
 
 	client := adt.NewClient(cfg)
@@ -165,7 +168,10 @@ func reportLeftLocks(ctx context.Context) {
 		for _, f := range testFixtures {
 			h, err := c.LockObject(ctx, f.objectURI)
 			if err == nil {
-				_ = c.UnlockObject(ctx, f.objectURI, h)
+				if adt.ClassifyError(c.UnlockObject(ctx, f.objectURI, h)) == adt.ErrorUnauthorized {
+					rejected = true
+					break
+				}
 				continue
 			}
 			kind := adt.ClassifyError(err)

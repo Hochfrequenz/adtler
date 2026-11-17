@@ -121,7 +121,7 @@ func newIntegrationClient(t *testing.T) adt.Client {
 	if cfg.Password == "" {
 		t.Fatal("SAP password not configured — check YAML config or SAP_INTEGRATION_PASSWORD")
 	}
-	return logOffAtEnd(t, adt.NewClient(cfg))
+	return newLoggedOffClient(t, cfg)
 }
 
 // newTmpProgram creates a $TMP program named prefix plus a random suffix,
@@ -143,23 +143,6 @@ func newTmpProgram(t *testing.T, c adt.Client, prefix string) (name, uri string)
 		}
 	})
 	return name, uri
-}
-
-// logOffAtEnd logs the client's SAP session off when the test ends. Logging
-// off releases every edit lock the session still holds, so a test that stops
-// between LockObject and UnlockObject leaves no lock on a shared fixture for
-// the tests after it (#300). It is registered first, so it runs after every
-// cleanup the test registers itself. Errors are ignored: a session that is
-// already gone holds no locks.
-//
-// shortcut: after a 401 the logoff sends the rejected credential once more,
-// one extra failed logon per test. A run with wrong credentials normally
-// stops earlier, in TestMain's fixture setup, before any test runs; track the
-// client's 401s here if runs without that setup become common.
-func logOffAtEnd(t *testing.T, c adt.Client) adt.Client {
-	t.Helper()
-	t.Cleanup(func() { _ = c.Logout(context.Background()) })
-	return c
 }
 
 // integrationSystem pairs a logical system name (the key in systems.json) with
@@ -209,7 +192,7 @@ func eachSystem(t *testing.T) []integrationSystem {
 		t.Skip("eachSystem: " + skip)
 	}
 	for i := range systems {
-		systems[i].Client = logOffAtEnd(t, adt.NewClient(systems[i].Config))
+		systems[i].Client = newLoggedOffClient(t, systems[i].Config)
 	}
 	return systems
 }

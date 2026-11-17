@@ -28,7 +28,7 @@ func TestADTError_EnqueueLockProperties_MultiSystem(t *testing.T) {
 		sys := sys
 		t.Run(sys.Name, func(t *testing.T) {
 			holder := sys.Client
-			contender := logOffAtEnd(t, adt.NewClient(sys.Config))
+			contender := newLoggedOffClient(t, sys.Config)
 
 			handle, err := holder.LockObject(ctx, testReportURI)
 			if err != nil {

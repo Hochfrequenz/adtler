@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/Hochfrequenz/adtler/adt"
 )
 
 // TestConfiguredLanguageBecomesOriginalLanguage_MultiSystem_Integration is
@@ -31,7 +29,7 @@ func TestConfiguredLanguageBecomesOriginalLanguage_MultiSystem_Integration(t *te
 				t.Run(lang, func(t *testing.T) {
 					cfg := sys.Config
 					cfg.Language = lang
-					client := logOffAtEnd(t, adt.NewClient(cfg))
+					client := newLoggedOffClient(t, cfg)
 
 					name := fmt.Sprintf("Z_ADT_LANG_%s_%d", lang, time.Now().UnixNano()%100000)
 					uri := "/sap/bc/adt/programs/programs/" + name
