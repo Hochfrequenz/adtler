@@ -90,7 +90,8 @@ the request once.
 Calls that send several requests stop at the first `401` too, including any
 fallback or cleanup they would otherwise send: `DeleteObject`,
 `LockMap.ResolveETag`, `RemoveFromTransport`, `CopyTransportObjects`,
-`AddPackageToTransport`, `ReleaseTransport` (its polling
+`AddPackageToTransport`, `GetObjectInfo` (the package lookup of a function module or
+function group include), `ReleaseTransport` (its polling
 and the read of its result), `CreateObject`, `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
 `401` as their error), `GetObjectDependencies`, `RollbackTransport` and
 `RollbackTransportWithOptions` (the objects not processed, or not deleted, are
@@ -394,7 +395,7 @@ the first one has none and reports that package. (An include's `containerRef` do
 group's `packageName`, and a function module's does on S/4HANA, but not on SAP ERP 6.0; the
 group's document is the one source used for all of them.) An object whose document does name a package
 costs no extra request; if the group cannot be read, the object is still returned, with an
-empty `PackageName`. A function group that SAP generated for its own use is in no package
+empty `PackageName`, unless SAP answered the group lookup with `401`: that is returned as the error. A function group that SAP generated for its own use is in no package
 at all (it has no `TADIR` entry), so its function modules and includes report none either;
 that is correct, not a gap.
 
