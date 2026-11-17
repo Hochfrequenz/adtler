@@ -85,9 +85,10 @@ retry could not succeed and would only count one more failed logon. The call
 returns the `401` as an `*adt.ADTError` after one request, whether SAP rejected
 the initial CSRF request or the request itself. A client that uses an OAuth2
 token with a refresh callback refreshes the token once after a `401` and repeats
-the request once. If the refresh itself fails, the error wraps both the refresh
-error and the `401`, so `adt.ClassifyError` reports `ErrorUnauthorized` and the
-calls listed below stop as they do for any other `401`.
+the request once. If that refresh fails, the error wraps `adt.ErrTokenRefreshFailed`:
+`adt.ClassifyError` reports it as `ErrorUnauthorized`, and the package lookups of
+`GetObjectInfo` return it instead of an empty package. Cleanup steps still run after
+it, because no failed logon is counted and a later refresh may succeed.
 
 Calls that send several requests stop at the first `401` too, including any
 fallback or cleanup they would otherwise send: `DeleteObject`,

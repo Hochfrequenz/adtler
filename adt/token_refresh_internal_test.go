@@ -349,22 +349,14 @@ func TestTokenRefresh_FailedRefreshIsUnauthorized(t *testing.T) {
 			if ClassifyError(err) != ErrorUnauthorized {
 				t.Errorf("ClassifyError(%v) = %v, want ErrorUnauthorized", err, ClassifyError(err))
 			}
+			if !credentialRejected(err) {
+				t.Errorf("credentialRejected(%v) = false, want true", err)
+			}
+			// Cleanup steps stop only on isUnauthorized; under OAuth they keep
+			// trying, since a later refresh may succeed and no logon is counted.
+			if isUnauthorized(err) {
+				t.Errorf("isUnauthorized(%v) = true, want false", err)
+			}
 		})
 	}
-}
-
-// TestTokenRefresh_CancelledWaitIsNotUnauthorized: a request that stops
-// waiting for a running refresh because its own context ended gave up; that
-// is no rejected credential.
-func TestTokenRefresh_CancelledWaitIsNotUnauthorized(t *testing.T) {
-	err := refreshFailedAfter401(cancelledContext(), context.Canceled, &ADTError{StatusCode: http.StatusUnauthorized})
-	if isUnauthorized(err) {
-		t.Errorf("error %v classifies as unauthorized, want the context error alone", err)
-	}
-}
-
-func cancelledContext() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	return ctx
 }

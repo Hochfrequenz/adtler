@@ -61,7 +61,8 @@ const (
 	ErrorNotSupported
 	// ErrorUnauthorized means SAP rejected the logon itself (HTTP 401): the
 	// user name or password is wrong, the user is locked, or the OAuth token
-	// is no longer accepted. It is distinct from ErrorForbidden (403), where
+	// is no longer accepted and could not be refreshed (ErrTokenRefreshFailed).
+	// It is distinct from ErrorForbidden (403), where
 	// the logon succeeded but the user lacks an authorization. Do not retry a
 	// Basic-auth request repeatedly on this kind: every failed logon counts
 	// towards the user's lock limit. Appended last so that the numeric values
@@ -122,6 +123,9 @@ func (k ErrorKind) String() string {
 // which treats a typeless 423 as an invalid lock handle for SetSource's
 // delivery-mechanism fallback.
 func ClassifyError(err error) ErrorKind {
+	if errors.Is(err, ErrTokenRefreshFailed) {
+		return ErrorUnauthorized
+	}
 	var adtErr *ADTError
 	if !errors.As(err, &adtErr) {
 		return ErrorUnknown
