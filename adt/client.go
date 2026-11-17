@@ -486,6 +486,20 @@ func (c *httpClient) fetchCSRFToken(ctx context.Context) (string, error) {
 // rejected. Under Basic Auth the credential cannot change for the lifetime of
 // the client, so sending another request after this error, as a retry or a
 // fallback, only counts one more failed logon against the user (#222).
+// refreshFailedAfter401 returns the error of a token refresh that failed after
+// SAP answered 401, with that 401 attached, so that isUnauthorized and
+// ClassifyError recognise the dead credential (#298). Without it, every
+// best-effort step that stops only on a 401 treated an expired token that
+// could not be refreshed like any other failure. When the caller's own context
+// has ended, the caller gave up rather than being rejected, so the refresh
+// error is returned as it is. The refresh error comes first in the message.
+func refreshFailedAfter401(ctx context.Context, refreshErr, unauthorized error) error {
+	if ctx.Err() != nil || unauthorized == nil {
+		return refreshErr
+	}
+	return fmt.Errorf("%w (after %w)", refreshErr, unauthorized)
+}
+
 func isUnauthorized(err error) bool {
 	var adtErr *ADTError
 	return errors.As(err, &adtErr) && adtErr.StatusCode == http.StatusUnauthorized
@@ -517,8 +531,8 @@ func (c *httpClient) ensureCSRF(ctx context.Context) error {
 		return err
 	}
 	// Refresh outside c.mu, as in doReadWith.
-	if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
-		return err
+	if rerr := c.tokens.refreshAfter401(ctx, sent); rerr != nil {
+		return refreshFailedAfter401(ctx, rerr, err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -667,11 +681,12 @@ func (c *httpClient) doReadWith(ctx context.Context, hc *http.Client, path strin
 	if resp.StatusCode != http.StatusUnauthorized || !c.tokens.canRefresh() {
 		return resp, nil
 	}
+	unauthorized := checkResponse(resp)
 	_ = resp.Body.Close()
 	// Refresh outside c.mu: concurrent 401s on this session must reach
 	// refreshAfter401 together to share one refresh and its outcome.
 	if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
-		return nil, err
+		return nil, refreshFailedAfter401(ctx, err, unauthorized)
 	}
 	c.mu.Lock()
 	_, err = c.fetchCSRFToken(ctx)
@@ -763,11 +778,15 @@ func (c *httpClient) doMutateWith(ctx context.Context, hc *http.Client, method, 
 		return resp, nil
 	}
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		var unauthorized error
+		if resp.StatusCode == http.StatusUnauthorized {
+			unauthorized = checkResponse(resp)
+		}
 		_ = resp.Body.Close()
 		if resp.StatusCode == http.StatusUnauthorized {
 			// Outside c.mu, as in doReadWith.
 			if err := c.tokens.refreshAfter401(ctx, sent); err != nil {
-				return nil, err
+				return nil, refreshFailedAfter401(ctx, err, unauthorized)
 			}
 		}
 		c.mu.Lock()
