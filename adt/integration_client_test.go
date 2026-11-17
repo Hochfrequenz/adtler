@@ -38,16 +38,23 @@ func (r *rejectionRecorder) RoundTrip(req *http.Request) (*http.Response, error)
 // and the logoff would only count one more failed logon.
 func newLoggedOffClient(t *testing.T, cfg sapmcpconfig.SAPSystem) adt.Client {
 	t.Helper()
-	rec := &rejectionRecorder{base: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify}, //nolint:gosec // as adt.NewClient
-	}}
-	c := adt.NewClientWithTransport(cfg, rec)
+	c, rec := newRecordingClient(cfg)
 	t.Cleanup(func() {
 		if !rec.rejected.Load() {
 			_ = c.Logout(context.Background())
 		}
 	})
 	return c
+}
+
+// newRecordingClient builds a client the way adt.NewClient does, with a
+// rejectionRecorder in front of its transport. Code outside a test (TestMain)
+// uses it to decide whether a logoff is still allowed.
+func newRecordingClient(cfg sapmcpconfig.SAPSystem) (adt.Client, *rejectionRecorder) {
+	rec := &rejectionRecorder{base: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify}, //nolint:gosec // as adt.NewClient
+	}}
+	return adt.NewClientWithTransport(cfg, rec), rec
 }
 
 // TestNewLoggedOffClient: the client logs off when its test ends, but sends

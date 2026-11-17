@@ -110,7 +110,7 @@ func TestMain(m *testing.M) {
 		os.Exit(code)
 	}
 
-	client := adt.NewClient(cfg)
+	client, rec := newRecordingClient(cfg)
 	ctx := context.Background()
 
 	fmt.Println("=== Integration test setup: ensuring fixtures exist ===")
@@ -146,7 +146,9 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	_ = client.Logout(ctx) // releases any lock the setup or teardown left (#300)
+	if !rec.rejected.Load() { // after a 401 a logoff would only count one more failed logon
+		_ = client.Logout(ctx) // releases any lock the setup or teardown left (#300)
+	}
 	os.Exit(code)
 }
 
@@ -163,29 +165,24 @@ func reportLeftLocks(ctx context.Context) {
 	}
 	left := 0
 	for _, sys := range systems {
-		c := adt.NewClient(sys.Config)
-		rejected := false
+		c, rec := newRecordingClient(sys.Config)
 		for _, f := range testFixtures {
 			h, err := c.LockObject(ctx, f.objectURI)
 			if err == nil {
-				if adt.ClassifyError(c.UnlockObject(ctx, f.objectURI, h)) == adt.ErrorUnauthorized {
-					rejected = true
-					break
-				}
-				continue
+				_ = c.UnlockObject(ctx, f.objectURI, h)
 			}
-			kind := adt.ClassifyError(err)
-			if kind == adt.ErrorNotFound {
-				continue // this fixture does not exist on this system
+			if rec.rejected.Load() {
+				// A 401 is final (#222): stop for this system, and no logoff.
+				left++
+				fmt.Printf("  [WARNING: credential rejected] %s answered 401; its remaining fixtures were not checked\n", sys.Name)
+				break
 			}
-			left++
-			fmt.Printf("  [WARNING: cannot lock] %s %s on %s: %v\n", f.objType, f.name, sys.Name, err)
-			if kind == adt.ErrorUnauthorized {
-				rejected = true
-				break // a 401 is final: no further logon attempts (#222)
+			if err != nil && adt.ClassifyError(err) != adt.ErrorNotFound {
+				left++
+				fmt.Printf("  [WARNING: cannot lock] %s %s on %s: %v\n", f.objType, f.name, sys.Name, err)
 			}
 		}
-		if !rejected { // a logoff would send the rejected credential once more
+		if !rec.rejected.Load() {
 			_ = c.Logout(ctx)
 		}
 	}
