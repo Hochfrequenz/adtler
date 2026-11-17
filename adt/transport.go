@@ -634,8 +634,9 @@ type TransportRequestPage struct {
 // the tree does not honour it. A request in TransportStateReleaseInProgress
 // or TransportStateUnknown passes TransportFilterAll only.
 //
-// Errors: a 401 from either source ends the call with that error and no page
-// (#222). If only the tree fails, the page comes without descriptions; if
+// Errors: a rejected credential from either source (a 401, #222, or an OAuth
+// token that could not be refreshed, #298) ends the call with that error and no
+// page. If only the tree fails, the page comes without descriptions; if
 // only E070 fails, the page holds what the tree shows (filtered, ordered by
 // request number descending, at most Limit requests, no Next). Either way the
 // error wraps ErrTransportListPartial. Invalid options are refused before any
@@ -647,14 +648,14 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, opts TransportLis
 	}
 
 	page, queryErr := c.getTransportRequestsViaQuery(ctx, user, opts.Filter, limit, after)
-	if queryErr != nil && isUnauthorized(queryErr) {
+	if queryErr != nil && credentialRejected(queryErr) {
 		return nil, queryErr
 	}
 
 	// Unscoped (every user), the tree shows the logon user's requests and so
 	// describes only those.
 	treeRequests, treeErr := c.getTransportRequestsTree(ctx, user)
-	if treeErr != nil && isUnauthorized(treeErr) {
+	if treeErr != nil && credentialRejected(treeErr) {
 		return nil, treeErr
 	}
 

@@ -8,6 +8,16 @@ import (
 	"sync/atomic"
 )
 
+// ErrTokenRefreshFailed is wrapped by the error of a request that SAP answered
+// with 401 and whose OAuth token could then not be refreshed: the credential is
+// no longer accepted. ClassifyError reports it as ErrorUnauthorized, and
+// lookups that would otherwise return an incomplete answer stop on it, as on
+// a 401 (#298; see credentialRejected). Unlike a 401
+// under Basic auth it does not stop cleanup steps: a later request refreshes
+// again, a transient failure of the token endpoint may have passed by then,
+// and no failed logon is counted.
+var ErrTokenRefreshFailed = errors.New("token refresh failed")
+
 // tokenSource holds an OAuth2 access token and the callback that refreshes it.
 //
 // A client and every freshSession derived from it share one tokenSource, while
@@ -130,7 +140,7 @@ func (s *tokenSource) refreshAfter401(ctx context.Context, sent string) error {
 	}()
 	t, err := s.refresh(sent)
 	if err != nil {
-		call.err = fmt.Errorf("token refresh failed: %w", err)
+		call.err = fmt.Errorf("%w: %w", ErrTokenRefreshFailed, err)
 		return call.err
 	}
 	newToken, call.err = t, nil

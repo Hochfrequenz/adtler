@@ -491,6 +491,15 @@ func isUnauthorized(err error) bool {
 	return errors.As(err, &adtErr) && adtErr.StatusCode == http.StatusUnauthorized
 }
 
+// credentialRejected reports whether err says the client's credential is no
+// longer accepted: a 401, or an OAuth token that could not be refreshed after
+// one (ErrTokenRefreshFailed). Best-effort lookups stop on it, so a dead
+// credential does not pass for an empty answer. Steps that stop to avoid
+// failed logons use isUnauthorized instead.
+func credentialRejected(err error) bool {
+	return isUnauthorized(err) || errors.Is(err, ErrTokenRefreshFailed)
+}
+
 // ensureCSRF populates the CSRF token (and, as a side effect, the
 // discovery cache) exactly once. It acquires c.mu for the duration
 // of the check, so callers MUST NOT already hold c.mu. Subsequent

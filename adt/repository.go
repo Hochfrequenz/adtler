@@ -288,8 +288,9 @@ func (c *httpClient) GetObjectInfo(ctx context.Context, objectURI string) (*Obje
 // (adtler#260).
 //
 // Best effort, like packageOfFunctionGroup: a failed lookup returns "", unless
-// the caller's context is done or SAP answered 401, which is final and must
-// not pass for a service without a package.
+// the caller's context is done or the credential was rejected (a 401, or an
+// OAuth token that could not be refreshed, #298), which must not pass for a
+// service without a package.
 func (c *httpClient) packageFromObjectProperties(ctx context.Context, objectURI string) (string, error) {
 	params := url.Values{}
 	params.Set("uri", objectURI)
@@ -300,7 +301,7 @@ func (c *httpClient) packageFromObjectProperties(ctx context.Context, objectURI 
 		defer func() { _ = resp.Body.Close() }()
 		err = checkResponse(resp)
 	}
-	if isUnauthorized(err) {
+	if credentialRejected(err) {
 		return "", err
 	}
 	if err != nil {
@@ -350,11 +351,12 @@ func functionGroupURIOfPart(objectURI string) (string, bool) {
 // object itself was read successfully, and one denied or failed second request
 // is no reason to withhold it from the caller. Two exceptions: a cancelled or
 // expired context (the caller gave up, so it gets that error instead of a
-// success with a package that was never looked up), and a 401, which is final
-// and must not pass for a function module without a package (adtler#266).
+// success with a package that was never looked up), and a rejected credential
+// (a 401, adtler#266, or an OAuth token that could not be refreshed, #298),
+// which must not pass for a function module without a package.
 func (c *httpClient) packageOfFunctionGroup(ctx context.Context, groupURI string) (string, error) {
 	group, err := c.GetObjectInfo(ctx, groupURI)
-	if isUnauthorized(err) {
+	if credentialRejected(err) {
 		return "", err
 	}
 	if err != nil {

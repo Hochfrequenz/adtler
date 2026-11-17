@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,7 +18,10 @@ import (
 // expired token in the single-flight refresh tests (issue #193).
 const concurrent401s = 4
 
-// expiredTokenServer rejects every request carrying "Bearer t0" with 401, but
+// expiredBearer is the Authorization header of the token the test servers reject.
+const expiredBearer = "Bearer t0"
+
+// expiredTokenServer rejects every request carrying expiredBearer with 401, but
 // holds each rejection until concurrent401s of them have arrived, so all of
 // them are already on their way back as 401 before any refresh can happen.
 // Any other token is accepted. The CSRF preflight always succeeds.
@@ -33,7 +37,7 @@ func expiredTokenServer(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if r.Header.Get("Authorization") == "Bearer t0" {
+		if r.Header.Get("Authorization") == expiredBearer {
 			if arrived.Add(1) == concurrent401s {
 				closeOnce.Do(func() { close(allArrived) })
 			}
@@ -143,7 +147,7 @@ func TestTokenRefresh_DebugSessionSharesParentToken(t *testing.T) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		auth := r.Header.Get("Authorization")
 		lastAuth.Store(&auth)
-		if auth == "Bearer t0" {
+		if auth == expiredBearer {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -293,5 +297,71 @@ func TestTokenRefresh_WaiterHonoursContext(t *testing.T) {
 	}
 	if got := s.current(); got != "t1" {
 		t.Errorf("token: got %q, want %q", got, "t1")
+	}
+}
+
+// TestTokenRefresh_FailedRefreshIsUnauthorized: a refresh that fails after a
+// 401 means the credential is dead, so the error must classify as
+// unauthorized (#298) while still wrapping the refresh error. It covers the
+// read path, the write path and the CSRF preflight.
+func TestTokenRefresh_FailedRefreshIsUnauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Path == discoveryPath && r.Header.Get("Authorization") != expiredBearer {
+			w.Header().Set("X-CSRF-Token", "token")
+			return
+		}
+		if r.Header.Get("Authorization") == expiredBearer {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("X-CSRF-Token", "token")
+	}))
+	t.Cleanup(srv.Close)
+	newClient := func() *httpClient {
+		return NewClientWithToken(raceTestConfig(srv.URL), "t0", func(string) (string, error) {
+			return "", errRefreshDenied
+		}).(*httpClient)
+	}
+
+	cases := map[string]func(c *httpClient) error{
+		"preflight": func(c *httpClient) error { return c.ensureCSRF(context.Background()) },
+		"read": func(c *httpClient) error {
+			c.mu.Lock()
+			c.csrfToken = "token"
+			c.mu.Unlock()
+			_, err := c.doRead(context.Background(), raceOKPath, nil)
+			return err
+		},
+		"write": func(c *httpClient) error {
+			c.mu.Lock()
+			c.csrfToken = "token"
+			c.mu.Unlock()
+			_, err := c.doMutate(context.Background(), http.MethodPost, raceOKPath, nil, nil)
+			return err
+		},
+	}
+	for name, do := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := do(newClient())
+			if !errors.Is(err, errRefreshDenied) {
+				t.Errorf("error %v, want it to wrap %v", err, errRefreshDenied)
+			}
+			if ClassifyError(err) != ErrorUnauthorized {
+				t.Errorf("ClassifyError(%v) = %v, want ErrorUnauthorized", err, ClassifyError(err))
+			}
+			// The message is what it was before #298.
+			if !strings.HasPrefix(err.Error(), "token refresh failed: ") || !strings.Contains(err.Error(), errRefreshDenied.Error()) {
+				t.Errorf("message %q changed", err)
+			}
+			if !credentialRejected(err) {
+				t.Errorf("credentialRejected(%v) = false, want true", err)
+			}
+			// Cleanup steps stop only on isUnauthorized; under OAuth they keep
+			// trying, since a later refresh may succeed and no logon is counted.
+			if isUnauthorized(err) {
+				t.Errorf("isUnauthorized(%v) = true, want false", err)
+			}
+		})
 	}
 }
