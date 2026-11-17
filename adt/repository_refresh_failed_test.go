@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -44,4 +45,56 @@ func TestGetObjectInfo_FunctionModule_FailedTokenRefreshIsReported(t *testing.T)
 	defer srv.Close()
 	info, err := failingRefreshClient(srv.URL).GetObjectInfo(context.Background(), fmoduleURI)
 	assertRefreshFailureReported(t, info, err)
+}
+
+// TestLookups_StopAfterAFailedTokenRefresh: lookups whose answer would
+// otherwise silently be incomplete stop at the first failed refresh and return
+// it (#298). The server answers 401 to everything after the preflight; each
+// further request would mean one more refresh attempt.
+func TestLookups_StopAfterAFailedTokenRefresh(t *testing.T) {
+	for _, op := range []struct {
+		name string
+		call func(ctx context.Context, c adt.Client) error
+	}{
+		{"DDIC dependency chain", func(ctx context.Context, c adt.Client) error {
+			_, err := c.GetObjectDependencies(ctx, "TABL", "ZTABLE", 0, 2)
+			return err
+		}},
+		{"transport request list", func(ctx context.Context, c adt.Client) error {
+			_, err := c.GetTransportRequests(ctx, adt.TransportListOptions{User: "USERA"})
+			return err
+		}},
+		{"batch syntax check over several chunks", func(ctx context.Context, c adt.Client) error {
+			uris := make([]string, batchCheckObjects)
+			for i := range uris {
+				uris[i] = probeObjectURI + string(rune('a'+i))
+			}
+			results := c.BatchSyntaxCheck(ctx, uris)
+			if results[len(results)-1].Error == "" {
+				return errors.New("last result carries no error")
+			}
+			return errors.New(results[len(results)-1].Error)
+		}},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			srv := newUnauthorizedServer(t, false)
+			var refreshes int32
+			c := adt.NewClientWithToken(newTestConfig(srv.URL), "t0", func(string) (string, error) {
+				refreshes++
+				return "", errRefreshRejected
+			})
+			if _, err := c.SystemFlavor(context.Background()); err != nil {
+				t.Fatalf("establishing the session: %v", err)
+			}
+			srv.reject.Store(true)
+
+			err := op.call(context.Background(), c)
+			if err == nil || !strings.Contains(err.Error(), adt.ErrTokenRefreshFailed.Error()) {
+				t.Fatalf("got %v, want the failed token refresh", err)
+			}
+			if refreshes != 1 {
+				t.Errorf("refresh attempted %d times, want 1: the lookup went on after the first failure", refreshes)
+			}
+		})
+	}
 }

@@ -303,9 +303,11 @@ func (c *httpClient) uiadDeps(ctx context.Context, appID string) ([]ObjectDepend
 // DD02L first (tables/structures/views, including SAP system objects like SYST
 // that are absent from TADIR), then TADIR for the remainder (data elements,
 // domains, table types). Query errors degrade gracefully: affected names stay
-// UNKNOWN rather than failing the call. A 401 is the exception: it is returned,
-// and no further query is sent, because it would carry the rejected credential
-// and count one more failed logon (#222).
+// UNKNOWN rather than failing the call. A rejected credential is the exception
+// (credentialRejected: a 401, or an OAuth token that could not be refreshed,
+// #298): it is returned, and no further query is sent, because it would carry
+// the rejected credential and, under Basic auth, count one more failed logon
+// (#222).
 func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) (map[string]string, error) {
 	result := make(map[string]string, len(names))
 	for _, n := range names {
@@ -315,7 +317,7 @@ func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) (m
 	qr, err := c.RunQuery(ctx,
 		fmt.Sprintf("SELECT TABNAME, TABCLASS FROM DD02L WHERE TABNAME IN (%s)", buildSQLInList(names)),
 		len(names))
-	if isUnauthorized(err) {
+	if credentialRejected(err) {
 		return nil, err
 	}
 	if err == nil && qr != nil {
@@ -336,7 +338,7 @@ func (c *httpClient) classifyDDICObjects(ctx context.Context, names []string) (m
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT OBJECT, OBJ_NAME FROM TADIR WHERE PGMID = 'R3TR' AND OBJ_NAME IN (%s)", buildSQLInList(unknownNames)),
 			len(unknownNames))
-		if isUnauthorized(err) {
+		if credentialRejected(err) {
 			return nil, err
 		}
 		if err == nil && qr != nil {
@@ -498,7 +500,7 @@ func (c *httpClient) ddicQueryTabl(ctx context.Context, names []string, addDep f
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT ROLLNAME, CHECKTABLE FROM DD03L WHERE TABNAME IN (%s)", buildSQLInList(chunk)),
 			ddicMaxFieldRows)
-		if isUnauthorized(err) {
+		if credentialRejected(err) {
 			return err
 		}
 		if err != nil {
@@ -532,7 +534,7 @@ func (c *httpClient) ddicQueryDtel(ctx context.Context, names []string, addDep f
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT DOMNAME FROM DD04L WHERE ROLLNAME IN (%s)", buildSQLInList(chunk)),
 			len(chunk))
-		if isUnauthorized(err) {
+		if credentialRejected(err) {
 			return err
 		}
 		if err != nil {
@@ -558,7 +560,7 @@ func (c *httpClient) ddicQueryDoma(ctx context.Context, names []string, addDep f
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT ENTITYTAB FROM DD01L WHERE DOMNAME IN (%s)", buildSQLInList(chunk)),
 			len(chunk))
-		if isUnauthorized(err) {
+		if credentialRejected(err) {
 			return err
 		}
 		if err != nil {
@@ -587,7 +589,7 @@ func (c *httpClient) ddicQueryTtyp(ctx context.Context, names []string, addDep f
 		qr, err := c.RunQuery(ctx,
 			fmt.Sprintf("SELECT ROWTYPE, ROWKIND FROM DD40L WHERE TYPENAME IN (%s)", buildSQLInList(chunk)),
 			len(chunk))
-		if isUnauthorized(err) {
+		if credentialRejected(err) {
 			return err
 		}
 		if err != nil {
@@ -623,8 +625,9 @@ func (c *httpClient) ddicQueryTtyp(ctx context.Context, names []string, addDep f
 
 // ddicChainDeps traverses the DDIC type chain from a single object (TABL, DTEL,
 // DOMA, TTYP) by iterative BFS, returning a flat deduplicated dependency list
-// plus any non-fatal query warnings. A 401 ends the walk and is returned: every
-// further query would carry the rejected credential (#222). Iterative BFS (with a visited set) avoids
+// plus any non-fatal query warnings. A rejected credential (a 401, or a failed
+// token refresh, #298) ends the walk and is returned: every further query would
+// carry the rejected credential (#222). Iterative BFS (with a visited set) avoids
 // stack overflow on cyclic chains such as DOMA->ENTITYTAB->TABL->ROLLNAME->DTEL->DOMA.
 func (c *httpClient) ddicChainDeps(ctx context.Context, name, objType string, maxDepth int) ([]ObjectDependency, []string, error) {
 	type queueEntry struct {

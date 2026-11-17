@@ -11,7 +11,8 @@ import (
 // ErrTokenRefreshFailed is wrapped by the error of a request that SAP answered
 // with 401 and whose OAuth token could then not be refreshed: the credential is
 // no longer accepted. ClassifyError reports it as ErrorUnauthorized, and
-// best-effort lookups that stop on a 401 stop on it too (#298). Unlike a 401
+// lookups that would otherwise return an incomplete answer stop on it, as on
+// a 401 (#298; see credentialRejected). Unlike a 401
 // under Basic auth it does not stop cleanup steps: a later request refreshes
 // again, a transient failure of the token endpoint may have passed by then,
 // and no failed logon is counted.

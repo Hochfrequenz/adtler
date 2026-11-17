@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -348,6 +349,10 @@ func TestTokenRefresh_FailedRefreshIsUnauthorized(t *testing.T) {
 			}
 			if ClassifyError(err) != ErrorUnauthorized {
 				t.Errorf("ClassifyError(%v) = %v, want ErrorUnauthorized", err, ClassifyError(err))
+			}
+			// The message is what it was before #298.
+			if !strings.HasPrefix(err.Error(), "token refresh failed: ") || !strings.Contains(err.Error(), errRefreshDenied.Error()) {
+				t.Errorf("message %q changed", err)
 			}
 			if !credentialRejected(err) {
 				t.Errorf("credentialRejected(%v) = false, want true", err)

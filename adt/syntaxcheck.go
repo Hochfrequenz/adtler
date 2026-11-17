@@ -100,7 +100,7 @@ func (c *httpClient) BatchSyntaxCheck(ctx context.Context, objectURIs []string) 
 		chunk := objectURIs[start:end]
 		chunkResults, reqErr := c.batchSyntaxCheckChunkWithVersion(ctx, chunk, "inactive")
 		copy(results[start:], chunkResults)
-		if isUnauthorized(reqErr) {
+		if credentialRejected(reqErr) {
 			copy(results[end:], chunkErrorResults(objectURIs[end:], reqErr))
 			break
 		}
@@ -122,8 +122,8 @@ func chunkErrorResults(objectURIs []string, err error) []ObjectSyntaxResult {
 // when the inactive check produces a false-positive.
 //
 // When the request itself fails, every result carries the failure as text and
-// the failure is returned as well, so a caller can tell a 401 apart (see
-// isUnauthorized). The returned error's text equals the results' Error.
+// the failure is returned as well, so a caller can tell a rejected credential
+// apart (see credentialRejected). The returned error's text equals the results' Error.
 func (c *httpClient) batchSyntaxCheckChunkWithVersion(ctx context.Context, objectURIs []string, version string) ([]ObjectSyntaxResult, error) {
 	// Build XML with all objects in a single checkObjectList.
 	var sb strings.Builder
