@@ -76,6 +76,33 @@ func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
 	}
 }
 
+// Close ends this DebugSession's own SAP session and drops its local session
+// state (cookies and CSRF token). It touches neither the parent client's
+// session nor the single-use sessions of DebugSession.RunUnitTests triggers,
+// which are never logged off.
+//
+// The logoff goes out with ctx. A wedged session can make it wait until ctx
+// ends or the 30-second timeout of the short client; the local state is
+// dropped either way, also when the logoff fails on the transport (Logout
+// returns early then, so Close resets the state itself). A 401 of the logoff
+// is returned as *ADTError.
+//
+// Close does not cancel calls still in flight: cancel their contexts first,
+// otherwise a late response of a stuck call can store a stale cookie in the
+// fresh jar.
+//
+// The DebugSession stays usable: the next call opens a new SAP session with a
+// new CSRF preflight. Which SAP-side state the logoff releases is not
+// promised beyond "the session ends".
+func (d *DebugSession) Close(ctx context.Context) error {
+	err := d.client.Logout(ctx)
+	d.client.mu.Lock()
+	d.client.csrfToken = ""
+	d.client.jar.Reset()
+	d.client.mu.Unlock()
+	return err
+}
+
 // BreakpointScope selects which breakpoint set a request addresses.
 type BreakpointScope string
 
