@@ -317,11 +317,11 @@ type DeletedTransport struct {
 	// LastChanged is the last change of the request (ADT lastchanged_timestamp);
 	// zero if unknown, which includes an ADT answer that carries no such
 	// attribute (the ECC worklist shape).
-	LastChanged time.Time `json:"last_changed"`
+	LastChanged time.Time `json:"last_changed,omitzero"`
 	// Created and CreatedBy come from E070CREATE. SAP does not write a row for
 	// every request, so Created is the zero time then; use LastChanged as the
 	// documented fallback.
-	Created   time.Time `json:"created"`
+	Created   time.Time `json:"created,omitzero"`
 	CreatedBy string    `json:"created_by,omitempty"`
 	// Tasks are the tasks deleted with the request (Number, Owner, Description,
 	// State, RawStatus), as far as the ADT answer listed them.
