@@ -25,6 +25,7 @@ func TestClassifyError_ByExceptionType(t *testing.T) {
 		{adt.ExceptionTypeResourceWrongData, adt.ErrorUnprocessable},
 		{adt.ExceptionTypeNotAllowed, adt.ErrorMethodNotAllowed},
 		{adt.ExceptionTypeResourceCreationFailure, adt.ErrorCreationFailed},
+		{adt.ExceptionTypeRequestReleased, adt.ErrorBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.excType, func(t *testing.T) {

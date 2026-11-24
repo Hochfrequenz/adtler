@@ -389,13 +389,19 @@ const (
 	// ExceptionTypeAddObjectsUnsupported is synthesised locally, like
 	// ExceptionTypeRemoveObjectUnsupported, by the capability gate of
 	// CopyTransportObjects and AddPackageToTransport: the target request does
-	// not advertise the addobjectsfrompackage relation, so no write was sent.
+	// not advertise the addobjectsfrompackage relation and is not released, so
+	// no write was sent. A released target gets ExceptionTypeRequestReleased.
 	ExceptionTypeAddObjectsUnsupported = "ADT_TM_ADDOBJECTS_UNSUPPORTED"
 	// ExceptionTypeAddObjectUnsupported is synthesised locally by
 	// AddToTransport's capability gate: the request or task does not
-	// advertise the addobject relation (SAP_BASIS 750, or released), so no
-	// write was sent.
+	// advertise the addobject relation and is not released (SAP_BASIS 750),
+	// so no write was sent. A released one gets ExceptionTypeRequestReleased.
 	ExceptionTypeAddObjectUnsupported = "ADT_TM_ADDOBJECT_UNSUPPORTED"
+	// ExceptionTypeRequestReleased is synthesised locally by the capability
+	// gates of AddToTransport, CopyTransportObjects and AddPackageToTransport
+	// when the target request or task is released, or its release is in
+	// progress, and so cannot take new entries. No write was sent.
+	ExceptionTypeRequestReleased = "ADT_TM_REQUEST_RELEASED"
 	// ExceptionTypeCreateRequestUnsupported is synthesised locally by
 	// CreateTransport when a customizing request or a transport of copies is
 	// asked for on a system whose discovery does not advertise creating

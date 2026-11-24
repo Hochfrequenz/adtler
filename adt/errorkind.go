@@ -39,7 +39,7 @@ const (
 	ErrorCreationFailed              // object creation failed (often a name collision)
 	ErrorNotFound                    // the object or resource was not found
 	ErrorForbidden                   // authorization error
-	ErrorBadRequest                  // the request was malformed
+	ErrorBadRequest                  // the request was malformed, or its target is in a state that refuses it (a released request, see ExceptionTypeRequestReleased)
 	ErrorServerError                 // SAP server error (HTTP 500)
 	// ErrorObjectLockedInTransport is a refinement of ErrorLockConflict: the
 	// object is registered in another open CTS request (a "locked in request
@@ -57,7 +57,8 @@ const (
 	// library and reports this kind instead. CopyTransportObjects,
 	// AddPackageToTransport and CreateTransport (customizing requests and
 	// transports of copies, which only S/4 can create over ADT) gate the same
-	// way.
+	// way. A released target is a property of one request, not of the
+	// system, so it is reported as ErrorBadRequest instead.
 	ErrorNotSupported
 	// ErrorUnauthorized means SAP rejected the logon itself (HTTP 401): the
 	// user name or password is wrong, the user is locked, or the OAuth token
@@ -178,6 +179,8 @@ func classifyByExceptionType(excType string) ErrorKind {
 	case ExceptionTypeRemoveObjectUnsupported, ExceptionTypeAddObjectsUnsupported,
 		ExceptionTypeAddObjectUnsupported, ExceptionTypeCreateRequestUnsupported:
 		return ErrorNotSupported
+	case ExceptionTypeRequestReleased:
+		return ErrorBadRequest
 	default:
 		return ErrorUnknown
 	}

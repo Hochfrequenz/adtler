@@ -58,10 +58,12 @@ const transportOrganizerType = "application/vnd.sap.adt.transportorganizer.v1+xm
 // answers 200 when it could not lock the target. Read the result back with
 // GetTransportObjects where that matters.
 //
-// The call is refused locally with ErrorNotSupported (ADTError type
-// ExceptionTypeAddObjectsUnsupported), and no write is sent, when
-// targetRequest does not advertise the addobjectsfrompackage relation —
-// on a system older than ABAP Platform 2105, or for a released target.
+// The call is refused locally, and no write is sent, when targetRequest does
+// not advertise the addobjectsfrompackage relation. A released target (or one
+// whose release is in progress) is refused with ErrorBadRequest (ADTError
+// type ExceptionTypeRequestReleased), because the state is read from the same
+// response; any other target, such as one on a system older than ABAP
+// Platform 2105, is refused with ErrorNotSupported (ExceptionTypeAddObjectsUnsupported).
 // On an older system the transport organizer does not reject an unknown
 // user action: it treats every PUT as a change-owner request (see #125),
 // which fails without a target user and changes nothing, with an error
@@ -142,8 +144,8 @@ func (c *httpClient) copySources(ctx context.Context, sourceRequest string) ([]s
 // that matters.
 //
 // The capability gate is the same as CopyTransportObjects': without the
-// addobjectsfrompackage relation on targetRequest, the call returns
-// ErrorNotSupported and sends no write.
+// addobjectsfrompackage relation on targetRequest, the call sends no write and
+// returns ErrorNotSupported, or ErrorBadRequest for a released target.
 func (c *httpClient) AddPackageToTransport(ctx context.Context, packageName, targetRequest string, includeSubpackages bool) error {
 	packageName = strings.ToUpper(strings.TrimSpace(packageName))
 	targetRequest = strings.ToUpper(strings.TrimSpace(targetRequest))
@@ -207,23 +209,28 @@ func (c *httpClient) putTransportUserAction(ctx context.Context, targetRequest, 
 // Unlike RemoveFromTransport's gate, this one fails closed: a target that
 // could not be read, or that carries no such relation, gets no PUT. The
 // relation is present on every modifiable request of a system that has the
-// action, so a missing one means an older system or a target SAP would
-// refuse anyway (released). This deliberately also refuses a system between
+// action, so a missing one means an older system or a released target. The
+// state is only used when the body names targetRequest as a request: on ECC
+// a released request is absent from the worklist, so it stays
+// ErrorNotSupported there. This deliberately also refuses a system between
 // ABAP Platform 1809 and 2105 that might implement addobjectfromrequest
 // without advertising it: refusing there costs a missed feature, sending
 // to a system without the action returns a misleading change-owner error.
 func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetRequest string) error {
-	ok, err := c.advertisesRelation(ctx, targetRequest, addObjectsFromPackageRelation)
+	ok, state, err := c.advertisesRelation(ctx, targetRequest, addObjectsFromPackageRelation)
 	if err != nil {
 		return fmt.Errorf("read target %s: %w", targetRequest, err)
 	}
 	if ok {
 		return nil
 	}
+	if state == TransportStateReleased || state == TransportStateReleaseInProgress {
+		return requestReleasedError(targetRequest)
+	}
 	return &ADTError{
 		Type: ExceptionTypeAddObjectsUnsupported,
 		Message: fmt.Sprintf("transport request %s does not advertise adding objects from a request or package "+
-			"(added in ABAP Platform 2105; never offered for a released request); include the objects in SE09 instead",
+			"(added in ABAP Platform 2105); include the objects in SE09 instead",
 			targetRequest),
 	}
 }
@@ -233,18 +240,31 @@ func (c *httpClient) ensureAddObjectsSupported(ctx context.Context, targetReques
 // (SAP_BASIS 816) advertises the addobject relation on every request and
 // task that is not released; SAP_BASIS 750 has no such action.
 func (c *httpClient) ensureAddObjectSupported(ctx context.Context, transport string) error {
-	ok, err := c.advertisesRelation(ctx, transport, addObjectRelation)
+	ok, state, err := c.advertisesRelation(ctx, transport, addObjectRelation)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", transport, err)
 	}
 	if ok {
 		return nil
 	}
+	if state == TransportStateReleased || state == TransportStateReleaseInProgress {
+		return requestReleasedError(transport)
+	}
 	return &ADTError{
 		Type: ExceptionTypeAddObjectUnsupported,
 		Message: fmt.Sprintf("transport request %s does not advertise adding an object "+
-			"(not offered by SAP_BASIS 750, nor for a released request); add the entry in SE09 instead",
+			"(not offered by SAP_BASIS 750); add the entry in SE09 instead",
 			transport),
+	}
+}
+
+// requestReleasedError is the refusal of a target whose release is done or
+// under way. It is synthesised locally, so no write was sent; it carries no
+// SE09 hint, because the request cannot take entries whatever the tool.
+func requestReleasedError(number string) *ADTError {
+	return &ADTError{
+		Type:    ExceptionTypeRequestReleased,
+		Message: fmt.Sprintf("transport request or task %s is released and cannot take new entries", number),
 	}
 }
 
@@ -252,20 +272,25 @@ func (c *httpClient) ensureAddObjectSupported(ctx context.Context, transport str
 // its response carries the atom relation rel anywhere, which includes the
 // links of its tasks: SAP still decides on the write itself, so a relation
 // found on a child only lets the request through to that decision. A body
-// that does not parse advertises nothing. A read error, a 401 included, is
-// returned unwrapped, so a gate built on it sends no write after a failed
-// read.
-func (c *httpClient) advertisesRelation(ctx context.Context, number, rel string) (bool, error) {
+// that does not parse advertises nothing. The state is the one of number
+// when the body names it as a request, and TransportStateUnknown otherwise.
+// A read error, a 401 included, is returned unwrapped, so a gate built on it
+// sends no write after a failed read.
+func (c *httpClient) advertisesRelation(ctx context.Context, number, rel string) (bool, TransportState, error) {
 	data, err := c.readTransportXML(ctx, number, transportOrganizerType)
 	if err != nil {
-		return false, err
+		return false, TransportStateUnknown, err
 	}
 	var root atomLinkNode
 	rels := make(map[string]bool)
 	if xml.Unmarshal(data, &root) == nil {
 		root.collectRels(rels)
 	}
-	return rels[rel], nil
+	state := TransportStateUnknown
+	if info, perr := parseTransportInfo(data, number); perr == nil {
+		state = info.State
+	}
+	return rels[rel], state, nil
 }
 
 // validateTransportNumbers rejects empty numbers and numbers that would
