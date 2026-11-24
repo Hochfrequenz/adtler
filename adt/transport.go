@@ -1647,19 +1647,26 @@ func (c *httpClient) GetTransportTasks(ctx context.Context, transportNumber stri
 // all three parsers on this response body agree on what "this is the
 // addressed request" and "this request is absent" mean.
 func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest, error) {
+	req, err := findTransportRequest(data, transportNumber)
+	if err != nil {
+		return nil, err
+	}
+	return &TransportRequest{
+		Number:      req.Number,
+		Owner:       req.Owner,
+		Description: req.Description,
+		State:       TransportStateOf(req.Status),
+		RawStatus:   req.Status,
+	}, nil
+}
+
+// findTransportRequest returns the xmlRequest that transportNumber addresses
+// in either body shape (see parseTransportInfo), or absentTransportError.
+// DeleteTransport reads more of it than parseTransportInfo converts.
+func findTransportRequest(data []byte, transportNumber string) (xmlRequest, error) {
 	var doc xmlTransportDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parsing transport info: %w", err)
-	}
-
-	toTransportRequest := func(req xmlRequest) *TransportRequest {
-		return &TransportRequest{
-			Number:      req.Number,
-			Owner:       req.Owner,
-			Description: req.Description,
-			State:       TransportStateOf(req.Status),
-			RawStatus:   req.Status,
-		}
+		return xmlRequest{}, fmt.Errorf("parsing transport info: %w", err)
 	}
 
 	// Format 1: a single request directly under <tm:root>
@@ -1669,9 +1676,9 @@ func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest,
 	// the existing behaviour.
 	if doc.Request.Number != "" {
 		if transportNumber == "" || strings.EqualFold(doc.Request.Number, transportNumber) {
-			return toTransportRequest(doc.Request), nil
+			return doc.Request, nil
 		}
-		return nil, absentTransportError(transportNumber)
+		return xmlRequest{}, absentTransportError(transportNumber)
 	}
 
 	// Format 2: workbench/customizing > sections > requests (application/xml)
@@ -1680,19 +1687,20 @@ func parseTransportInfo(data []byte, transportNumber string) (*TransportRequest,
 	//
 	// Unlike parseTransportObjectsXML and parseTransportTaskNumbers, which
 	// accumulate every match walkRequests reports (their dedupers/slices have
-	// a natural way to combine duplicates), a TransportRequest is a single
+	// a natural way to combine duplicates), a request is a single
 	// Owner/Description/Status identity with no such combining rule. So this
 	// keeps only the first match and ignores any further one — walkRequests
 	// can call fn more than once for the same transportNumber, e.g. if that
 	// number appeared in both the workbench and customizing groups.
-	var result *TransportRequest
+	var result xmlRequest
+	matched := false
 	found := doc.walkRequests(transportNumber, func(req xmlRequest) {
-		if result == nil {
-			result = toTransportRequest(req)
+		if !matched {
+			result, matched = req, true
 		}
 	})
 	if !found {
-		return nil, absentTransportError(transportNumber)
+		return xmlRequest{}, absentTransportError(transportNumber)
 	}
 	return result, nil
 }
@@ -1750,8 +1758,11 @@ type xmlObjectGroup struct {
 
 // xmlTask is a <tm:task> element nested under a request.
 type xmlTask struct {
-	Number     string         `xml:"number,attr"`
-	Objects    []xmlObject    `xml:"abap_object"`
+	Number      string         `xml:"number,attr"`
+	Owner       string         `xml:"owner,attr"`
+	Description string         `xml:"desc,attr"`
+	Status      string         `xml:"status,attr"`
+	Objects   []xmlObject    `xml:"abap_object"`
 	AllObjects xmlObjectGroup `xml:"all_objects"`
 }
 
@@ -1771,6 +1782,8 @@ type xmlRequest struct {
 	Owner       string         `xml:"owner,attr"`
 	Description string         `xml:"desc,attr"`
 	Status      string         `xml:"status,attr"`
+	Type        string         `xml:"type,attr"`
+	Timestamp   string         `xml:"lastchanged_timestamp,attr"`
 	Objects     []xmlObject    `xml:"abap_object"`
 	AllObjects  xmlObjectGroup `xml:"all_objects"`
 	Tasks       []xmlTask      `xml:"task"`
