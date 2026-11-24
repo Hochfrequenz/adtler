@@ -261,6 +261,9 @@ func setupFixtures(ctx context.Context, client adt.Client, rec *rejectionRecorde
 	// We only warn (not fail) so that tests which don't need the package can still run.
 	if _, err := client.BrowsePackage(ctx, testPackage); err != nil {
 		fmt.Printf("WARNING: package %s not found — some integration tests will fail. See https://github.com/Hochfrequenz/Z_ADT_MCP_TEST\n", testPackage)
+		if rec.rejected.Load() { // a 401 is final (#222)
+			return nil, &lazyTransport{}, errCredentialRejected
+		}
 	}
 
 	// For non-local packages, the first object to create there creates a transport to hold the
@@ -291,7 +294,7 @@ func setupFixtures(ctx context.Context, client adt.Client, rec *rejectionRecorde
 			continue
 		}
 
-		if rec.rejected.Load() { // the existence check itself was refused (#222)
+		if rec.rejected.Load() { // the existence check was refused (#222)
 			return created, tr, errCredentialRejected
 		}
 
@@ -314,6 +317,9 @@ func setupFixtures(ctx context.Context, client adt.Client, rec *rejectionRecorde
 			}
 		}
 		if createErr != nil {
+			if rec.rejected.Load() { // the last package's CreateObject was refused with a 401
+				return created, tr, errCredentialRejected
+			}
 			if _, infoErr := client.GetObjectInfo(ctx, f.objectURI); infoErr == nil {
 				fmt.Printf("  [exists, create skipped] %s %s: %v\n", f.objType, f.name, createErr)
 				continue

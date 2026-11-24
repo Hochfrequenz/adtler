@@ -30,13 +30,25 @@ type fakeFixtureClient struct {
 	rec                     *rejectionRecorder
 	rejectOnCreateTransport bool
 	rejectOnDeleteObject    bool
+	rejectOnBrowse          bool
+	rejectOnGetObjectInfo   bool
+	objectInfoCalls         int
 }
 
 func (f *fakeFixtureClient) BrowsePackage(context.Context, string) ([]adt.ObjectInfo, error) {
+	if f.rejectOnBrowse {
+		f.rec.rejected.Store(true)
+		return nil, errors.New("unauthorized")
+	}
 	return nil, nil
 }
 
 func (f *fakeFixtureClient) GetObjectInfo(_ context.Context, uri string) (*adt.ObjectInfo, error) {
+	f.objectInfoCalls++
+	if f.rejectOnGetObjectInfo {
+		f.rec.rejected.Store(true)
+		return nil, errors.New("unauthorized")
+	}
 	if f.missing[uri] {
 		return nil, errors.New("not found")
 	}
@@ -163,6 +175,32 @@ func TestSetupFixtures_RejectedTransportCreation_StopsSetup(t *testing.T) {
 	}
 	if c.createdObjects != 0 {
 		t.Errorf("CreateObject was called %d times after the 401", c.createdObjects)
+	}
+}
+
+// A 401 on the package browse or the existence check ends setup before anything else is sent.
+func TestSetupFixtures_RejectedLookup_StopsSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		client func(*rejectionRecorder) *fakeFixtureClient
+	}{
+		{"package browse", func(r *rejectionRecorder) *fakeFixtureClient {
+			return &fakeFixtureClient{rec: r, rejectOnBrowse: true}
+		}},
+		{"existence check", func(r *rejectionRecorder) *fakeFixtureClient {
+			return &fakeFixtureClient{rec: r, rejectOnGetObjectInfo: true}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &rejectionRecorder{}
+			c := tc.client(rec)
+			if _, _, err := setupFixtures(context.Background(), c, rec); err == nil {
+				t.Fatal("setupFixtures succeeded after a rejected credential")
+			}
+			if c.objectInfoCalls > 1 || c.createdTr != 0 || c.createdObjects != 0 {
+				t.Errorf("%d existence checks, %d requests, %d objects created after the 401; want at most the one that failed, 0, 0", c.objectInfoCalls, c.createdTr, c.createdObjects)
+			}
+		})
 	}
 }
 
