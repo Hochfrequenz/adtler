@@ -381,8 +381,9 @@ func (c *httpClient) SystemInfo() (host, client string) {
 // and session cookies are no longer valid.
 //
 // It sends exactly one request. A 401 is returned as an *ADTError; any other
-// status of the logoff is ignored. The local session state is dropped either
-// way.
+// status of the logoff is ignored and the local session state is dropped. When
+// the request itself fails (transport error, cancelled context), Logout returns
+// before it drops the state; DebugSession.Close resets it itself then.
 func (c *httpClient) Logout(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+"/sap/public/bc/icf/logoff", nil)
 	if err != nil {

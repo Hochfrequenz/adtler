@@ -87,10 +87,11 @@ func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
 // which are never logged off.
 //
 // The logoff goes out with ctx. A wedged session can make it wait until ctx
-// ends or the 30-second timeout of the short client; the local state is
-// dropped either way, also when the logoff fails on the transport (Logout
-// returns early then, so Close resets the state itself). A 401 of the logoff
-// is returned as *ADTError.
+// ends or the 30-second timeout of the short client; taking the client mutex
+// afterwards can wait for a CSRF preflight in progress for as long again. The
+// local state is dropped either way, also when the logoff fails on the
+// transport (Logout returns early then, so Close resets the state itself). A
+// 401 of the logoff is returned as *ADTError.
 //
 // Close does not cancel calls still in flight: cancel their contexts first,
 // otherwise a late response of a stuck call can store a stale cookie in the
