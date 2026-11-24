@@ -49,14 +49,29 @@ func TestCreatePackage_Transportable_MultiSystem_Integration(t *testing.T) {
 			structure := fmt.Sprintf("ZADTLER_STRUKT_%06d", suffix)
 			development := fmt.Sprintf("ZADTLER_DEV_%06d", suffix)
 
-			// remove deletes a package the test created, and only reports a
-			// failure so a leftover is named.
+			// A 401 is final under Basic auth: after one, neither the test nor its
+			// cleanups may send the credential again (repository CLAUDE.md).
+			authFailed := false
+			// redactErr also hides the request number, which names its system.
+			redactErr := func(err error) string {
+				if isUnauthorizedErr(err) {
+					authFailed = true
+				}
+				text := redact(err.Error(), sys.Config.Host, sys.Config.User)
+				text = strings.ReplaceAll(text, transport, "<request>")
+				return strings.ReplaceAll(text, layer, "<layer>")
+			}
+			// remove deletes a package the test created and reports one it cannot
+			// remove; after a 401 it sends nothing.
 			remove := func(name string) {
+				if authFailed {
+					t.Errorf("[%s] package %s may be left behind; not cleaned up after a 401, remove it by hand", sys.Name, name)
+					return
+				}
 				uri := "/sap/bc/adt/packages/" + strings.ToLower(name)
 				if err := sys.Client.DeleteObject(context.Background(), uri, "", transport); err != nil &&
 					adt.ClassifyError(err) != adt.ErrorNotFound {
-					t.Errorf("[%s] the test package %s is left behind, remove it by hand: %s",
-						sys.Name, name, redact(err.Error(), sys.Config.Host, sys.Config.User))
+					t.Errorf("[%s] the test package %s is left behind, remove it by hand: %s", sys.Name, name, redactErr(err))
 				}
 			}
 
@@ -66,20 +81,23 @@ func TestCreatePackage_Transportable_MultiSystem_Integration(t *testing.T) {
 				t.Skipf("[%s] /sap/bc/adt/packages is not available on this release", sys.Name)
 			}
 			if err != nil {
-				t.Fatalf("[%s] CreatePackage (structure): %s", sys.Name, redact(err.Error(), sys.Config.Host, sys.Config.User))
+				t.Fatalf("[%s] CreatePackage (structure): %s", sys.Name, redactErr(err))
 			}
 			t.Cleanup(func() { remove(structure) })
 
 			err = sys.Client.CreatePackage(ctx, development, "adtler#291 development package", sys.Config.User,
 				component, layer, "", transport, adt.WithSuperPackage(structure))
 			if err != nil {
-				t.Fatalf("[%s] CreatePackage (development below %s): %s", sys.Name, structure, redact(err.Error(), sys.Config.Host, sys.Config.User))
+				t.Fatalf("[%s] CreatePackage (development below %s): %s", sys.Name, structure, redactErr(err))
 			}
 			t.Cleanup(func() { remove(development) }) // runs before the structure package's
 
 			for _, name := range []string{structure, development} {
+				if authFailed {
+					break
+				}
 				if _, err := sys.Client.GetObjectInfo(ctx, "/sap/bc/adt/packages/"+strings.ToLower(name)); err != nil {
-					t.Errorf("[%s] package %s cannot be read back: %s", sys.Name, name, redact(err.Error(), sys.Config.Host, sys.Config.User))
+					t.Errorf("[%s] package %s cannot be read back: %s", sys.Name, name, redactErr(err))
 				}
 			}
 			t.Logf("[%s] created a structure package and a development package below it", sys.Name)
