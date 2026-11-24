@@ -86,15 +86,15 @@ a tag cannot be re-cut.
 > **Minor** when the exported API surface grows a new symbol, or when consumers break.
 > **Patch** for everything else, including behaviour changes and features that add no exported symbol.
 
-A `feat:` commit does **not** earn a minor bump on its own: about half of the patch
-releases between v0.3.0 and v0.5.3 contain at least one `feat:` commit. Every minor bump up to
+A `feat:` commit does **not** earn a minor bump on its own: more than half of the patch
+releases between v0.3.0 and v0.5.3 (11 of 18) contain at least one `feat:` commit. Every minor bump up to
 v0.5.0 had one of two causes:
 
 | Bump | What caused it |
 |---|---|
 | v0.2.0 | `feat: add NewClientWithTransport` (#61) — new **exported** constructor |
 | v0.3.0 | `feat: expose ObjectURI(objectType, name)` (#76) — new **exported** function |
-| v0.4.0 | `chore: drop 1.25 tests, add 1.27 tests` (#132) — a **consumer compatibility break**, no `feat:` at all |
+| v0.4.0 | `chore: drop 1.25 tests, add 1.27 tests` (#132) — the supported Go versions changed (a **consumer compatibility break**), no `feat:` at all |
 | v0.5.0 | `feat: add SystemFlavor detection` (#130) — new **exported** type |
 
 **The case that gets missed:** a change can alter behaviour for every caller and still be a patch.
@@ -112,10 +112,11 @@ The test that decides it:
 **This is a deliberate choice.** The rule is stricter than the semver 0.x norm, which treats the
 minor as the breaking-change axis and puts purely additive API in the patch. Bumping the minor for
 additive exported symbols is the 1.x rule applied early. Three of the four minor bumps above did
-that (the fourth was a break); it is kept on purpose, and the two rules disagree exactly in the additive case that comes up
-most. The history is not perfectly consistent (v0.3.4 shipped the new exported
-`ReleaseTransportVerified` as a patch), so this section is the rule to follow from now on, not only
-a description of the past.
+that (the fourth was a break); it is kept on purpose, and the two rules disagree exactly in the
+additive case that comes up most. The history is not consistent with it everywhere: the patch
+releases v0.3.1 to v0.3.12 repeatedly shipped new exported symbols (for example `SearchPackages` in
+v0.3.1, `ReleaseTransportVerified` in v0.3.4, `RunClass` in v0.3.12). So this section is the rule to
+follow from now on, not only a description of the past.
 
 ## Public Repository — No Internal Data
 
