@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -166,5 +167,58 @@ func TestGetTransportRequests_StateFilter_Integration(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestGetTransportRequests_Descriptions_Integration guards #277: a request
+// that has a text in E07T has a Description, also when the transport
+// organizer tree does not show it (the tree lists modifiable requests only on
+// ECC and a few released ones only on S/4HANA). Every request of the first page
+// of every user's released requests is checked against E07T read directly; if
+// E07T holds exactly one text for it, Description is that text. It logs counts
+// only, never request numbers or texts.
+func TestGetTransportRequests_Descriptions_Integration(t *testing.T) {
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			ctx := context.Background()
+			page, err := sys.Client.GetTransportRequests(ctx, adt.TransportListOptions{
+				User: adt.TransportAllUsers, Filter: adt.TransportFilterReleased, Limit: 50,
+			})
+			if err != nil {
+				t.Fatalf("GetTransportRequests failed: %v", err)
+			}
+			if len(page.Requests) == 0 {
+				t.Skip("no released request visible on this system")
+			}
+			described, withText := 0, 0
+			for _, tr := range page.Requests {
+				if tr.Description != "" {
+					described++
+				}
+				// The number comes from E070 through the same client and was validated by it.
+				qr, err := sys.Client.RunQuery(ctx,
+					"SELECT AS4TEXT FROM E07T WHERE TRKORR = '"+adt.EscapeValue(tr.Number)+"'", 100)
+				if err != nil {
+					t.Fatalf("reading E07T directly failed: %v", err)
+				}
+				var texts []string
+				for _, row := range qr.Rows {
+					if len(row) > 0 && strings.TrimSpace(row[0]) != "" {
+						texts = append(texts, strings.TrimSpace(row[0]))
+					}
+				}
+				if len(texts) == 0 {
+					continue
+				}
+				withText++
+				if tr.Description == "" {
+					t.Errorf("a request with %d E07T text(s) has no Description", len(texts))
+				} else if len(texts) == 1 && strings.TrimSpace(tr.Description) != texts[0] {
+					t.Errorf("a request with exactly one E07T text has a Description that differs from it")
+				}
+			}
+			t.Logf("%d request(s) checked: %d with an E07T text, %d with a Description", len(page.Requests), withText, described)
+		})
 	}
 }
