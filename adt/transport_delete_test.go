@@ -225,6 +225,24 @@ func TestDeleteTransport_DataPreviewFails_StillDeletes(t *testing.T) {
 	}
 }
 
+func TestDeleteTransport_CancelledContext_DoesNotDelete(t *testing.T) {
+	s := &deleteTransportServer{readBody: deleteTestRequestXML(deleteTestNumber), previewRows: deleteTestCreationRows}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := s.client(t).DeleteTransport(ctx, deleteTestNumber)
+	if err == nil || got != nil {
+		t.Fatalf("got %v and error %v, want no result and the context error", got, err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error %v does not wrap context.Canceled", err)
+	}
+	for _, c := range s.calls {
+		if c == callDelete {
+			t.Errorf("a DELETE was sent after the context was cancelled: %v", s.calls)
+		}
+	}
+}
+
 func TestDeleteTransport_RejectedCredentialOnRead_SendsNothingElse(t *testing.T) {
 	s := &deleteTransportServer{readStatus: http.StatusUnauthorized, previewRows: deleteTestCreationRows}
 	got, err := s.client(t).DeleteTransport(context.Background(), deleteTestNumber)

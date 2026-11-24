@@ -309,7 +309,8 @@ type DeletedTransport struct {
 	Number      string `json:"number"`
 	Owner       string `json:"owner,omitempty"`
 	Description string `json:"description,omitempty"`
-	// Type is the request category (E070-TRFUNCTION): K, W or T.
+	// Type is the request category (K, W or T) as the ADT answer's tm:type
+	// gives it; empty where the answer carries none (the ECC worklist shape).
 	Type      TransportType  `json:"type,omitempty"`
 	State     TransportState `json:"state"`
 	RawStatus string         `json:"raw_status,omitempty"`
