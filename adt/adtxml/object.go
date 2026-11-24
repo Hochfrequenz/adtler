@@ -144,7 +144,8 @@ type PackageRef struct {
 }
 
 // CreatePackage is the XML body for creating an ABAP package (DEVC).
-// Content-Type must be application/vnd.sap.adt.packages.v2+xml.
+// The body is shaped for application/vnd.sap.adt.packages.v2+xml; adt.CreatePackage
+// negotiates the media type with the system (v2, else v1).
 type CreatePackage struct {
 	XMLName              xml.Name        `xml:"pak:package"`
 	NSPak                string          `xml:"xmlns:pak,attr"`

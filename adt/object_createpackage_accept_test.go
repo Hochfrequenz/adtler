@@ -65,6 +65,60 @@ func TestCreatePackage_SendsAcceptHeader(t *testing.T) {
 	}
 }
 
+// CreatePackage takes its media type from the discovery document (#155): v2
+// when the collection offers it or discovery says nothing usable, v1 when only
+// v1 is offered. Content-Type and Accept always carry the same value.
+func TestCreatePackage_NegotiatesMediaType(t *testing.T) {
+	const (
+		v2 = "application/vnd.sap.adt.packages.v2+xml"
+		v1 = "application/vnd.sap.adt.packages.v1+xml"
+	)
+	discoveryFor := func(accepts ...string) string {
+		doc := `<?xml version="1.0"?><app:service xmlns:app="http://www.w3.org/2007/app"><app:workspace><app:collection href="/sap/bc/adt/packages">`
+		for _, a := range accepts {
+			doc += "<app:accept>" + a + "</app:accept>"
+		}
+		return doc + `</app:collection></app:workspace></app:service>`
+	}
+	cases := []struct {
+		name      string
+		discovery string
+		want      string
+	}{
+		{"only v1 offered", discoveryFor(v1), v1},
+		{"v2 and v1 offered", discoveryFor(v2, v1), v2},
+		{"v1 listed before v2", discoveryFor(v1, v2), v2},
+		{"neither version offered", discoveryFor("application/xml"), v2},
+		{"collection without accept entries", discoveryFor(), v2},
+		{"no discovery document", "", v2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotAccept, gotContentType string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case csrfEndpoint:
+					w.Header().Set("X-CSRF-Token", "token")
+					_, _ = w.Write([]byte(tc.discovery))
+				case logoffPath:
+				default:
+					gotAccept, gotContentType = r.Header.Get("Accept"), r.Header.Get("Content-Type")
+					w.WriteHeader(http.StatusCreated)
+				}
+			}))
+			defer srv.Close()
+
+			client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+			if err := client.CreatePackage(context.Background(), "$ZEXAMPLE", "Example package", "DEVELOPER", "LOCAL", "", "", ""); err != nil {
+				t.Fatalf("CreatePackage: %v", err)
+			}
+			if gotAccept != tc.want || gotContentType != tc.want {
+				t.Errorf("Accept %q, Content-Type %q, want both %q", gotAccept, gotContentType, tc.want)
+			}
+		})
+	}
+}
+
 // A server rejection must surface as an error rather than being reported as a
 // created package.
 //
