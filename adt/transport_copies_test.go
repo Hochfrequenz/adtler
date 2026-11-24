@@ -263,11 +263,23 @@ func TestCopyTransportObjects_UnsupportedSystemSendsNoPUT(t *testing.T) {
 	}
 }
 
-func TestCopyTransportObjects_TargetWithoutRelationSendsNoPUT(t *testing.T) {
-	// A released target carries none of the mutation relations, on any
-	// release. The gate fails closed: no relation, no PUT.
+func TestCopyTransportObjects_ReleasedTargetSendsNoPUT(t *testing.T) {
+	// A released target carries none of the mutation relations. The gate
+	// fails closed (no PUT) and names the released state, not ErrorNotSupported.
 	srv, puts := copiesServer(t, map[string]string{
 		copiesTarget: copiesRequestXML(copiesTarget, "R", "", "adturi"),
+	}, http.StatusOK)
+
+	err := copiesClient(srv).CopyTransportObjects(context.Background(), copiesSource, copiesTarget, true)
+	assertRequestReleased(t, err, copiesTarget)
+	if n := len(puts()); n != 0 {
+		t.Fatalf("%d PUTs sent without the capability relation", n)
+	}
+}
+
+func TestCopyTransportObjects_ModifiableTargetWithoutRelationIsNotSupported(t *testing.T) {
+	srv, puts := copiesServer(t, map[string]string{
+		copiesTarget: copiesRequestXML(copiesTarget, "D", "", "modify"),
 	}, http.StatusOK)
 
 	err := copiesClient(srv).CopyTransportObjects(context.Background(), copiesSource, copiesTarget, true)
@@ -358,6 +370,18 @@ func TestAddPackageToTransport_UnsupportedSystemSendsNoPUT(t *testing.T) {
 	assertNotSupported(t, err)
 	if n := len(puts()); n != 0 {
 		t.Fatalf("%d PUTs sent to an unsupported system", n)
+	}
+}
+
+func TestAddPackageToTransport_ReleasedTargetSendsNoPUT(t *testing.T) {
+	srv, puts := copiesServer(t, map[string]string{
+		copiesTarget: copiesRequestXML(copiesTarget, "R", "", "adturi"),
+	}, http.StatusOK)
+
+	err := copiesClient(srv).AddPackageToTransport(context.Background(), copiesPackage, copiesTarget, false)
+	assertRequestReleased(t, err, copiesTarget)
+	if n := len(puts()); n != 0 {
+		t.Fatalf("%d PUTs sent to a released target", n)
 	}
 }
 

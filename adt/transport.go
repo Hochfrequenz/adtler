@@ -957,11 +957,14 @@ func queryCell(row []string, i int) string {
 // reports 400 "Accept header missing" for a change that did happen. The
 // vendor type is therefore always sent.
 //
-// The call is refused locally with ErrorNotSupported (ADTError type
-// ExceptionTypeAddObjectUnsupported), and no write is sent, when transport
-// does not advertise the addobject relation: on SAP_BASIS 750, whose
-// transport organizer has no add action at all (every PUT there is a
-// change-owner request, see #125), and for a released request. Before #154
+// The call is refused locally, and no write is sent, when transport does not
+// advertise the addobject relation. A released request (or one whose release
+// is in progress) is refused with ErrorBadRequest (ADTError type
+// ExceptionTypeRequestReleased), because its state is read from the same
+// response (#288). Otherwise it is refused with ErrorNotSupported (ADTError
+// type ExceptionTypeAddObjectUnsupported), which is the case on SAP_BASIS 750,
+// whose transport organizer has no add action at all (every PUT there is a
+// change-owner request, see #125). Before #154
 // this method posted to an .../abaptransportcomponents path that no release
 // implements, so it never worked on any system.
 func (c *httpClient) AddToTransport(ctx context.Context, pgmID, objectType, objectName, transport string) error {

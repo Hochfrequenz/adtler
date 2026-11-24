@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -106,9 +107,54 @@ func TestAddToTransport_ECCSendsNoPUT(t *testing.T) {
 	}
 }
 
+// assertRequestReleased checks the refusal of a released (or release-in-
+// progress) target: a request-specific error, not ErrorNotSupported, and
+// without the SE09 hint that only applies to a system without the action.
+func assertRequestReleased(t *testing.T, err error, number string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected a released-request error, got nil")
+	}
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *adt.ADTError, got %T: %v", err, err)
+	}
+	if adtErr.Type != adt.ExceptionTypeRequestReleased {
+		t.Errorf("Type = %q, want %q", adtErr.Type, adt.ExceptionTypeRequestReleased)
+	}
+	if kind := adt.ClassifyError(err); kind != adt.ErrorBadRequest {
+		t.Errorf("ClassifyError = %v, want %v", kind, adt.ErrorBadRequest)
+	}
+	if strings.Contains(err.Error(), "SE09") {
+		t.Errorf("message suggests SE09 for a released request: %v", err)
+	}
+	if !strings.Contains(err.Error(), number) {
+		t.Errorf("message does not name the request %s: %v", number, err)
+	}
+}
+
 func TestAddToTransport_ReleasedRequestSendsNoPUT(t *testing.T) {
+	// N is released with import protection; O is a release in progress.
+	for _, status := range []string{"R", "N", "O"} {
+		t.Run("status_"+status, func(t *testing.T) {
+			srv, puts := copiesServer(t, map[string]string{
+				addTask: copiesRequestXML(addTask, status, "", "adturi"),
+			}, http.StatusOK)
+
+			err := copiesClient(srv).AddToTransport(context.Background(), addPgmID, addObjType, addObjName, addTask)
+			assertRequestReleased(t, err, addTask)
+			if n := len(puts()); n != 0 {
+				t.Fatalf("%d PUTs sent without the addobject relation", n)
+			}
+		})
+	}
+}
+
+// TestAddToTransport_ModifiableWithoutRelationIsNotSupported pins that a
+// modifiable request lacking the relation keeps ErrorNotSupported.
+func TestAddToTransport_ModifiableWithoutRelationIsNotSupported(t *testing.T) {
 	srv, puts := copiesServer(t, map[string]string{
-		addTask: copiesRequestXML(addTask, "R", "", "adturi"),
+		addTask: copiesRequestXML(addTask, "D", "", "modify"),
 	}, http.StatusOK)
 
 	err := copiesClient(srv).AddToTransport(context.Background(), addPgmID, addObjType, addObjName, addTask)

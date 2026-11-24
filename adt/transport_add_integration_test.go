@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Hochfrequenz/adtler/adt"
@@ -104,4 +105,63 @@ func TestAddToTransport_Integration(t *testing.T) {
 			t.Logf("[4] program added to the task")
 		})
 	}
+}
+
+// TestAddToTransport_ReleasedRequest_Integration calls the three capability
+// gates against a released request (#288). A released target must be refused
+// with ExceptionTypeRequestReleased (ErrorBadRequest), not ErrorNotSupported,
+// and nothing is written: each gate refuses before its PUT, so no object is
+// created and nothing needs cleaning up. Requires SAP_BASIS 816, the release
+// whose modifiable requests advertise the add actions.
+func TestAddToTransport_ReleasedRequest_Integration(t *testing.T) {
+	ctx := context.Background()
+
+	for _, sys := range eachSystem(t) {
+		sys := sys
+		t.Run(sys.Name, func(t *testing.T) {
+			c := sys.Client
+			if release := sapBasisRelease(t, c); release < 816 {
+				t.Skipf("SAP_BASIS %d: the transport organizer has no add actions", release)
+			}
+
+			page, err := c.GetTransportRequests(ctx, adt.TransportListOptions{
+				User: adt.TransportAllUsers, Filter: adt.TransportFilterReleased, Limit: 2,
+			})
+			if err != nil {
+				// Kind and type only: a raw error can carry the request URL.
+				t.Fatalf("GetTransportRequests failed: kind %v, type %T", adt.ClassifyError(err), err)
+			}
+			t.Logf("%d released request(s) on the first page", len(page.Requests))
+			if len(page.Requests) == 0 {
+				t.Skip("no released request on this system")
+			}
+			released := page.Requests[0].Number
+
+			assertReleasedRefusal(t, "AddToTransport", c.AddToTransport(ctx, addPgmID, addObjType, "Z_PLACEHOLDER_288", released))
+			assertReleasedRefusal(t, "AddPackageToTransport", c.AddPackageToTransport(ctx, "Z_PLACEHOLDER_288", released, false))
+
+			if len(page.Requests) < 2 {
+				t.Log("only one released request: CopyTransportObjects needs a second, distinct source and is not exercised")
+				return
+			}
+			assertReleasedRefusal(t, "CopyTransportObjects", c.CopyTransportObjects(ctx, page.Requests[1].Number, released, true))
+		})
+	}
+}
+
+// assertReleasedRefusal fails unless err is the released-target refusal. The
+// message is not printed, because it names a request.
+func assertReleasedRefusal(t *testing.T, call string, err error) {
+	t.Helper()
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("%s: want an ADT error for a released target, got %T", call, err)
+	}
+	if adtErr.Type != adt.ExceptionTypeRequestReleased {
+		t.Fatalf("%s: want %s, got %s", call, adt.ExceptionTypeRequestReleased, adtErr.Type)
+	}
+	if kind := adt.ClassifyError(err); kind != adt.ErrorBadRequest {
+		t.Fatalf("%s: ClassifyError = %v, want %v", call, kind, adt.ErrorBadRequest)
+	}
+	t.Logf("%s: refused as released, no write sent", call)
 }
