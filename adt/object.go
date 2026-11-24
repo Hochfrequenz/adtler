@@ -352,7 +352,32 @@ func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, module
 	return checkResponse(resp)
 }
 
-func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error {
+// The values of SAP's PACKAGE_TYPE, as the package resource names them.
+const (
+	PackageTypeDevelopment = "development"
+	PackageTypeStructure   = "structure"
+	PackageTypeMain        = "main"
+)
+
+// PackageOption changes what CreatePackage requests beyond its positional
+// arguments.
+type PackageOption func(*packageOptions)
+
+type packageOptions struct{ packageType, superPackage string }
+
+// WithPackageType sets the package type (PackageTypeDevelopment,
+// PackageTypeStructure or PackageTypeMain). The default, also for "", is
+// PackageTypeDevelopment.
+func WithPackageType(packageType string) PackageOption {
+	return func(o *packageOptions) { o.packageType = packageType }
+}
+
+// WithSuperPackage creates the package below the named package.
+func WithSuperPackage(name string) PackageOption {
+	return func(o *packageOptions) { o.superPackage = name }
+}
+
+func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string, opts ...PackageOption) error {
 	// The fixed values of domain ABAP_LANGUAGE_VERSION. Checking them also
 	// catches a transport number passed one position too early (adtler#254).
 	switch languageVersion {
@@ -360,14 +385,33 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 	default:
 		return fmt.Errorf("CreatePackage: language version %q is not a value of ABAP_LANGUAGE_VERSION (\"\", \"2\" or \"5\")", languageVersion)
 	}
+	o := packageOptions{packageType: PackageTypeDevelopment}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	switch o.packageType {
+	case "":
+		o.packageType = PackageTypeDevelopment
+	case PackageTypeDevelopment, PackageTypeStructure, PackageTypeMain:
+	default:
+		return fmt.Errorf("CreatePackage: package type %q is not %q, %q or %q",
+			o.packageType, PackageTypeDevelopment, PackageTypeStructure, PackageTypeMain)
+	}
+	attrs := adtxml.PakAttributes{PackageType: o.packageType, LanguageVersion: languageVersion}
+	// Every package that is not local ($...) needs change recording; without it
+	// SAP answers 400 "Change recording must be activated for package" (adtler#291).
+	if !strings.HasPrefix(name, "$") {
+		attrs.RecordChanges = "true"
+	}
 	body, err := xml.Marshal(adtxml.CreatePackage{
-		NSPak:       "http://www.sap.com/adt/packages",
-		NSCore:      nsADTCore,
-		Name:        strings.ToUpper(name),
-		Type:        ObjectTypePackage,
-		Description: description,
-		Responsible: strings.ToUpper(responsible),
-		Attributes:  adtxml.PakAttributes{PackageType: "development", LanguageVersion: languageVersion},
+		NSPak:        "http://www.sap.com/adt/packages",
+		NSCore:       nsADTCore,
+		Name:         strings.ToUpper(name),
+		Type:         ObjectTypePackage,
+		Description:  description,
+		Responsible:  strings.ToUpper(responsible),
+		Attributes:   attrs,
+		SuperPackage: adtxml.PakSuperPackage{Name: strings.ToUpper(o.superPackage)},
 		Transport: adtxml.PakTransport{
 			SoftwareComponent: adtxml.PakNamedItem{Name: softwareComponent},
 			TransportLayer:    adtxml.PakNamedItem{Name: transportLayer},
