@@ -119,11 +119,20 @@ func ExchangeCode(host, clientID, code, codeVerifier, redirectURI string, tlsSki
 
 // RefreshToken exchanges a refresh token for new tokens.
 // It POSTs to {host}/sap/bc/sec/oauth2/token with grant_type=refresh_token.
+// A response without a new refresh_token keeps the given one (RFC 6749 section 6),
+// so a caller that saves the result does not overwrite a valid token with "".
 func RefreshToken(host, clientID, refreshToken string, tlsSkipVerify bool) (TokenData, error) {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", refreshToken)
 	form.Set("client_id", clientID)
 
-	return postToken(host, form, tlsSkipVerify)
+	td, err := postToken(host, form, tlsSkipVerify)
+	if err != nil {
+		return td, err
+	}
+	if td.RefreshToken == "" {
+		td.RefreshToken = refreshToken
+	}
+	return td, nil
 }

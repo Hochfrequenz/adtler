@@ -202,6 +202,32 @@ func TestRefreshToken(t *testing.T) {
 	}
 }
 
+// TestRefreshTokenWithoutNewRefreshToken: RFC 6749 section 6 makes a new refresh
+// token optional, so a response with only access_token must keep the old one.
+func TestRefreshTokenWithoutNewRefreshToken(t *testing.T) {
+	const oldRefreshToken = "old-refresh-token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "new-access-tok",
+			"expires_in":   1800,
+		})
+	}))
+	defer srv.Close()
+
+	token, err := RefreshToken(srv.URL, "my-client", oldRefreshToken, false)
+	if err != nil {
+		t.Fatalf("RefreshToken returned error: %v", err)
+	}
+	if token.AccessToken != "new-access-tok" {
+		t.Errorf("AccessToken: got %q, want %q", token.AccessToken, "new-access-tok")
+	}
+	if token.RefreshToken != oldRefreshToken {
+		t.Errorf("RefreshToken: got %q, want the original %q", token.RefreshToken, oldRefreshToken)
+	}
+}
+
 // TestRefreshTokenServerError verifies that a 400 response causes RefreshToken to return an error.
 func TestRefreshTokenServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
