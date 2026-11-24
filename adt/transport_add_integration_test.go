@@ -128,7 +128,8 @@ func TestAddToTransport_ReleasedRequest_Integration(t *testing.T) {
 				User: adt.TransportAllUsers, Filter: adt.TransportFilterReleased, Limit: 2,
 			})
 			if err != nil {
-				t.Fatalf("GetTransportRequests: %v", err)
+				// Kind and type only: a raw error can carry the request URL.
+				t.Fatalf("GetTransportRequests failed: kind %v, type %T", adt.ClassifyError(err), err)
 			}
 			t.Logf("%d released request(s) on the first page", len(page.Requests))
 			if len(page.Requests) == 0 {
