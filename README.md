@@ -313,7 +313,8 @@ What this repository does instead:
 
 **The package endpoint does not exist on ECC.** `/sap/bc/adt/packages` is an S/4
 collection — flavor detection uses its presence as the S/4 marker — so the ECC
-leg of a multi-system package test can only skip. Write such tests with
+leg of a multi-system package test can only skip. `CreatePackage` reports the
+404 as an `*ADTError` that `ClassifyError` maps to `ErrorNotSupported` (#292). Write such tests with
 `eachSystem(t)` anyway, so they cover S/4 wherever they run and say why they
 skipped elsewhere.
 
