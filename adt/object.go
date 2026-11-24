@@ -50,10 +50,13 @@ const (
 // used as the objectType in searches and the type in package creation/browse.
 const ObjectTypePackage = "DEVC/K"
 
-// pkgContentType is the media type the ADT package endpoint speaks. SAP rejects
-// the POST with 400 ExceptionResourceBadRequest ("Accept header missing") when
-// the request carries only a Content-Type, so it is sent as both.
-const pkgContentType = "application/vnd.sap.adt.packages.v2+xml"
+// The media types the ADT package endpoint speaks, newest first. CreatePackage
+// picks the first one the collection advertises in the discovery document and
+// uses v2 when discovery says nothing usable (#155).
+const (
+	pkgContentTypeV2 = "application/vnd.sap.adt.packages.v2+xml"
+	pkgContentTypeV1 = "application/vnd.sap.adt.packages.v1+xml"
+)
 
 // objectTypeInfo is where an object type lives in the ADT REST tree and what
 // ADT calls it. Being in this map makes a type addressable and readable; being
@@ -377,13 +380,24 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 		return fmt.Errorf("CreatePackage marshal: %w", err)
 	}
 
-	path := "/sap/bc/adt/packages"
+	const pkgEndpoint = "/sap/bc/adt/packages"
+	path := pkgEndpoint
 	if transport != "" {
 		path += "?corrNr=" + transport
 	}
+	// The discovery cache is only filled by the preflight, which doMutate runs
+	// too late for a header computed here.
+	if err := c.ensureCSRF(ctx); err != nil {
+		return fmt.Errorf("CreatePackage: %w", err)
+	}
+	// SAP rejects the POST with 400 ExceptionResourceBadRequest ("Accept header
+	// missing") when the request carries only a Content-Type, so it is sent as
+	// both. They stay the same value: the collection round-trips one
+	// representation, so the body and the response share a version.
+	ct := c.NegotiateContentType(pkgEndpoint, []string{pkgContentTypeV2, pkgContentTypeV1}, pkgContentTypeV2)
 	resp, err := c.doMutate(ctx, http.MethodPost, path,
 		strings.NewReader(xml.Header+string(body)),
-		map[string]string{"Content-Type": pkgContentType, "Accept": pkgContentType},
+		map[string]string{"Content-Type": ct, "Accept": ct},
 	)
 	if err != nil {
 		return fmt.Errorf("CreatePackage: %w", err)
