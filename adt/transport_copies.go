@@ -213,7 +213,9 @@ func (c *httpClient) putTransportUserAction(ctx context.Context, targetRequest, 
 // state is only used when the body names targetRequest as a request: on ECC
 // a released request is absent from the worklist, so it stays
 // ErrorNotSupported there, and so does a task whose read does not carry it
-// as a request (the shape of a task read is not measured). This deliberately also refuses a system between
+// as a request (the shape of a task read is not measured).
+//
+// This deliberately also refuses a system between
 // ABAP Platform 1809 and 2105 that might implement addobjectfromrequest
 // without advertising it: refusing there costs a missed feature, sending
 // to a system without the action returns a misleading change-owner error.
