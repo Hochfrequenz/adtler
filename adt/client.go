@@ -295,8 +295,8 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 //     RunUnitTests trigger, stateless ones such as StopListener and the
 //     breakpoint calls included. The reason there is containment: a stuck
 //     stateful debug call wedges only its own cookie jar, not every other
-//     request of the parent client. DebugSession has no Logout or Close of its
-//     own, so its SAP session ends only when SAP times it out (issue #162).
+//     request of the parent client. DebugSession.Close ends its SAP session
+//     (issue #162); without it, SAP times the session out.
 //
 // The returned client is not registered anywhere and holds no locks. Logout on
 // the parent does not reach it, since it has its own jar. It shares the
@@ -381,8 +381,9 @@ func (c *httpClient) SystemInfo() (host, client string) {
 // and session cookies are no longer valid.
 //
 // It sends exactly one request. A 401 is returned as an *ADTError; any other
-// status of the logoff is ignored. The local session state is dropped either
-// way.
+// status of the logoff is ignored and the local session state is dropped. When
+// the request itself fails (transport error, cancelled context), Logout returns
+// before it drops the state; DebugSession.Close resets it itself then.
 func (c *httpClient) Logout(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Host+"/sap/public/bc/icf/logoff", nil)
 	if err != nil {

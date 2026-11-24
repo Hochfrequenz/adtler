@@ -23,6 +23,8 @@ import (
 // Every field is set once by NewDebugSession and never written again, so its
 // methods may run concurrently (issue #191) — keep it that way. State that
 // changes per call, such as the IDs of set breakpoints, belongs to the caller.
+// Close changes only the cookie jar and CSRF token inside the client, not the
+// fields of the DebugSession.
 type DebugSession struct {
 	client     *httpClient
 	user       string
@@ -61,6 +63,9 @@ func resolveHTTPClient(c Client) *httpClient {
 // alone. Mirrors the isolation RunClass already uses for a different reason
 // (issue #106).
 //
+// The SAP session is not ended by the parent's Logout; call Close for that,
+// otherwise SAP times the session out.
+//
 // An optional ideID can be passed to identify the debug client to SAP (default: "go-sap-adt").
 func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
 	hc := resolveHTTPClient(c).freshSession()
@@ -74,6 +79,34 @@ func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {
 		terminalID: "MCP01",
 		ideID:      id,
 	}
+}
+
+// Close ends this DebugSession's own SAP session and drops its local session
+// state (cookies and CSRF token). It touches neither the parent client's
+// session nor the single-use sessions of DebugSession.RunUnitTests triggers,
+// which are never logged off.
+//
+// The logoff goes out with ctx. A wedged session can make it wait until ctx
+// ends or the 30-second timeout of the short client; taking the client mutex
+// afterwards can wait for a CSRF preflight in progress for as long again. The
+// local state is dropped either way, also when the logoff fails on the
+// transport (Logout returns early then, so Close resets the state itself). A
+// 401 of the logoff is returned as *ADTError.
+//
+// Close does not cancel calls still in flight: cancel their contexts first,
+// otherwise a late response of a stuck call can store a stale cookie in the
+// fresh jar.
+//
+// The DebugSession stays usable: the next call opens a new SAP session with a
+// new CSRF preflight. Which SAP-side state the logoff releases is not
+// promised beyond "the session ends".
+func (d *DebugSession) Close(ctx context.Context) error {
+	err := d.client.Logout(ctx)
+	d.client.mu.Lock()
+	d.client.csrfToken = ""
+	d.client.jar.Reset()
+	d.client.mu.Unlock()
+	return err
 }
 
 // BreakpointScope selects which breakpoint set a request addresses.
