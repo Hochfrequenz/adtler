@@ -160,9 +160,12 @@ func (l *lazyTransport) number() string { return l.nr }
 
 // cleanupFixtures deletes the fixtures setupFixtures created (reverse order to handle
 // dependencies), then releases the fixture transport if it holds objects, or deletes it if it
-// stayed empty (#241). After a 401 it leaves the request alone: that would only count one more
+// stayed empty (#241). After a 401 it sends nothing more: each request would only count one more
 // failed logon.
 func cleanupFixtures(ctx context.Context, client adt.Client, created []fixtureObject, tr *lazyTransport, rec *rejectionRecorder) {
+	if rec.rejected.Load() {
+		return
+	}
 	if len(created) > 0 {
 		fmt.Println("=== Integration test teardown: deleting created fixtures ===")
 		for i := len(created) - 1; i >= 0; i-- {
@@ -233,10 +236,13 @@ func reportLeftLocks(ctx context.Context) {
 	}
 }
 
+// localPackage is the package of objects that need no transport request.
+const localPackage = "$TMP"
+
 // fixturePackages lists packages to try when creating fixtures, in order of preference.
 // Z_ADT_MCP_TEST is the dedicated test package on S4; $TMP is the fallback for ECC
 // or when Z_ADT_MCP_TEST doesn't exist.
-var fixturePackages = []string{"Z_ADT_MCP_TEST", "$TMP"}
+var fixturePackages = []string{"Z_ADT_MCP_TEST", localPackage}
 
 // setupFixtures creates any missing test objects, sets their source, and activates them.
 // Returns the fixtures that were created and the fixture transport (for teardown); the
@@ -253,7 +259,7 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *la
 	tr := &lazyTransport{create: func() (string, error) {
 		var lastErr error
 		for _, pkg := range fixturePackages {
-			if pkg == "$TMP" {
+			if pkg == localPackage {
 				continue
 			}
 			nr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP integration test fixtures", Package: pkg})
@@ -281,13 +287,13 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *la
 		var usedPkg string
 		for _, pkg := range fixturePackages {
 			transport := ""
-			if pkg != "$TMP" {
+			if pkg != localPackage {
 				transport = tr.get()
 			}
 			createErr = client.CreateObject(ctx, f.objType, f.name, pkg, f.description, transport)
 			if createErr == nil {
 				usedPkg = pkg
-				tr.holdsObjects = tr.holdsObjects || pkg != "$TMP"
+				tr.holdsObjects = tr.holdsObjects || pkg != localPackage
 				break
 			}
 		}
@@ -300,6 +306,9 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *la
 			continue
 		}
 		fmt.Printf("  [created] %s %s in package %s\n", f.objType, f.name, usedPkg)
+		// The object exists from here on, so the teardown has to delete it even when the
+		// source write below fails: the request records it and must not be released with it.
+		created = append(created, f)
 
 		// Set source: lock → get etag → set source → unlock.
 		if err := setFixtureSource(ctx, client, f, tr.number()); err != nil {
@@ -307,7 +316,6 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *la
 		}
 		fmt.Printf("  [source set] %s\n", f.name)
 
-		created = append(created, f)
 		createdURIs = append(createdURIs, f.objectURI)
 	}
 

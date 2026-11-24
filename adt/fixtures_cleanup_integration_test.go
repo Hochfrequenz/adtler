@@ -10,10 +10,7 @@ import (
 	"github.com/Hochfrequenz/adtler/adt"
 )
 
-const (
-	fakeTransportNumber = "AAAK900001"
-	localPackage        = "$TMP"
-)
+const fakeTransportNumber = "AAAK900001"
 
 // fakeFixtureClient answers the calls setupFixtures and cleanupFixtures make and counts the
 // transport calls. It embeds adt.Client, so a call it does not override panics: the tests
@@ -22,6 +19,7 @@ type fakeFixtureClient struct {
 	adt.Client
 	missing        map[string]bool // fixture URIs GetObjectInfo reports as not found
 	nonLocalFails  bool            // CreateObject fails for every package but $TMP
+	setSourceFails bool
 	createdTr      int
 	releasedTr     int
 	deletedTr      int
@@ -58,6 +56,9 @@ func (f *fakeFixtureClient) GetSource(context.Context, string) (*adt.SourceResul
 	return &adt.SourceResult{}, nil
 }
 func (f *fakeFixtureClient) SetSource(context.Context, string, string, string, string, string) (string, error) {
+	if f.setSourceFails {
+		return "", errors.New("write refused")
+	}
 	return "", nil
 }
 func (f *fakeFixtureClient) ActivateObjects(context.Context, []string) (*adt.ActivationResult, error) {
@@ -117,6 +118,22 @@ func TestSetupFixtures_MissingFixture_HoldsObjectsOnlyInNonLocalPackage(t *testi
 	}
 }
 
+// A fixture whose source write failed exists already, so the teardown has to delete it before
+// it releases the request that records it.
+func TestSetupFixtures_SourceWriteFails_ReturnsTheCreatedFixture(t *testing.T) {
+	c := &fakeFixtureClient{
+		missing:        map[string]bool{testFixtures[0].objectURI: true},
+		setSourceFails: true,
+	}
+	created, tr, err := setupFixtures(context.Background(), c)
+	if err == nil {
+		t.Fatal("setupFixtures succeeded although the source write failed")
+	}
+	if len(created) != 1 || tr.number() != fakeTransportNumber || !tr.holdsObjects {
+		t.Errorf("created %d fixtures, request %q, holdsObjects %v; want 1, %s, true", len(created), tr.number(), tr.holdsObjects, fakeTransportNumber)
+	}
+}
+
 func TestCleanupFixtures(t *testing.T) {
 	one := []fixtureObject{testFixtures[0]}
 	for _, tc := range []struct {
@@ -130,7 +147,7 @@ func TestCleanupFixtures(t *testing.T) {
 		{"empty request is deleted", nil, &lazyTransport{nr: fakeTransportNumber}, false, 0, 1},
 		{"request without objects is deleted", one, &lazyTransport{nr: fakeTransportNumber}, false, 0, 1},
 		{"request with objects is released", one, &lazyTransport{nr: fakeTransportNumber, holdsObjects: true}, false, 1, 0},
-		{"rejected credential touches nothing", nil, &lazyTransport{nr: fakeTransportNumber}, true, 0, 0},
+		{"rejected credential touches nothing", one, &lazyTransport{nr: fakeTransportNumber, holdsObjects: true}, true, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &fakeFixtureClient{}
@@ -140,8 +157,12 @@ func TestCleanupFixtures(t *testing.T) {
 			if c.releasedTr != tc.wantReleased || c.deletedTr != tc.wantDel {
 				t.Errorf("released %d, deleted %d requests; want %d, %d", c.releasedTr, c.deletedTr, tc.wantReleased, tc.wantDel)
 			}
-			if c.deletedObjects != len(tc.created) {
-				t.Errorf("deleted %d objects, want %d", c.deletedObjects, len(tc.created))
+			wantObjects := len(tc.created)
+			if tc.rejected {
+				wantObjects = 0
+			}
+			if c.deletedObjects != wantObjects {
+				t.Errorf("deleted %d objects, want %d", c.deletedObjects, wantObjects)
 			}
 		})
 	}
