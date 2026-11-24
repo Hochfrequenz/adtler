@@ -23,6 +23,8 @@ import (
 // Every field is set once by NewDebugSession and never written again, so its
 // methods may run concurrently (issue #191) — keep it that way. State that
 // changes per call, such as the IDs of set breakpoints, belongs to the caller.
+// Close changes only the cookie jar and CSRF token inside the client, not the
+// fields of the DebugSession.
 type DebugSession struct {
 	client     *httpClient
 	user       string
@@ -60,6 +62,9 @@ func resolveHTTPClient(c Client) *httpClient {
 // freshSession's isolated jar contains the blast radius to this debug session
 // alone. Mirrors the isolation RunClass already uses for a different reason
 // (issue #106).
+//
+// The SAP session is not ended by the parent's Logout; call Close for that,
+// otherwise SAP times the session out.
 //
 // An optional ideID can be passed to identify the debug client to SAP (default: "go-sap-adt").
 func NewDebugSession(c Client, user string, ideID ...string) *DebugSession {

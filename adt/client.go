@@ -295,8 +295,8 @@ func NewClientWithPollInterval(cfg sapmcpconfig.SAPSystem, pollInterval time.Dur
 //     RunUnitTests trigger, stateless ones such as StopListener and the
 //     breakpoint calls included. The reason there is containment: a stuck
 //     stateful debug call wedges only its own cookie jar, not every other
-//     request of the parent client. DebugSession has no Logout or Close of its
-//     own, so its SAP session ends only when SAP times it out (issue #162).
+//     request of the parent client. DebugSession.Close ends its SAP session
+//     (issue #162); without it, SAP times the session out.
 //
 // The returned client is not registered anywhere and holds no locks. Logout on
 // the parent does not reach it, since it has its own jar. It shares the
