@@ -13,10 +13,10 @@ import (
 
 // endpointUnavailable reports whether CreatePackage refused because the
 // /sap/bc/adt/packages endpoint does not exist on this release. CreatePackage
-// answers a 404 with its own guidance string rather than an ADTError, so this
-// is a substring match on that fixed prefix and not on a server message.
+// answers a 404 there with an ADTError of Type ExceptionTypeCreatePackageUnsupported
+// (#292), which classifies as ErrorNotSupported.
 func endpointUnavailable(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "endpoint is not available on this SAP system")
+	return adt.ClassifyError(err) == adt.ErrorNotSupported
 }
 
 // TestCreatePackage_DuplicateSurfacesAsADTError_MultiSystem_Integration is the

@@ -2,6 +2,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,6 +63,42 @@ func TestCreatePackage_SendsAcceptHeader(t *testing.T) {
 	}
 	if gotMethod != http.MethodPost || gotPath != "/sap/bc/adt/packages" {
 		t.Errorf("request: got %s %s, want POST /sap/bc/adt/packages", gotMethod, gotPath)
+	}
+}
+
+// A system without the /sap/bc/adt/packages endpoint (ECC, SAP_BASIS 750)
+// answers the POST with 404. That must classify as ErrorNotSupported, so a
+// caller can fall back to another route without matching message text (#292).
+func TestCreatePackage_MissingEndpointIsNotSupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case csrfEndpoint:
+			w.Header().Set("X-CSRF-Token", "token")
+			w.WriteHeader(http.StatusOK)
+		case logoffPath:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := adt.NewClient(sapmcpconfig.SAPSystem{Host: srv.URL, User: "U", Password: "P", Client: "100"})
+
+	err := client.CreatePackage(context.Background(), "$ZEXAMPLE", "Example package", "", "LOCAL", "", "", "")
+	var adtErr *adt.ADTError
+	if !errors.As(err, &adtErr) {
+		t.Fatalf("expected *adt.ADTError, got %T: %v", err, err)
+	}
+	if adtErr.StatusCode != http.StatusNotFound || adtErr.Type != adt.ExceptionTypeCreatePackageUnsupported {
+		t.Errorf("StatusCode, Type = %d, %q; want 404, %q", adtErr.StatusCode, adtErr.Type, adt.ExceptionTypeCreatePackageUnsupported)
+	}
+	if kind := adt.ClassifyError(err); kind != adt.ErrorNotSupported {
+		t.Errorf("ClassifyError = %v, want %v", kind, adt.ErrorNotSupported)
+	}
+	// Callers that matched the old wording keep working.
+	if !strings.Contains(err.Error(), "package creation via ADT REST requires S/4HANA") {
+		t.Errorf("error lost its wording: %v", err)
 	}
 }
 

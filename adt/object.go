@@ -352,6 +352,10 @@ func (c *httpClient) CreateFunctionModule(ctx context.Context, groupName, module
 	return checkResponse(resp)
 }
 
+// CreatePackage creates a package. A system without the /sap/bc/adt/packages
+// endpoint (ECC, SAP_BASIS 750) answers 404; the result is then an *ADTError
+// of Type ExceptionTypeCreatePackageUnsupported, which ClassifyError reports
+// as ErrorNotSupported (#292).
 func (c *httpClient) CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error {
 	// The fixed values of domain ABAP_LANGUAGE_VERSION. Checking them also
 	// catches a transport number passed one position too early (adtler#254).
@@ -390,9 +394,13 @@ func (c *httpClient) CreatePackage(ctx context.Context, name, description, respo
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == 404 {
-		return fmt.Errorf("CreatePackage: the /sap/bc/adt/packages endpoint is not available on this SAP system — " +
-			"package creation via ADT REST requires S/4HANA or a recent ABAP Platform version. " +
-			"On older ECC systems, create the package manually via transaction SE80 or SE21, then use it in CreateObject")
+		return &ADTError{
+			StatusCode: resp.StatusCode,
+			Type:       ExceptionTypeCreatePackageUnsupported,
+			Message: "CreatePackage: the /sap/bc/adt/packages endpoint is not available on this SAP system — " +
+				"package creation via ADT REST requires S/4HANA or a recent ABAP Platform version. " +
+				"On older ECC systems, create the package manually via transaction SE80 or SE21, then use it in CreateObject",
+		}
 	}
 	return checkResponse(resp)
 }
