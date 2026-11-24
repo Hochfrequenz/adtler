@@ -30,7 +30,9 @@ import (
 //	ADTLER_TEST_TRANSPORT_LAYER      the transport layer of that component
 //
 // The package endpoint is an S/4 collection and does not exist on SAP ERP 6.0
-// (R/3), where the subtest skips. If the test fails, the packages it created
+// (R/3), where the subtest skips. A request number names its system, so run the
+// test against one transportable system at a time; the request records the
+// creation and deletion of both packages. If the test fails, the packages it created
 // may still be there; the failure message names them.
 func TestCreatePackage_Transportable_MultiSystem_Integration(t *testing.T) {
 	transport := os.Getenv("ADTLER_TEST_TRANSPORT")

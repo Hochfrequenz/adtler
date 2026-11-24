@@ -46,8 +46,8 @@ type ObjectClient interface {
 	// A package whose name does not start with "$" is created with change
 	// recording switched on, which SAP requires for it (adtler#291). By default
 	// the package is a development package without a super package; WithPackageType
-	// and WithSuperPackage change that. Measured on SAP S/4HANA (SAP_BASIS 816):
-	// the tools (SE21, SE80) allow only a structure package for a new top-level
+	// and WithSuperPackage change that. Read from SAP's source on SAP S/4HANA
+	// (SAP_BASIS 816): the tools (SE21, SE80) allow only a structure package for a new top-level
 	// transportable package, so create a structure package first and a development
 	// package below it. Whether the ADT package resource enforces the same rule is
 	// not measured.

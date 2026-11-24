@@ -103,6 +103,16 @@ func TestCreatePackage_SendsPackageTypeAndSuperPackage(t *testing.T) {
 	}
 }
 
+func TestCreatePackage_EmptyPackageTypeMeansDevelopment(t *testing.T) {
+	body, err := createPackageBody(t, examplePackage, exampleLayer, adt.WithPackageType(""))
+	if err != nil {
+		t.Fatalf("CreatePackage: %v", err)
+	}
+	if !strings.Contains(body, `pak:packageType="development"`) {
+		t.Errorf("body lacks packageType development: %s", body)
+	}
+}
+
 // A package type outside SAP's PACKAGE_TYPE is refused before any request.
 func TestCreatePackage_RejectsUnknownPackageType(t *testing.T) {
 	body, err := createPackageBody(t, examplePackage, exampleLayer, adt.WithPackageType("bogus"))

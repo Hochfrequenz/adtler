@@ -228,6 +228,20 @@ skips when none is given:
 
 Push has no automated integration test and is verified manually.
 
+#### Transportable package integration test
+
+`TestCreatePackage_Transportable_MultiSystem_Integration` (adtler#291) creates a
+structure package and a development package below it, then deletes both. It
+skips unless all three variables are set, so a run without them is a skip and not
+a pass. A request number names its system, so run it against one transportable
+system at a time. The request records the creation and deletion of both packages.
+
+| Env var | Meaning |
+|---|---|
+| `ADTLER_TEST_TRANSPORT` | A modifiable workbench request of the test user |
+| `ADTLER_TEST_SOFTWARE_COMPONENT` | A software component that takes transportable packages |
+| `ADTLER_TEST_TRANSPORT_LAYER` | The transport layer of that component |
+
 #### What this client cannot currently undo, and what that costs a test
 
 Some behaviour has no repeatable automated test, because nothing here can undo

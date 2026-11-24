@@ -4,6 +4,8 @@ Goal: `CreatePackage` can create transportable packages: it sends `pak:recordCha
 
 Design: no breaking change. `CreatePackage` gets trailing variadic `PackageOption`s (`WithPackageType`, `WithSuperPackage`), so existing callers compile unchanged. Change recording is derived from the name (not `$`-prefixed), not a parameter: SAP requires it for every non-local package.
 
+Compatibility: callers compile unchanged, but every type that implements `adt.ObjectClient` or `adt.Client` (for example the `CreatePackage` mock in aibap.mcp) has to add the `opts ...adt.PackageOption` parameter when it bumps adtler.
+
 ## Task 1: body carries recordChanges, packageType, superPackage
 
 1. Test first (`adt/object_createpackage_options_test.go`, fails: undefined options): transportable name has `pak:recordChanges="true"`; `$` name has none; default type is `development` with no super package; structure type and super package are sent (super package upper-cased); an unknown type is refused before any request.
