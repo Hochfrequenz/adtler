@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -114,9 +115,13 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 
 	fmt.Println("=== Integration test setup: ensuring fixtures exist ===")
-	created, transport, err := setupFixtures(ctx, client)
+	created, tr, err := setupFixtures(ctx, client, rec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SETUP FAILED: %v\n", err)
+		cleanupFixtures(ctx, client, created, tr, rec) // os.Exit skips defers
+		if !rec.rejected.Load() {
+			_ = client.Logout(ctx) // releases a lock the failed setup left (#300)
+		}
 		os.Exit(1)
 	}
 
@@ -125,31 +130,78 @@ func TestMain(m *testing.M) {
 	fmt.Println("=== Integration test teardown: checking fixtures for locks left behind ===")
 	reportLeftLocks(ctx)
 
-	// Teardown: delete objects we created (reverse order to handle dependencies).
-	if len(created) > 0 {
-		fmt.Println("=== Integration test teardown: deleting created fixtures ===")
-		for i := len(created) - 1; i >= 0; i-- {
-			f := created[i]
-			if err := client.DeleteObject(ctx, f.objectURI, "", transport); err != nil {
-				fmt.Printf("  [delete failed] %s %s: %v\n", f.objType, f.name, err)
-			} else {
-				fmt.Printf("  [deleted] %s %s\n", f.objType, f.name)
-			}
-		}
-		// Release transport including tasks (test cleanup).
-		if transport != "" {
-			if _, err := client.ReleaseTransportWithTasks(ctx, transport); err != nil {
-				fmt.Printf("  [transport release failed] %s: %v\n", transport, err)
-			} else {
-				fmt.Printf("  [transport released] %s\n", transport)
-			}
-		}
-	}
+	cleanupFixtures(ctx, client, created, tr, rec)
 
 	if !rec.rejected.Load() { // after a 401 a logoff would only count one more failed logon
 		_ = client.Logout(ctx) // releases any lock the setup or teardown left (#300)
 	}
 	os.Exit(code)
+}
+
+// lazyTransport creates the fixture transport on the first get. Creating it up front left an
+// empty request behind on every run whose fixtures all existed (#241). One attempt only.
+type lazyTransport struct {
+	create       func() (string, error)
+	tried        bool
+	nr           string
+	holdsObjects bool // a fixture was created in a non-local package, so the request records it
+}
+
+func (l *lazyTransport) get() string {
+	if !l.tried {
+		l.tried = true
+		nr, err := l.create()
+		if err != nil {
+			fmt.Printf("  [transport unavailable] %v\n", err)
+		}
+		l.nr = nr
+	}
+	return l.nr
+}
+
+// number returns the request created so far, "" if none. It never creates one.
+func (l *lazyTransport) number() string { return l.nr }
+
+// cleanupFixtures deletes the fixtures setupFixtures created (reverse order to handle
+// dependencies), then releases the fixture transport if it holds objects, or deletes it if it
+// stayed empty (#241). After a 401 it sends nothing more: each request would only count one more
+// failed logon.
+func cleanupFixtures(ctx context.Context, client adt.Client, created []fixtureObject, tr *lazyTransport, rec *rejectionRecorder) {
+	if rec.rejected.Load() {
+		return
+	}
+	if len(created) > 0 {
+		fmt.Println("=== Integration test teardown: deleting created fixtures ===")
+		for i := len(created) - 1; i >= 0; i-- {
+			if rec.rejected.Load() {
+				return
+			}
+			f := created[i]
+			if err := client.DeleteObject(ctx, f.objectURI, "", tr.number()); err != nil {
+				fmt.Printf("  [delete failed] %s %s: %v\n", f.objType, f.name, err)
+			} else {
+				fmt.Printf("  [deleted] %s %s\n", f.objType, f.name)
+			}
+		}
+	}
+	nr := tr.number()
+	if nr == "" || rec.rejected.Load() {
+		return
+	}
+	if !tr.holdsObjects {
+		if err := client.DeleteTransport(ctx, nr); err != nil {
+			fmt.Printf("  [empty transport delete failed] %s: %v\n", nr, err)
+		} else {
+			fmt.Printf("  [empty transport deleted] %s\n", nr)
+		}
+		return
+	}
+	// Release transport including tasks (test cleanup).
+	if _, err := client.ReleaseTransportWithTasks(ctx, nr); err != nil {
+		fmt.Printf("  [transport release failed] %s: %v\n", nr, err)
+	} else {
+		fmt.Printf("  [transport released] %s\n", nr)
+	}
 }
 
 // reportLeftLocks tries to lock every shared fixture from a fresh session on
@@ -191,34 +243,46 @@ func reportLeftLocks(ctx context.Context) {
 	}
 }
 
+var errCredentialRejected = errors.New("credential rejected (401), setup stopped")
+
+// localPackage is the package of objects that need no transport request.
+const localPackage = "$TMP"
+
 // fixturePackages lists packages to try when creating fixtures, in order of preference.
 // Z_ADT_MCP_TEST is the dedicated test package on S4; $TMP is the fallback for ECC
 // or when Z_ADT_MCP_TEST doesn't exist.
-var fixturePackages = []string{"Z_ADT_MCP_TEST", "$TMP"}
+var fixturePackages = []string{"Z_ADT_MCP_TEST", localPackage}
 
 // setupFixtures creates any missing test objects, sets their source, and activates them.
-// Returns the fixtures that were created (for teardown).
-func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, string, error) {
+// Returns the fixtures that were created and the fixture transport (for teardown); the
+// transport is created only when a fixture has to be created in a non-local package (#241).
+func setupFixtures(ctx context.Context, client adt.Client, rec *rejectionRecorder) ([]fixtureObject, *lazyTransport, error) {
 	// Verify that the companion test package exists on the SAP system.
 	// We only warn (not fail) so that tests which don't need the package can still run.
 	if _, err := client.BrowsePackage(ctx, testPackage); err != nil {
 		fmt.Printf("WARNING: package %s not found — some integration tests will fail. See https://github.com/Hochfrequenz/Z_ADT_MCP_TEST\n", testPackage)
+		if rec.rejected.Load() { // a 401 is final (#222)
+			return nil, &lazyTransport{}, errCredentialRejected
+		}
 	}
 
-	// For non-local packages, create a transport to hold the new objects.
-	// The transport is released at the end so objects don't stay locked.
-	var fixtureTransport string
-	for _, pkg := range fixturePackages {
-		if pkg == "$TMP" {
-			continue
+	// For non-local packages, the first object to create there creates a transport to hold the
+	// new objects (tr.get). The teardown releases it, or deletes it if it stayed empty (#241).
+	tr := &lazyTransport{create: func() (string, error) {
+		var lastErr error
+		for _, pkg := range fixturePackages {
+			if pkg == localPackage {
+				continue
+			}
+			nr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP integration test fixtures", Package: pkg})
+			if err == nil {
+				fmt.Printf("  [transport] %s for package %s\n", nr, pkg)
+				return nr, nil
+			}
+			lastErr = err
 		}
-		tr, err := client.CreateTransport(ctx, adt.CreateTransportOptions{Description: "MCP integration test fixtures", Package: pkg})
-		if err == nil {
-			fixtureTransport = tr
-			fmt.Printf("  [transport] %s for package %s\n", tr, pkg)
-			break
-		}
-	}
+		return "", lastErr
+	}}
 
 	var created []fixtureObject
 	var createdURIs []string
@@ -230,21 +294,32 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, str
 			continue
 		}
 
+		if rec.rejected.Load() { // the existence check was refused (#222)
+			return created, tr, errCredentialRejected
+		}
+
 		// Try each package in order — Z_ADT_MCP_TEST first (S4), $TMP as fallback.
 		var createErr error
 		var usedPkg string
 		for _, pkg := range fixturePackages {
 			transport := ""
-			if pkg != "$TMP" {
-				transport = fixtureTransport
+			if pkg != localPackage {
+				transport = tr.get()
+			}
+			if rec.rejected.Load() { // a 401 is final (#222): no further request with that credential
+				return created, tr, errCredentialRejected
 			}
 			createErr = client.CreateObject(ctx, f.objType, f.name, pkg, f.description, transport)
 			if createErr == nil {
 				usedPkg = pkg
+				tr.holdsObjects = tr.holdsObjects || pkg != localPackage
 				break
 			}
 		}
 		if createErr != nil {
+			if rec.rejected.Load() { // the last package's CreateObject was refused with a 401
+				return created, tr, errCredentialRejected
+			}
 			if _, infoErr := client.GetObjectInfo(ctx, f.objectURI); infoErr == nil {
 				fmt.Printf("  [exists, create skipped] %s %s: %v\n", f.objType, f.name, createErr)
 				continue
@@ -253,14 +328,16 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, str
 			continue
 		}
 		fmt.Printf("  [created] %s %s in package %s\n", f.objType, f.name, usedPkg)
+		// The object exists from here on, so the teardown has to delete it even when the
+		// source write below fails: the request records it and must not be released with it.
+		created = append(created, f)
 
 		// Set source: lock → get etag → set source → unlock.
-		if err := setFixtureSource(ctx, client, f, fixtureTransport); err != nil {
-			return created, fixtureTransport, fmt.Errorf("set source %s: %w", f.name, err)
+		if err := setFixtureSource(ctx, client, f, tr.number()); err != nil {
+			return created, tr, fmt.Errorf("set source %s: %w", f.name, err)
 		}
 		fmt.Printf("  [source set] %s\n", f.name)
 
-		created = append(created, f)
 		createdURIs = append(createdURIs, f.objectURI)
 	}
 
@@ -268,18 +345,18 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, str
 	if len(createdURIs) > 0 {
 		result, err := client.ActivateObjects(ctx, createdURIs)
 		if err != nil {
-			return created, fixtureTransport, fmt.Errorf("activate: %w", err)
+			return created, tr, fmt.Errorf("activate: %w", err)
 		}
 		if !result.Success {
 			for _, msg := range result.Messages {
 				fmt.Printf("  [activation %s] %s: %s\n", msg.Type, msg.Text, msg.ObjectURI)
 			}
-			return created, fixtureTransport, fmt.Errorf("activation failed with %d messages", len(result.Messages))
+			return created, tr, fmt.Errorf("activation failed with %d messages", len(result.Messages))
 		}
 		fmt.Printf("  [activated] %d objects\n", len(createdURIs))
 	}
 
-	return created, fixtureTransport, nil
+	return created, tr, nil
 }
 
 // setFixtureSource locks an object, writes its source, and unlocks it.
