@@ -333,6 +333,9 @@ SAP_INTEGRATION_SYSTEMS=hfq,s4u go test -tags=integration -v ./adt/...
 Where `hfq` and `s4u` are the keys of your R/3 and S/4 entries in
 `systems.json`.
 
+The version number of the release follows the rule in the "Releases" section of
+`CLAUDE.md`.
+
 ## Descriptions in search and browse results
 
 Measured on 2026-10-09 on SAP ERP 6.0 (SAP_BASIS 750) and SAP S/4HANA, on-premise
