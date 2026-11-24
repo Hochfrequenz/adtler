@@ -158,7 +158,10 @@ type TransportClient interface {
 	// need S/4 and return ErrorNotSupported on ECC (#137).
 	CreateTransport(ctx context.Context, opts CreateTransportOptions) (string, error)
 	CreateTransportTask(ctx context.Context, parentTransport, owner, description string) (string, error)
-	DeleteTransport(ctx context.Context, transportNumber string) error
+	// DeleteTransport deletes a request (or task) and returns what it read about
+	// it just before: owner, description, type, state, dates and tasks. A read
+	// that fails does not stop the deletion; see DeletedTransport.DetailsErr.
+	DeleteTransport(ctx context.Context, transportNumber string) (*DeletedTransport, error)
 	ReleaseTransport(ctx context.Context, transportNumber string) (*ReleaseResult, error)
 	ReleaseTransportWithTasks(ctx context.Context, transportNumber string) (*ReleaseResult, error)
 	RollbackTransport(ctx context.Context, transportNumber string) (*RollbackResult, error)

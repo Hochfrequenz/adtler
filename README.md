@@ -99,8 +99,14 @@ function group include), `ReleaseTransport` (its polling
 and the read of its result), `CreateObject`, `SyntaxCheck`, `BatchSyntaxCheck` (the objects not checked carry the
 `401` as their error), `GetObjectDependencies`, `RollbackTransport` and
 `RollbackTransportWithOptions` (the objects not processed, or not deleted, are
-reported as failed) and `VerifySource`. When `VerifySource`
+reported as failed), `DeleteTransport` and `VerifySource`. When `VerifySource`
 stops this way, its temporary program stays in `$TMP`, and the error names it.
+
+`DeleteTransport` reads the request before it deletes it (the transport organizer
+answer, then `E070CREATE` for the creation date) and returns what it read as
+`*adt.DeletedTransport`. A read that fails does not stop the deletion; its error
+is in `DetailsErr`. A `401` on either read does stop the call, before the
+`DELETE` is sent.
 
 `Logout` reports a `401` on its logoff request as an `*adt.ADTError` and ignores
 any other status. `CreateObject` logs out after creating the object; if that

@@ -115,7 +115,7 @@ func TestTransportFullCycle_Integration(t *testing.T) {
 		}
 		if lockingTR != "" && lockingTR != trNumber {
 			// Delete our empty transport — we'll use the existing one.
-			_ = client.DeleteTransport(ctx, trNumber)
+			_, _ = client.DeleteTransport(ctx, trNumber)
 			trNumber = lockingTR
 			// Create our own task on the existing transport.
 			taskNr, taskErr := client.CreateTransportTask(ctx, trNumber, "", "Full cycle test cleanup")
