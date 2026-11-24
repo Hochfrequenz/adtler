@@ -38,11 +38,20 @@ type SourceClient interface {
 type ObjectClient interface {
 	CreateObject(ctx context.Context, objectType, name, packageName, description, transport string) error
 	CreateFunctionModule(ctx context.Context, groupName, moduleName, description, packageName, transport string) error
-	// CreatePackage creates a top-level package. languageVersion is the value of
+	// CreatePackage creates a package. languageVersion is the value of
 	// domain ABAP_LANGUAGE_VERSION the package gets: "" leaves the choice to SAP
 	// (Standard ABAP), LanguageVersionCloudDevelopment requests an ABAP Cloud package.
 	// Any other value is refused before a request is sent.
-	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string) error
+	//
+	// A package whose name does not start with "$" is created with change
+	// recording switched on, which SAP requires for it (adtler#291). By default
+	// the package is a development package without a super package; WithPackageType
+	// and WithSuperPackage change that. Measured on SAP S/4HANA (SAP_BASIS 816):
+	// the tools (SE21, SE80) allow only a structure package for a new top-level
+	// transportable package, so create a structure package first and a development
+	// package below it. Whether the ADT package resource enforces the same rule is
+	// not measured.
+	CreatePackage(ctx context.Context, name, description, responsible, softwareComponent, transportLayer, languageVersion, transport string, opts ...PackageOption) error
 	// CreateHTTPService creates an HTTP service (R3TR HTTP) whose requests
 	// handlerClass answers. S/4HANA only (adtler#255).
 	CreateHTTPService(ctx context.Context, name, packageName, description, handlerClass, transport string) error

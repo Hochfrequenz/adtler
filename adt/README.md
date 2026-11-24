@@ -89,6 +89,18 @@ The `Client` interface is composed of focused sub-interfaces, so you can depend 
 | `RefactoringClient` | `Rename` |
 | `SystemClient` | `SystemInfo`, `Logout` |
 
+## Transportable packages
+
+`CreatePackage` switches change recording on for every package whose name does not start
+with `$`; SAP refuses a transportable package without it (400 "Change recording must be
+activated"). By default the package is a development package without a super package.
+Pass `adt.WithPackageType(adt.PackageTypeStructure)` (or `PackageTypeMain`) and
+`adt.WithSuperPackage("<name>")` to change that. The SAP tools (SE21, SE80) allow only a
+structure package for a new top-level transportable package on SAP S/4HANA
+(SAP_BASIS 816), so create a structure package first and the development package with
+that super package below it. Whether the ADT package resource enforces the same rule is
+not measured, and neither is the error it answers with.
+
 ## ABAP language version (ABAP Cloud)
 
 `CreatePackage` takes the package's ABAP language version as the value of domain

@@ -169,6 +169,9 @@ type PakAttributes struct {
 	// ABAP, "2" ABAP for Key Users, "5" ABAP for Cloud Development). Omitted
 	// when empty so SAP keeps choosing its default (adtler#254).
 	LanguageVersion string `xml:"pak:languageVersion,attr,omitempty"`
+	// RecordChanges is "true" for a package that records changes in transport
+	// requests (every non-local package); omitted otherwise (adtler#291).
+	RecordChanges string `xml:"pak:recordChanges,attr,omitempty"`
 }
 
 // PakSuperPackage references the parent package (empty for top-level).
