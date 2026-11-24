@@ -57,7 +57,9 @@ const (
 	// library and reports this kind instead. CopyTransportObjects,
 	// AddPackageToTransport and CreateTransport (customizing requests and
 	// transports of copies, which only S/4 can create over ADT) gate the same
-	// way.
+	// way. CreatePackage is the exception to "before any request went out": it
+	// learns it from the 404 of POST /sap/bc/adt/packages (ECC) and returns an
+	// ADTError of Type ExceptionTypeCreatePackageUnsupported.
 	ErrorNotSupported
 	// ErrorUnauthorized means SAP rejected the logon itself (HTTP 401): the
 	// user name or password is wrong, the user is locked, or the OAuth token
@@ -176,7 +178,8 @@ func classifyByExceptionType(excType string) ErrorKind {
 	case ExceptionTypeResourceCreationFailure:
 		return ErrorCreationFailed
 	case ExceptionTypeRemoveObjectUnsupported, ExceptionTypeAddObjectsUnsupported,
-		ExceptionTypeAddObjectUnsupported, ExceptionTypeCreateRequestUnsupported:
+		ExceptionTypeAddObjectUnsupported, ExceptionTypeCreateRequestUnsupported,
+		ExceptionTypeCreatePackageUnsupported:
 		return ErrorNotSupported
 	default:
 		return ErrorUnknown

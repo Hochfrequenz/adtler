@@ -403,6 +403,11 @@ const (
 	// which answers such a POST with 400 "user action is not supported").
 	// No request was sent.
 	ExceptionTypeCreateRequestUnsupported = "ADT_TM_CREATEREQUEST_UNSUPPORTED"
+	// ExceptionTypeCreatePackageUnsupported is synthesised locally by
+	// CreatePackage when POST /sap/bc/adt/packages answers 404: the system has
+	// no package endpoint (ECC, SAP_BASIS 750). Unlike the types above, a
+	// request was sent; the error carries StatusCode 404 (#292).
+	ExceptionTypeCreatePackageUnsupported = "ADT_PACKAGE_CREATE_UNSUPPORTED"
 	// ExceptionTypeParameterNotFound is raised (HTTP 400) when a request
 	// parameter the ADT handler expects is absent from the request it
 	// received. It is overloaded across unrelated parameters (a missing
