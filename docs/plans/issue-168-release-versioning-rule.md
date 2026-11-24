@@ -9,7 +9,7 @@ No failing test first: the task changes only prose documentation that no compile
 Content, in the language of the repository (English):
 
 - The rule: minor when the exported API surface grows a new symbol or when consumers break; patch for everything else, including behaviour changes and features that add no exported symbol.
-- The deciding question: can this change alter the outcome of a call that previously succeeded? Yes: a break, so minor, even if nothing was added. No: patch (v0.5.4 as the example: a 406 retry and an error where the old code returned a zero-valued struct with a nil error).
+- The deciding question, applied only after checking that the change adds no exported symbol (a new exported symbol is a minor whatever the answer): can this change alter the outcome of a call that previously succeeded? Yes: a break, so minor, even if nothing was added. No: patch (v0.5.4 as the example: a 406 retry and an error where the old code returned a zero-valued struct with a nil error).
 - The table of the four minor bumps of v0.2.0 to v0.5.0 and their causes (checked against `git log` between the tags).
 - A choice on record: the rule is stricter than the semver 0.x norm; it is kept on purpose, the 1.x rule applied early; a tag cannot be re-cut because the Go module proxy caches it.
 - Place it after "Labels (workflow-relevant)", before "Public Repository".

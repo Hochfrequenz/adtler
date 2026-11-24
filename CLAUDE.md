@@ -98,7 +98,8 @@ v0.5.0 had one of two causes:
 | v0.5.0 | `feat: add SystemFlavor detection` (#130) — new **exported** type |
 
 **The case that gets missed:** a change can alter behaviour for every caller and still be a patch.
-The test that decides it:
+First check whether the change adds an exported symbol: if it does, it is a minor, whatever the
+answer below. For a change that adds none, the test that decides it:
 
 > Can this change alter the outcome of a call that previously **succeeded**?
 
