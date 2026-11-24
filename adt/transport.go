@@ -623,9 +623,10 @@ type TransportRequestPage struct {
 // holds every request and pages reliably; the caller therefore needs
 // authorization for the data preview (#242, #274). The descriptions, which
 // E070 does not hold, are read from E07T the same way (#277): one more data
-// preview query per about 11 requests of the page, and the caller needs
-// authorization to read E07T as well; a user who may read E070 but not E07T
-// gets a partial error (see below) on every call. E07T holds one text per
+// preview query per about 11 requests of the page (about 90 for a page of
+// MaxTransportPageSize), and the caller needs authorization to read E07T as
+// well; a user who may read E070 but not E07T gets a partial error (see below)
+// on every call. The E07T read is not yet measured on a real system. E07T holds one text per
 // language; the text in the logon language wins, else English, else any other.
 // A request without a text, or with a number that is not safe to embed in a
 // statement, has an empty Description; GetTransportInfo reads it.
@@ -642,7 +643,7 @@ type TransportRequestPage struct {
 // the tree does not honour it. A request in TransportStateReleaseInProgress
 // or TransportStateUnknown passes TransportFilterAll only.
 //
-// Errors: a rejected credential from either source (a 401, #222, or an OAuth
+// Errors: a rejected credential from any source (a 401, #222, or an OAuth
 // token that could not be refreshed, #298) ends the call with that error and no
 // page. If E07T fails (or fails part way), the descriptions it did not deliver
 // are those the tree shows, and a request the tree does not show has none; if

@@ -219,6 +219,9 @@ func TestGetTransportRequests_Descriptions_Integration(t *testing.T) {
 				}
 			}
 			t.Logf("%d request(s) checked: %d with an E07T text, %d with a Description", len(page.Requests), withText, described)
+			if withText == 0 {
+				t.Skip("no request on the page has an E07T text, nothing was checked")
+			}
 		})
 	}
 }
