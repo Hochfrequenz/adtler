@@ -577,7 +577,8 @@ const (
 )
 
 // ErrTransportListPartial marks a GetTransportRequests page that lacks data
-// because one of its two sources could not be read. The page is returned
+// because one of its three sources (E070, E07T, the transport organizer tree)
+// could not be read. The page is returned
 // together with an error wrapping ErrTransportListPartial; check with
 // errors.Is before using it. See GetTransportRequests for what is missing in
 // each case.
@@ -620,13 +621,21 @@ type TransportRequestPage struct {
 //
 // The requests are read from E070 through the data preview endpoint, which
 // holds every request and pages reliably; the caller therefore needs
-// authorization for the data preview (#242, #274). The ADT transport
-// organizer tree is read once per page for the descriptions, which E070 does
-// not hold. The tree cannot be the source of the list: measured on
-// SAP_BASIS 750 and 816 (#274), the ECC tree lists modifiable requests only,
-// and the S/4 tree a few released ones only, whatever status it is asked for.
-// A request the tree does not show has an empty Description;
-// GetTransportInfo reads it.
+// authorization for the data preview (#242, #274). The descriptions, which
+// E070 does not hold, are read from E07T the same way (#277): one more data
+// preview query per about 11 requests of the page (about 90 for a page of
+// MaxTransportPageSize), and the caller needs authorization to read E07T as
+// well; a user who may read E070 but not E07T gets a partial error (see below)
+// on every call. The E07T read is not yet measured on a real system. E07T holds one text per
+// language; the text in the logon language wins, else English, else any other.
+// A request without a text, or with a number that is not safe to embed in a
+// statement, has an empty Description.
+//
+// The ADT transport organizer tree is a fallback only, read when E070 or E07T
+// fails. It cannot be the source of the list: measured on SAP_BASIS 750 and
+// 816 (#274), the ECC tree lists modifiable requests only, and the S/4 tree a
+// few released ones only, whatever status it is asked for. Nor can it be the
+// source of the descriptions, for the same reason.
 //
 // opts.Filter is applied by TRSTATUS letter in the query and again on the
 // client. SAP's own status parameter of the tree is not used: it names a
@@ -634,13 +643,16 @@ type TransportRequestPage struct {
 // the tree does not honour it. A request in TransportStateReleaseInProgress
 // or TransportStateUnknown passes TransportFilterAll only.
 //
-// Errors: a rejected credential from either source (a 401, #222, or an OAuth
+// Errors: a rejected credential from any source (a 401, #222, or an OAuth
 // token that could not be refreshed, #298) ends the call with that error and no
-// page. If only the tree fails, the page comes without descriptions; if
-// only E070 fails, the page holds what the tree shows (filtered, ordered by
-// request number descending, at most Limit requests, no Next). Either way the
-// error wraps ErrTransportListPartial. Invalid options are refused before any
-// request is sent.
+// page. If E07T fails (or fails part way), the descriptions it did not deliver
+// are those the tree shows, and a request the tree does not show has none; if
+// the tree fails too, the page keeps the E07T texts and lacks the rest. If E070
+// fails, the page holds what the tree shows (filtered, ordered by request number
+// descending, at most Limit requests, no Next); if the tree fails as well, there
+// is no page and the error does not wrap ErrTransportListPartial. In the
+// partial cases the error wraps ErrTransportListPartial. Invalid options are
+// refused before any request is sent.
 func (c *httpClient) GetTransportRequests(ctx context.Context, opts TransportListOptions) (*TransportRequestPage, error) {
 	user, limit, after, err := c.checkTransportListOptions(opts)
 	if err != nil {
@@ -652,8 +664,22 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, opts TransportLis
 		return nil, queryErr
 	}
 
-	// Unscoped (every user), the tree shows the logon user's requests and so
-	// describes only those.
+	var texts map[string]string
+	var textErr error
+	if queryErr == nil {
+		texts, textErr = c.getTransportDescriptionsViaQuery(ctx, transportNumbers(page.Requests))
+		if textErr != nil && credentialRejected(textErr) {
+			return nil, textErr
+		}
+		if textErr == nil {
+			fillDescriptions(page.Requests, texts)
+			return page, nil
+		}
+	}
+
+	// The tree is read only when E070 or E07T failed: as the page (E070) or as the source of the
+	// descriptions E07T did not deliver. Unscoped (every user), it shows the logon user's
+	// requests and so describes only those.
 	treeRequests, treeErr := c.getTransportRequestsTree(ctx, user)
 	if treeErr != nil && credentialRejected(treeErr) {
 		return nil, treeErr
@@ -668,18 +694,116 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, opts TransportLis
 				ErrTransportListPartial, queryErr)
 	}
 
-	descriptions := make(map[string]string, len(treeRequests))
+	treeDescriptions := make(map[string]string, len(treeRequests))
 	for _, tr := range treeRequests {
-		descriptions[tr.Number] = tr.Description
+		treeDescriptions[tr.Number] = tr.Description
 	}
-	for i := range page.Requests {
-		page.Requests[i].Description = descriptions[page.Requests[i].Number]
-	}
+	fillDescriptions(page.Requests, texts, treeDescriptions)
 	if treeErr != nil {
-		return page, fmt.Errorf("%w: the transport organizer tree could not be read, descriptions are missing: %w",
-			ErrTransportListPartial, treeErr)
+		return page, fmt.Errorf("%w: neither E07T nor the transport organizer tree could be read completely, descriptions are missing: E07T: %w; tree: %w",
+			ErrTransportListPartial, textErr, treeErr)
 	}
-	return page, nil
+	return page, fmt.Errorf("%w: E07T could not be read completely, the missing descriptions are those the transport organizer tree shows: %w",
+		ErrTransportListPartial, textErr)
+}
+
+// e07tMaxRows is the maxRows argument of one E07T description query. A chunk of request numbers
+// holds 11 to 37 numbers (by their length), so this cap would need at least 27 installed languages
+// to be reached; the data preview truncates silently, so such an answer would lose texts unnoticed.
+const e07tMaxRows = 1000
+
+// getTransportDescriptionsViaQuery reads the short texts of the request numbers from E07T
+// (TRKORR -> AS4TEXT) through the data preview, which rejects a JOIN of E070 with E07T. A request
+// without a text, or with a number that is not safe to embed in the statement, is missing from
+// the result. E07T holds one text per language; descriptionLanguageRank picks one. When a
+// statement fails, the texts read before it are returned together with the error.
+func (c *httpClient) getTransportDescriptionsViaQuery(ctx context.Context, numbers []string) (map[string]string, error) {
+	var safe []string
+	for _, n := range numbers {
+		if transportNumberRe.MatchString(n) {
+			safe = append(safe, n)
+		}
+	}
+	texts := make(map[string]string, len(safe))
+	ranks := make(map[string]int, len(safe))
+	for _, chunk := range chunkNames(safe, ddicInListMaxBytes) {
+		qr, err := c.RunQuery(ctx,
+			"SELECT TRKORR, LANGU, AS4TEXT FROM E07T WHERE TRKORR IN ("+buildSQLInList(chunk)+") ORDER BY TRKORR, LANGU",
+			e07tMaxRows)
+		if err != nil {
+			return texts, fmt.Errorf("GetTransportRequests: E07T query: %w", err)
+		}
+		idx := queryColumnIndexes(qr, "TRKORR", "LANGU", "AS4TEXT")
+		if err := requireQueryColumns("GetTransportRequests: E07T query", idx, "TRKORR", "LANGU", "AS4TEXT"); err != nil {
+			return texts, err
+		}
+		for _, row := range qr.Rows {
+			number, text := queryCell(row, idx["TRKORR"]), queryCell(row, idx["AS4TEXT"])
+			if text == "" {
+				continue
+			}
+			rank := descriptionLanguageRank(queryCell(row, idx["LANGU"]), c.cfg.Language)
+			if prev, seen := ranks[number]; !seen || rank < prev {
+				texts[number], ranks[number] = text, rank
+			}
+		}
+	}
+	return texts, nil
+}
+
+// isoToSAPLanguage maps the ISO 639-1 codes a logon language may be given in to the one-character
+// keys of SAP's language table (T002).
+var isoToSAPLanguage = map[string]string{
+	"EN": "E", "DE": "D", "FR": "F", "ES": "S", "IT": "I", "PT": "P", "NL": "N", "PL": "L", "DA": "K", "SV": "V",
+	"JA": "J", "RU": "R", "ZH": "1", "KO": "3", "CS": "C", "TR": "T", "FI": "U", "NO": "O", "HU": "H", "EL": "G",
+}
+
+// sapLanguageKey upper-cases a language and turns a known ISO code into SAP's one-character key,
+// so that the logon language and the LANGU of an E07T row meet whichever form either one has (the
+// data preview may print LANGU in the ISO form). Other values are returned as they are.
+func sapLanguageKey(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if mapped, ok := isoToSAPLanguage[s]; ok {
+		return mapped
+	}
+	return s
+}
+
+// descriptionLanguageRank orders the language langu of an E07T row, lower is better: the logon
+// language (SAP "E" or ISO "EN" form), English, any other, none.
+func descriptionLanguageRank(langu, logon string) int {
+	l, own := sapLanguageKey(langu), sapLanguageKey(logon)
+	switch l {
+	case "":
+		return 3
+	case own:
+		return 0
+	case "E":
+		return 1
+	}
+	return 2
+}
+
+func transportNumbers(requests []TransportRequest) []string {
+	numbers := make([]string, len(requests))
+	for i, tr := range requests {
+		numbers[i] = tr.Number
+	}
+	return numbers
+}
+
+// fillDescriptions sets Description of every request to its first non-empty entry in sources,
+// tried in order, and clears it when there is none.
+func fillDescriptions(requests []TransportRequest, sources ...map[string]string) {
+	for i := range requests {
+		requests[i].Description = ""
+		for _, source := range sources {
+			if text := source[requests[i].Number]; text != "" {
+				requests[i].Description = text
+				break
+			}
+		}
+	}
 }
 
 // checkTransportListOptions validates opts and resolves them into the
@@ -840,7 +964,8 @@ func transportStatusCondition(filter TransportFilter) string {
 // the first page). user must already be validated against transportUserRe.
 //
 // The query is single-table because the data preview rejects JOINs on some
-// S/4HANA releases, so it returns no description. It sorts with DESCENDING:
+// S/4HANA releases, so it returns no description (getTransportDescriptionsViaQuery
+// reads those from E07T). It sorts with DESCENDING:
 // the data preview rejects the DESC abbreviation on both releases, but
 // accepts the ABAP SQL keyword (measured 2026-11-05 on SAP_BASIS 750 and
 // 816). It asks for one row more than the page to learn whether another page
