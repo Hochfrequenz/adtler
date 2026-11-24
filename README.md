@@ -53,6 +53,8 @@ func main() {
 
 For multi-system setups (e.g. dev/test/prod), use `adt.NewClientsFromConfig`
 plus `adt.NewClientRegistry` — see [`adt/`](./adt) for details.
+If a system cannot be built (OAuth2 without a stored token or client ID), `NewClientsFromConfig`
+returns the clients of the other systems together with the joined errors, so a caller may continue.
 
 ## Packages
 

@@ -96,12 +96,87 @@ func TestNewClientsFromConfigOAuth2MissingToken(t *testing.T) {
 		},
 	}
 
-	_, err := adt.NewClientsFromConfig(cfg, "")
+	clients, err := adt.NewClientsFromConfig(cfg, "")
 	if err == nil {
 		t.Fatal("expected error for OAuth2 system without token, got nil")
 	}
 	if !strings.Contains(err.Error(), "OAuth2") && !strings.Contains(err.Error(), "login") {
 		t.Errorf("error message should mention OAuth2 or login, got: %v", err)
+	}
+	if clients == nil || len(clients) != 0 {
+		t.Errorf("expected empty non-nil clients map, got %v", clients)
+	}
+}
+
+// TestNewClientsFromConfigPartialResult verifies that a failing OAuth2 system
+// does not hide the clients of the other systems: the map holds the working
+// ones and the error names the failing one.
+func TestNewClientsFromConfigPartialResult(t *testing.T) {
+	orig := auth.DefaultTokenPath
+	auth.DefaultTokenPath = func() string { return t.TempDir() + "/nonexistent/tokens.json" }
+	defer func() { auth.DefaultTokenPath = orig }()
+
+	cfg := &sapmcpconfig.Config{
+		DefaultSystem: "basic",
+		Systems: map[string]sapmcpconfig.SAPSystem{
+			"basic":    {Host: "http://example.com", Client: "100", User: "U", Password: "P"},
+			"oauth-nt": {Host: "http://example.com", Client: "200"},
+		},
+	}
+
+	clients, err := adt.NewClientsFromConfig(cfg, "")
+	if err == nil {
+		t.Fatal("expected error for OAuth2 system without token, got nil")
+	}
+	if !strings.Contains(err.Error(), "oauth-nt") {
+		t.Errorf("error should name oauth-nt, got: %v", err)
+	}
+	if got := slices.Sorted(maps.Keys(clients)); !slices.Equal(got, []string{"basic"}) {
+		t.Errorf("expected only basic client, got keys: %v", got)
+	}
+}
+
+// TestNewClientsFromConfigJoinsAllFailures verifies that every failing system
+// is reported, not only the first one, and that the error is an errors.Join.
+func TestNewClientsFromConfigJoinsAllFailures(t *testing.T) {
+	tokenDir := t.TempDir()
+	orig := auth.DefaultTokenPath
+	auth.DefaultTokenPath = func() string { return tokenDir + "/tokens.json" }
+	defer func() { auth.DefaultTokenPath = orig }()
+
+	store := auth.NewTokenStore(auth.DefaultTokenPath())
+	if err := store.Save("oauth-ok", auth.TokenData{AccessToken: "tok", RefreshToken: "ref"}); err != nil {
+		t.Fatalf("saving token: %v", err)
+	}
+
+	cfg := &sapmcpconfig.Config{
+		DefaultSystem: "basic",
+		Systems: map[string]sapmcpconfig.SAPSystem{
+			"basic":           {Host: "http://example.com", Client: "100", User: "U", Password: "P"},
+			"oauth-ok":        {Host: "http://example.com", Client: "200"},
+			"oauth-notoken-a": {Host: "http://example.com", Client: "300"},
+			"oauth-notoken-b": {Host: "http://example.com", Client: "400"},
+		},
+	}
+
+	clients, err := adt.NewClientsFromConfig(cfg, "")
+	if err == nil {
+		t.Fatal("expected joined error, got nil")
+	}
+	for _, name := range []string{"oauth-ok", "oauth-notoken-a", "oauth-notoken-b"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error should name %s, got: %v", name, err)
+		}
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		t.Fatalf("expected errors.Join result, got %T", err)
+	}
+	if n := len(joined.Unwrap()); n != 3 {
+		t.Errorf("expected 3 joined errors, got %d", n)
+	}
+	if got := slices.Sorted(maps.Keys(clients)); !slices.Equal(got, []string{"basic"}) {
+		t.Errorf("expected only basic client, got keys: %v", got)
 	}
 }
 

@@ -1,7 +1,10 @@
 package adt
 
 import (
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/Hochfrequenz/adtler/auth"
 	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
@@ -12,23 +15,35 @@ import (
 // auth package's TokenStore (see auth.DefaultTokenPath) and wires up automatic
 // refresh on 401 responses.
 //
+// A system that cannot be built (an OAuth2 system without a stored token or
+// without a client ID) is left out of the map, and its error is joined into
+// the returned error. The map still holds the clients of the other systems, so
+// a caller may continue with them. On total failure the map is empty but not
+// nil. A caller that continues must keep the default system in the map, because
+// NewClientRegistry fails when the default system is missing or the map is empty.
+// A caller that returns on err != nil fails fast as before.
+//
 // defaultOAuth2ClientID is used when a system's own OAuth2ClientID is empty;
 // pass "" to require explicit per-system configuration.
 func NewClientsFromConfig(cfg *sapmcpconfig.Config, defaultOAuth2ClientID string) (map[string]Client, error) {
 	store := auth.NewTokenStore(auth.DefaultTokenPath())
 	clients := make(map[string]Client, len(cfg.Systems))
-	for name, sysCfg := range cfg.Systems {
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(cfg.Systems)) {
+		sysCfg := cfg.Systems[name]
 		if !sysCfg.IsOAuth2() {
 			clients[name] = NewClient(sysCfg)
 			continue
 		}
 		tokenData, err := store.TokenForSystem(name)
 		if err != nil {
-			return nil, fmt.Errorf("system %q requires OAuth2 login — no stored token found", name)
+			errs = append(errs, fmt.Errorf("system %q requires OAuth2 login — no stored token found", name))
+			continue
 		}
 		clientID := effectiveOAuth2ClientID(sysCfg, defaultOAuth2ClientID)
 		if clientID == "" {
-			return nil, fmt.Errorf("system %q: OAuth2 requires oauth2_client_id in config or a default client ID", name)
+			errs = append(errs, fmt.Errorf("system %q: OAuth2 requires oauth2_client_id in config or a default client ID", name))
+			continue
 		}
 		// td is written without a lock. That is safe only because this callback
 		// belongs to exactly one client: its tokenSource, shared with every
@@ -51,7 +66,7 @@ func NewClientsFromConfig(cfg *sapmcpconfig.Config, defaultOAuth2ClientID string
 		}
 		clients[name] = NewClientWithToken(sysCfg, tokenData.AccessToken, onRefresh)
 	}
-	return clients, nil
+	return clients, errors.Join(errs...)
 }
 
 // effectiveOAuth2ClientID returns the OAuth2 client ID for the given system,
