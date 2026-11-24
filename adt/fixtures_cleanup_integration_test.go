@@ -24,6 +24,12 @@ type fakeFixtureClient struct {
 	releasedTr     int
 	deletedTr      int
 	deletedObjects int
+	createdObjects int
+	// rec and the two flags stand for the 401 recorder of the real client: the call fails and
+	// marks the credential rejected.
+	rec                     *rejectionRecorder
+	rejectOnCreateTransport bool
+	rejectOnDeleteObject    bool
 }
 
 func (f *fakeFixtureClient) BrowsePackage(context.Context, string) ([]adt.ObjectInfo, error) {
@@ -39,10 +45,15 @@ func (f *fakeFixtureClient) GetObjectInfo(_ context.Context, uri string) (*adt.O
 
 func (f *fakeFixtureClient) CreateTransport(context.Context, adt.CreateTransportOptions) (string, error) {
 	f.createdTr++
+	if f.rejectOnCreateTransport {
+		f.rec.rejected.Store(true)
+		return "", errors.New("unauthorized")
+	}
 	return fakeTransportNumber, nil
 }
 
 func (f *fakeFixtureClient) CreateObject(_ context.Context, _, _, pkg, _, _ string) error {
+	f.createdObjects++
 	if f.nonLocalFails && pkg != localPackage {
 		return errors.New("refused")
 	}
@@ -66,6 +77,10 @@ func (f *fakeFixtureClient) ActivateObjects(context.Context, []string) (*adt.Act
 }
 func (f *fakeFixtureClient) DeleteObject(context.Context, string, string, string) error {
 	f.deletedObjects++
+	if f.rejectOnDeleteObject {
+		f.rec.rejected.Store(true)
+		return errors.New("unauthorized")
+	}
 	return nil
 }
 func (f *fakeFixtureClient) DeleteTransport(context.Context, string) error {
@@ -80,7 +95,7 @@ func (f *fakeFixtureClient) ReleaseTransportWithTasks(_ context.Context, nr stri
 // #241: a run whose fixtures all exist created a request and never released or deleted it.
 func TestSetupFixtures_AllFixturesExist_CreatesNoTransport(t *testing.T) {
 	c := &fakeFixtureClient{}
-	created, tr, err := setupFixtures(context.Background(), c)
+	created, tr, err := setupFixtures(context.Background(), c, &rejectionRecorder{})
 	if err != nil {
 		t.Fatalf("setupFixtures: %v", err)
 	}
@@ -104,7 +119,7 @@ func TestSetupFixtures_MissingFixture_HoldsObjectsOnlyInNonLocalPackage(t *testi
 				missing:       map[string]bool{testFixtures[0].objectURI: true},
 				nonLocalFails: tc.nonLocalFails,
 			}
-			created, tr, err := setupFixtures(context.Background(), c)
+			created, tr, err := setupFixtures(context.Background(), c, &rejectionRecorder{})
 			if err != nil {
 				t.Fatalf("setupFixtures: %v", err)
 			}
@@ -125,12 +140,40 @@ func TestSetupFixtures_SourceWriteFails_ReturnsTheCreatedFixture(t *testing.T) {
 		missing:        map[string]bool{testFixtures[0].objectURI: true},
 		setSourceFails: true,
 	}
-	created, tr, err := setupFixtures(context.Background(), c)
+	created, tr, err := setupFixtures(context.Background(), c, &rejectionRecorder{})
 	if err == nil {
 		t.Fatal("setupFixtures succeeded although the source write failed")
 	}
 	if len(created) != 1 || tr.number() != fakeTransportNumber || !tr.holdsObjects {
 		t.Errorf("created %d fixtures, request %q, holdsObjects %v; want 1, %s, true", len(created), tr.number(), tr.holdsObjects, fakeTransportNumber)
+	}
+}
+
+// A 401 is final (#222): after the request creation was rejected, setup sends nothing more.
+func TestSetupFixtures_RejectedTransportCreation_StopsSetup(t *testing.T) {
+	rec := &rejectionRecorder{}
+	c := &fakeFixtureClient{
+		rec:                     rec,
+		missing:                 map[string]bool{testFixtures[0].objectURI: true},
+		rejectOnCreateTransport: true,
+	}
+	_, _, err := setupFixtures(context.Background(), c, rec)
+	if err == nil {
+		t.Fatal("setupFixtures succeeded after a rejected credential")
+	}
+	if c.createdObjects != 0 {
+		t.Errorf("CreateObject was called %d times after the 401", c.createdObjects)
+	}
+}
+
+// A 401 during the teardown stops the remaining deletions and leaves the request alone.
+func TestCleanupFixtures_RejectionDuringDeletion_StopsTeardown(t *testing.T) {
+	rec := &rejectionRecorder{}
+	c := &fakeFixtureClient{rec: rec, rejectOnDeleteObject: true}
+	two := []fixtureObject{testFixtures[0], testFixtures[1]}
+	cleanupFixtures(context.Background(), c, two, &lazyTransport{nr: fakeTransportNumber, holdsObjects: true}, rec)
+	if c.deletedObjects != 1 || c.releasedTr != 0 || c.deletedTr != 0 {
+		t.Errorf("deleted %d objects, released %d, deleted %d requests; want 1, 0, 0", c.deletedObjects, c.releasedTr, c.deletedTr)
 	}
 }
 

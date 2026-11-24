@@ -4,6 +4,7 @@ package adt_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -114,10 +115,13 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 
 	fmt.Println("=== Integration test setup: ensuring fixtures exist ===")
-	created, tr, err := setupFixtures(ctx, client)
+	created, tr, err := setupFixtures(ctx, client, rec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SETUP FAILED: %v\n", err)
 		cleanupFixtures(ctx, client, created, tr, rec) // os.Exit skips defers
+		if !rec.rejected.Load() {
+			_ = client.Logout(ctx) // releases a lock the failed setup left (#300)
+		}
 		os.Exit(1)
 	}
 
@@ -169,6 +173,9 @@ func cleanupFixtures(ctx context.Context, client adt.Client, created []fixtureOb
 	if len(created) > 0 {
 		fmt.Println("=== Integration test teardown: deleting created fixtures ===")
 		for i := len(created) - 1; i >= 0; i-- {
+			if rec.rejected.Load() {
+				return
+			}
 			f := created[i]
 			if err := client.DeleteObject(ctx, f.objectURI, "", tr.number()); err != nil {
 				fmt.Printf("  [delete failed] %s %s: %v\n", f.objType, f.name, err)
@@ -236,6 +243,8 @@ func reportLeftLocks(ctx context.Context) {
 	}
 }
 
+var errCredentialRejected = errors.New("credential rejected (401), setup stopped")
+
 // localPackage is the package of objects that need no transport request.
 const localPackage = "$TMP"
 
@@ -247,7 +256,7 @@ var fixturePackages = []string{"Z_ADT_MCP_TEST", localPackage}
 // setupFixtures creates any missing test objects, sets their source, and activates them.
 // Returns the fixtures that were created and the fixture transport (for teardown); the
 // transport is created only when a fixture has to be created in a non-local package (#241).
-func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *lazyTransport, error) {
+func setupFixtures(ctx context.Context, client adt.Client, rec *rejectionRecorder) ([]fixtureObject, *lazyTransport, error) {
 	// Verify that the companion test package exists on the SAP system.
 	// We only warn (not fail) so that tests which don't need the package can still run.
 	if _, err := client.BrowsePackage(ctx, testPackage); err != nil {
@@ -282,6 +291,10 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *la
 			continue
 		}
 
+		if rec.rejected.Load() { // the existence check itself was refused (#222)
+			return created, tr, errCredentialRejected
+		}
+
 		// Try each package in order — Z_ADT_MCP_TEST first (S4), $TMP as fallback.
 		var createErr error
 		var usedPkg string
@@ -289,6 +302,9 @@ func setupFixtures(ctx context.Context, client adt.Client) ([]fixtureObject, *la
 			transport := ""
 			if pkg != localPackage {
 				transport = tr.get()
+			}
+			if rec.rejected.Load() { // a 401 is final (#222): no further request with that credential
+				return created, tr, errCredentialRejected
 			}
 			createErr = client.CreateObject(ctx, f.objType, f.name, pkg, f.description, transport)
 			if createErr == nil {
