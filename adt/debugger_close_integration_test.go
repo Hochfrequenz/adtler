@@ -20,10 +20,18 @@ func TestDebugSessionClose_MultiSystem_Integration(t *testing.T) {
 	ctx := context.Background()
 	for _, sys := range eachSystem(t) {
 		sys := sys
-		t.Run("system", func(t *testing.T) {
-			dbg := adt.NewDebugSession(sys.Client, sys.Config.User, "adtler-close-test")
+		t.Run(sys.Name, func(t *testing.T) {
+			// A client of our own, so that the cleanup below knows whether SAP
+			// rejected the credential: after a 401 it sends nothing more, as
+			// newLoggedOffClient does (the debug session shares this transport).
+			client, rec := newRecordingClient(sys.Config)
+			dbg := adt.NewDebugSession(client, sys.Config.User, "adtler-close-test")
 			// Also end the session when the test fails before the explicit Close.
-			t.Cleanup(func() { _ = dbg.Close(context.Background()) })
+			t.Cleanup(func() {
+				if !rec.rejected.Load() {
+					_ = dbg.Close(context.Background())
+				}
+			})
 
 			if err := dbg.StopListener(ctx); err != nil {
 				t.Fatalf("StopListener before Close failed: %v", err)
