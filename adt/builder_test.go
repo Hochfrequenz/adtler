@@ -145,7 +145,9 @@ func TestNewClientsFromConfigJoinsAllFailures(t *testing.T) {
 	defer func() { auth.DefaultTokenPath = orig }()
 
 	store := auth.NewTokenStore(auth.DefaultTokenPath())
-	_ = store.Save("oauth-ok", auth.TokenData{AccessToken: "tok", RefreshToken: "ref"})
+	if err := store.Save("oauth-ok", auth.TokenData{AccessToken: "tok", RefreshToken: "ref"}); err != nil {
+		t.Fatalf("saving token: %v", err)
+	}
 
 	cfg := &sapmcpconfig.Config{
 		DefaultSystem: "basic",

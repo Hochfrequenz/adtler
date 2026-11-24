@@ -37,7 +37,7 @@ func NewClientsFromConfig(cfg *sapmcpconfig.Config, defaultOAuth2ClientID string
 		}
 		tokenData, err := store.TokenForSystem(name)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("system %q requires OAuth2 login — no stored token found: %w", name, err))
+			errs = append(errs, fmt.Errorf("system %q requires OAuth2 login — no stored token found", name))
 			continue
 		}
 		clientID := effectiveOAuth2ClientID(sysCfg, defaultOAuth2ClientID)

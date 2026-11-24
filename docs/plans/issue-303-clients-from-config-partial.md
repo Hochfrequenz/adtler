@@ -35,8 +35,8 @@ so the joined message is deterministic. End with `return clients, errors.Join(er
 error, callers that want to continue can use the returned map; callers returning on
 `err != nil` fail fast.
 
-Plan review additions: the missing-token error keeps its text and gains the cause
-(`...no stored token found: %w`, err of `TokenForSystem`). Imports `errors`, `maps`,
+Plan review additions: the missing-token error keeps its text unchanged (a `%w` cause was
+tried and dropped: it carries the local token file path into messages). Imports `errors`, `maps`,
 `slices` are added. Test 3 also asserts `clients` has no `oauth-ok` key. The new tests fail
 before the change on the nil map / missing-key assertion (the error text already names the
 systems). The doc comment states: on total failure the map is empty and non-nil; the
