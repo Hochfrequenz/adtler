@@ -600,6 +600,10 @@ func TestGetTransportRequests_DescriptionLanguage(t *testing.T) {
 		{"ZH picks Chinese, which SAP keys as 1", "ZH", []e07tRow{{number, "E", "english"}, {number, "1", "chinese"}}, "chinese"},
 		{"a missing logon language falls back to English", "DE", []e07tRow{{number, "F", "french"}, {number, "E", "english"}}, "english"},
 		{"only French: French", "DE", []e07tRow{{number, "F", "french"}}, "french"},
+		// The data preview may print LANGU in its ISO form; both forms must meet.
+		{"the SAP form D meets an ISO row", "D", []e07tRow{{number, "EN", "english"}, {number, "DE", "german"}}, "german"},
+		{"DE meets an ISO row", "DE", []e07tRow{{number, "EN", "english"}, {number, "DE", "german"}}, "german"},
+		{"no logon language picks an ISO English row", "", []e07tRow{{number, "DE", "german"}, {number, "EN", "english"}}, "english"},
 		{"an empty text never wins", "DE", []e07tRow{{number, "D", ""}, {number, "E", "english"}}, "english"},
 		{"only empty texts: no description", "DE", []e07tRow{{number, "D", ""}, {number, "E", " "}}, ""},
 	}

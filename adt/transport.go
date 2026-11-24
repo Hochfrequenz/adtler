@@ -629,7 +629,7 @@ type TransportRequestPage struct {
 // on every call. The E07T read is not yet measured on a real system. E07T holds one text per
 // language; the text in the logon language wins, else English, else any other.
 // A request without a text, or with a number that is not safe to embed in a
-// statement, has an empty Description; GetTransportInfo reads it.
+// statement, has an empty Description.
 //
 // The ADT transport organizer tree is a fallback only, read when E070 or E07T
 // fails. It cannot be the source of the list: measured on SAP_BASIS 750 and
@@ -708,7 +708,8 @@ func (c *httpClient) GetTransportRequests(ctx context.Context, opts TransportLis
 }
 
 // e07tMaxRows is the maxRows argument of one E07T description query. A chunk of request numbers
-// is about 11 numbers, so this cap would need around 90 installed languages to be reached.
+// holds 11 to 37 numbers (by their length), so this cap would need at least 27 installed languages
+// to be reached; the data preview truncates silently, so such an answer would lose texts unnoticed.
 const e07tMaxRows = 1000
 
 // getTransportDescriptionsViaQuery reads the short texts of the request numbers from E07T
@@ -757,20 +758,27 @@ var isoToSAPLanguage = map[string]string{
 	"JA": "J", "RU": "R", "ZH": "1", "KO": "3", "CS": "C", "TR": "T", "FI": "U", "NO": "O", "HU": "H", "EL": "G",
 }
 
+// sapLanguageKey upper-cases a language and turns a known ISO code into SAP's one-character key,
+// so that the logon language and the LANGU of an E07T row meet whichever form either one has (the
+// data preview may print LANGU in the ISO form). Other values are returned as they are.
+func sapLanguageKey(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if mapped, ok := isoToSAPLanguage[s]; ok {
+		return mapped
+	}
+	return s
+}
+
 // descriptionLanguageRank orders the language langu of an E07T row, lower is better: the logon
 // language (SAP "E" or ISO "EN" form), English, any other, none.
 func descriptionLanguageRank(langu, logon string) int {
-	l, own := strings.ToUpper(strings.TrimSpace(langu)), strings.ToUpper(strings.TrimSpace(logon))
-	sap := own
-	if mapped, ok := isoToSAPLanguage[own]; ok && len(own) == 2 {
-		sap = mapped
-	}
-	switch {
-	case l == "":
+	l, own := sapLanguageKey(langu), sapLanguageKey(logon)
+	switch l {
+	case "":
 		return 3
-	case own != "" && (l == own || l == sap):
+	case own:
 		return 0
-	case l == "E" || l == "EN":
+	case "E":
 		return 1
 	}
 	return 2
