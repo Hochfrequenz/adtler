@@ -40,7 +40,7 @@ func deleteTestRequestXML(number string) string {
 }
 
 // deleteTestCreationRows is the E070CREATE answer for deleteTestNumber.
-var deleteTestCreationRows = [][]string{{deleteTestNumber, "USERA", "20261104", "101112"}}
+var deleteTestCreationRows = [][]string{{deleteTestNumber, deleteTestOwner, "20261104", "101112"}}
 
 var deleteTestCreationColumns = []string{"TRKORR", "CRE_USER", "CRE_DATE", "CRE_TIME"}
 
@@ -133,11 +133,11 @@ func TestDeleteTransport_ReturnsDetailsRead_BeforeTheDelete(t *testing.T) {
 	if want := time.Date(2026, 11, 4, 10, 11, 12, 0, time.UTC); !got.Created.Equal(want) {
 		t.Errorf("Created: got %v, want %v", got.Created, want)
 	}
-	if got.CreatedBy != "USERA" {
+	if got.CreatedBy != deleteTestOwner {
 		t.Errorf("CreatedBy: got %q, want USERA", got.CreatedBy)
 	}
 	wantTasks := []adt.TransportRequest{
-		{Number: "AAAK900124", Owner: "USERA", Description: "Example task one", State: adt.TransportStateModifiable, RawStatus: "D"},
+		{Number: "AAAK900124", Owner: deleteTestOwner, Description: "Example task one", State: adt.TransportStateModifiable, RawStatus: "D"},
 		{Number: "AAAK900125", Owner: "USERB", Description: "Example task two", State: adt.TransportStateReleased, RawStatus: "R"},
 	}
 	if !reflect.DeepEqual(got.Tasks, wantTasks) {
@@ -179,7 +179,7 @@ func TestDeleteTransport_ADTReadFails_StillDeletes(t *testing.T) {
 	if got.Number != deleteTestNumber || got.Owner != "" {
 		t.Errorf("got Number %q Owner %q, want the number only", got.Number, got.Owner)
 	}
-	if got.Created.IsZero() || got.CreatedBy != "USERA" {
+	if got.Created.IsZero() || got.CreatedBy != deleteTestOwner {
 		t.Errorf("Created: got %v by %q, want the E070CREATE row", got.Created, got.CreatedBy)
 	}
 	// A JSON consumer must not lose the reason: the error value itself is not marshalled.
@@ -204,7 +204,7 @@ func TestDeleteTransport_RequestAbsentFromAnswer_StillDeletes(t *testing.T) {
 	if got.DetailsErr == nil {
 		t.Error("DetailsErr: got nil, want the absent request")
 	}
-	if got.Owner != "" || got.CreatedBy != "USERA" {
+	if got.Owner != "" || got.CreatedBy != deleteTestOwner {
 		t.Errorf("got Owner %q CreatedBy %q, want no ADT fields and the E070CREATE row", got.Owner, got.CreatedBy)
 	}
 }
