@@ -168,7 +168,7 @@ func createDisposableTransport(t *testing.T, c adt.Client, description string) s
 		t.Fatalf("CreateTransport(%q): %v", description, err)
 	}
 	t.Cleanup(func() {
-		if err := c.DeleteTransport(context.Background(), number); err != nil {
+		if _, err := c.DeleteTransport(context.Background(), number); err != nil {
 			t.Logf("[cleanup] delete request %q: %v (manual cleanup may be needed)", description, err)
 		}
 	})

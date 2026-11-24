@@ -300,14 +300,179 @@ func (c *httpClient) CreateTransportTask(ctx context.Context, parentTransport, o
 	return "", fmt.Errorf("CreateTransportTask: task created but number not returned")
 }
 
-func (c *httpClient) DeleteTransport(ctx context.Context, transportNumber string) error {
+// DeletedTransport is what DeleteTransport read about a request before it
+// deleted it.
+//
+// LastChanged and Created are the SAP system's wall-clock time, which carries
+// no zone; they are placed in UTC only to fit a time.Time.
+type DeletedTransport struct {
+	Number      string `json:"number"`
+	Owner       string `json:"owner,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Type is the request category (E070-TRFUNCTION): K, W or T.
+	Type      TransportType  `json:"type,omitempty"`
+	State     TransportState `json:"state"`
+	RawStatus string         `json:"raw_status,omitempty"`
+	// LastChanged is the last change of the request (ADT lastchanged_timestamp);
+	// zero if unknown, which includes an ADT answer that carries no such
+	// attribute (the ECC worklist shape).
+	LastChanged time.Time `json:"last_changed"`
+	// Created and CreatedBy come from E070CREATE. SAP does not write a row for
+	// every request, so Created is the zero time then; use LastChanged as the
+	// documented fallback.
+	Created   time.Time `json:"created"`
+	CreatedBy string    `json:"created_by,omitempty"`
+	// Tasks are the tasks deleted with the request (Number, Owner, Description,
+	// State, RawStatus), as far as the ADT answer listed them.
+	Tasks []TransportRequest `json:"tasks,omitempty"`
+	// DetailsErr is non-nil when a read before the deletion failed; the fields
+	// it covers are empty. It is not marshalled; DetailsError carries its text.
+	DetailsErr   error  `json:"-"`
+	DetailsError string `json:"details_error,omitempty"`
+}
+
+// DeleteTransport deletes a transport request and returns what it read about
+// it just before, so the caller can report what is gone. The request cannot be
+// read afterwards.
+//
+// The reads (the ADT transport organizer answer, then E070CREATE through the
+// data preview) never block the deletion: a failed read is reported in
+// DeletedTransport.DetailsErr and the DELETE is sent anyway. Two failures do
+// stop the call before the DELETE and return the error with a nil result: a
+// rejected credential (a 401 would only be sent again, #222) and a cancelled
+// context. Both reads together get at most 30 seconds.
+//
+// transportNumber may also name a task. The ADT read may then not find it, and
+// DetailsErr says so. The number is sent unescaped in the DELETE path, as
+// before.
+//
+// DeletedTransport.LastChanged and Created are wall-clock times of the SAP
+// system without a zone.
+func (c *httpClient) DeleteTransport(ctx context.Context, transportNumber string) (*DeletedTransport, error) {
+	deleted, err := c.readBeforeDelete(ctx, transportNumber)
+	if err != nil {
+		return nil, fmt.Errorf("DeleteTransport: %w", err)
+	}
 	path := "/sap/bc/adt/cts/transportrequests/" + transportNumber
 	resp, err := c.doMutate(ctx, http.MethodDelete, path, nil, nil)
 	if err != nil {
-		return fmt.Errorf("DeleteTransport: %w", err)
+		return nil, fmt.Errorf("DeleteTransport: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return checkResponse(resp)
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	return deleted, nil
+}
+
+// readBeforeDelete runs the two reads DeleteTransport reports. It returns an
+// error only where the deletion must not follow: a rejected credential (after
+// either read, so a dead credential is never sent again) or a cancelled ctx.
+func (c *httpClient) readBeforeDelete(ctx context.Context, transportNumber string) (*DeletedTransport, error) {
+	// Bounded so that a stuck data preview cannot hold the deletion back for
+	// RunQuery's default deadline.
+	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	deleted := &DeletedTransport{Number: transportNumber}
+	var errs []error
+	if err := c.readTransportDetails(readCtx, deleted); err != nil {
+		if credentialRejected(err) {
+			return nil, err
+		}
+		errs = append(errs, err)
+	}
+	if err := c.readTransportCreation(readCtx, deleted); err != nil {
+		err = fmt.Errorf("reading E070CREATE: %w", err)
+		if credentialRejected(err) {
+			return nil, err
+		}
+		errs = append(errs, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if deleted.DetailsErr = errors.Join(errs...); deleted.DetailsErr != nil {
+		deleted.DetailsError = deleted.DetailsErr.Error()
+	}
+	return deleted, nil
+}
+
+// readTransportDetails fills owner, description, type, state, last change and
+// tasks from the transport organizer read GetTransportInfo also uses.
+func (c *httpClient) readTransportDetails(ctx context.Context, deleted *DeletedTransport) error {
+	data, err := c.readTransportXML(ctx, deleted.Number, "application/vnd.sap.adt.transportorganizer.v1+xml")
+	if err != nil {
+		return fmt.Errorf("reading the request: %w", err)
+	}
+	req, err := findTransportRequest(data, deleted.Number)
+	if err != nil {
+		return fmt.Errorf("reading the request: %w", err)
+	}
+	deleted.Owner = req.Owner
+	deleted.Description = req.Description
+	deleted.Type = TransportType(strings.ToUpper(req.Type))
+	deleted.State = TransportStateOf(req.Status)
+	deleted.RawStatus = req.Status
+	deleted.LastChanged = parseSAPTimestamp(req.Timestamp, "")
+	for _, task := range req.Tasks {
+		deleted.Tasks = append(deleted.Tasks, TransportRequest{
+			Number:      task.Number,
+			Owner:       task.Owner,
+			Description: task.Description,
+			State:       TransportStateOf(task.Status),
+			RawStatus:   task.Status,
+		})
+	}
+	return nil
+}
+
+// readTransportCreation fills Created and CreatedBy from E070CREATE. Having no
+// row is not an error: SAP does not write one for every request. The number is
+// validated before it enters the SQL literal and upper-cased, as in
+// getTransportObjectsViaQuery.
+func (c *httpClient) readTransportCreation(ctx context.Context, deleted *DeletedTransport) error {
+	if !transportNumberRe.MatchString(deleted.Number) {
+		return fmt.Errorf("transport number %q %w", deleted.Number, errTransportNumberUnsafe)
+	}
+	qr, err := c.RunQuery(ctx,
+		"SELECT TRKORR, CRE_USER, CRE_DATE, CRE_TIME FROM E070CREATE WHERE TRKORR = '"+strings.ToUpper(deleted.Number)+"'", 1)
+	if err != nil {
+		return err
+	}
+	// Zero rows is checked before the column metadata, as in transportQueryNumbers.
+	if len(qr.Rows) == 0 {
+		return nil
+	}
+	idx := queryColumnIndexes(qr, "CRE_USER", "CRE_DATE", "CRE_TIME")
+	if err := requireQueryColumns("E070CREATE query", idx, "CRE_USER", "CRE_DATE", "CRE_TIME"); err != nil {
+		return err
+	}
+	row := qr.Rows[0]
+	deleted.CreatedBy = queryCell(row, idx["CRE_USER"])
+	deleted.Created = parseSAPTimestamp(queryCell(row, idx["CRE_DATE"]), queryCell(row, idx["CRE_TIME"]))
+	return nil
+}
+
+// parseSAPTimestamp reads a SAP date (YYYYMMDD) and time (HHMMSS), or both as
+// one 14-digit value in date with time empty, as wall-clock time in UTC. Every
+// other input, including the initial date 00000000 and values that are no
+// calendar date or time of day, gives the zero time.
+func parseSAPTimestamp(date, clock string) time.Time {
+	value := date + clock
+	if len(value) != 14 || (clock != "" && len(clock) != 6) {
+		return time.Time{}
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return time.Time{}
+		}
+	}
+	t, err := time.Parse("20060102150405", value)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // ReleaseResult reports the outcome of a transport release.
@@ -1762,8 +1927,8 @@ type xmlTask struct {
 	Owner       string         `xml:"owner,attr"`
 	Description string         `xml:"desc,attr"`
 	Status      string         `xml:"status,attr"`
-	Objects   []xmlObject    `xml:"abap_object"`
-	AllObjects xmlObjectGroup `xml:"all_objects"`
+	Objects     []xmlObject    `xml:"abap_object"`
+	AllObjects  xmlObjectGroup `xml:"all_objects"`
 }
 
 // objects returns this task's objects, merging bare direct children with any

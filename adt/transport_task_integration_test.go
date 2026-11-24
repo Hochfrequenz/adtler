@@ -35,13 +35,13 @@ func TestCreateAndDeleteTransportTask_Integration(t *testing.T) {
 	}
 
 	// Delete the task
-	if err := client.DeleteTransport(ctx, taskNumber); err != nil {
+	if _, err := client.DeleteTransport(ctx, taskNumber); err != nil {
 		t.Fatalf("DeleteTransport (task): %v", err)
 	}
 	t.Logf("Deleted task: %s", taskNumber)
 
 	// Delete the transport
-	if err := client.DeleteTransport(ctx, trNumber); err != nil {
+	if _, err := client.DeleteTransport(ctx, trNumber); err != nil {
 		t.Fatalf("DeleteTransport (request): %v", err)
 	}
 	t.Logf("Deleted transport: %s", trNumber)

@@ -107,7 +107,7 @@ func createAndCleanup(t *testing.T, c adt.Client, opts adt.CreateTransportOption
 }
 
 func deleteTransportAfterTest(t *testing.T, c adt.Client, number string) {
-	if err := c.DeleteTransport(context.Background(), number); err != nil {
+	if _, err := c.DeleteTransport(context.Background(), number); err != nil {
 		t.Logf("[cleanup] delete request: %v (manual cleanup may be needed)", err)
 	}
 }

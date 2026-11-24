@@ -340,8 +340,11 @@ func TestDeleteAndReleaseTransport(t *testing.T) {
 		wantPath   string
 	}{
 		{
-			name:       "delete",
-			call:       func(c adt.Client) error { return c.DeleteTransport(context.Background(), "AAAK900123") },
+			name: "delete",
+			call: func(c adt.Client) error {
+				_, err := c.DeleteTransport(context.Background(), "AAAK900123")
+				return err
+			},
 			wantMethod: http.MethodDelete,
 			wantPath:   "/sap/bc/adt/cts/transportrequests/AAAK900123",
 		},
